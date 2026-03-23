@@ -1,0 +1,13 @@
+---
+description: AP_HAL_RTT HAL 文件分层约束
+globs: libraries/AP_HAL_RTT/**/*
+alwaysApply: false
+---
+
+# AP_HAL_RTT HAL Files
+
+- HAL 层优先保持板级无关，职责参考 `AP_HAL_ChibiOS`
+- 不在 HAL 层硬编码具体板名、引脚、GPIO 口号、SPI 设备表或 CubeMX 细节
+- 板级差异优先下沉到 `hwdef.dat`、生成脚本或 BSP
+- 新增调试变量时，优先可开关、可收敛，不把临时打点长期留在主路径
+- 修改 HAL 前先判断该问题究竟属于 HAL、BSP、hwdef 还是测试环境

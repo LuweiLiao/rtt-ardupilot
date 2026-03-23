@@ -1,0 +1,29 @@
+---
+description: 约束 project 记忆文件各自职责，分离状态流、决策流、问题流和时间流
+alwaysApply: true
+---
+
+# Project Memory Protocol
+
+- `.cursor/project/current-focus.md`：只写当前阶段、主线目标、暂不处理项、推荐起手动作；保持短小，优先作为新会话入口
+- `.cursor/project/status.md`：只写当前稳定成立的事实、验证边界和回归基线；不写长推理
+- `.cursor/project/open-issues.md`：只写未关闭问题、现象、当前判断、已排除项和下一验证动作
+- `.cursor/project/decision-log.md`：只写为什么采用某个方案、放弃了什么替代方案
+- `.cursor/project/command-catalog.md`：保存稳定命令、适用场景、成功判据和常见失败检查
+- `.cursor/project/board-matrix.md`：维护多板状态矩阵，避免不同板子的现状混在一起
+- `.cursor/project/milestone-plan.md`：维护里程碑定义、完成条件、当前所处阶段和下一阶段
+- `.cursor/agent-trace.md`：只做时间线记录，不承担稳定状态、设计决策和命令手册职责
+
+## 升级规则
+
+- 某结论一旦稳定成立，应从 `agent-trace` 提炼到 `status`、`decision-log`、`open-issues` 或 `command-catalog`
+- 若某问题已关闭，要从 `open-issues` 移除，并把最终结论补进 `status` 或 `decision-log`
+- 不要让任一文件同时承担“过程 + 现状 + 决策 + TODO + 命令”
+
+## 证据规则
+
+- 只有已验证通过、或有清晰证据链支撑的结论，才可写入 `status.md`
+- 尚未闭环的问题，只能写入 `open-issues.md` 或 `agent-trace.md`
+- 设计取舍、原则和放弃方案，才写入 `decision-log.md`
+- 只有反复可复用的稳定命令，才写入 `command-catalog.md`
+- 若某条结论仍依赖猜测、单次观测或未复核结果，先留在 `agent-trace.md`，不要提前升级到稳定层

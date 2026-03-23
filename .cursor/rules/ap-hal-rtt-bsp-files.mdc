@@ -1,0 +1,12 @@
+---
+description: RT-Thread BSP 文件分层约束
+globs: libraries/AP_HAL_RTT/rtt_bsp_*/**
+alwaysApply: false
+---
+
+# AP_HAL_RTT BSP Files
+
+- BSP 负责时钟、cache、DMA、IRQ、底层外设注册、链接脚本和芯片级初始化
+- BSP 可以包含芯片/板级细节，但应避免把这些细节泄漏到 HAL 公共接口
+- BSP 中出现的硬件特例，应优先写清原因和适用范围
+- 若某逻辑未来可能随板而变，优先考虑由 `hwdef.dat` 生成配置，而不是散落在多个 BSP 文件中

@@ -1,0 +1,16 @@
+---
+description: hwdef 文件分层约束，优先数据驱动而非硬编码
+globs: libraries/AP_HAL_RTT/hwdef/**
+alwaysApply: false
+---
+
+# AP_HAL_RTT hwdef Files
+
+- `hwdef.dat` 是板级真相源，优先描述硬件事实，不混入临时调试结论
+- 能由 `rtt_hwdef.py` 生成的配置，不优先手写进 HAL 或 BSP
+- 新板适配优先扩展 `hwdef.dat` 语义和生成能力，而不是复制现有板的硬编码
+- 修改 hwdef 时，明确该变化会影响：
+- 设备表
+- probe 列表
+- UART/SERIAL 顺序
+- 存储、EKF、板级 define
