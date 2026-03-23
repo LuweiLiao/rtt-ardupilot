@@ -1,6 +1,7 @@
 /*
- * ArduPilot + RT-Thread HAL - I2CDevice implementation
- * Uses rt_i2c_bus_device_find, rt_i2c_transfer from RTT drivers.
+ * AP_HAL_RTT — I2C device driver implementation
+ * Uses rt_i2c_bus_device for I2C bus access.
+ * Periodic callbacks delegated to DeviceBus (same pattern as SPI).
  */
 
 #include "I2CDevice.h"
@@ -26,6 +27,7 @@ I2CDevice::I2CDevice(uint8_t bus, uint8_t address, uint32_t bus_clock,
     , _timeout_ms(timeout_ms)
     , _split(false)
 {
+    (void)use_smbus;
     set_device_bus(bus);
     set_device_address(address);
     if (bus < HAL_RTT_I2C_BUS_COUNT) {
@@ -39,39 +41,52 @@ I2CDevice::~I2CDevice()
 
 bool I2CDevice::set_speed(AP_HAL::Device::Speed)
 {
-    if (_bus == nullptr) return false;
-    return true;
+    return _bus != nullptr;
 }
 
 bool I2CDevice::transfer(const uint8_t *send, uint32_t send_len,
                         uint8_t *recv, uint32_t recv_len)
 {
     if (_bus == nullptr) return false;
-    if (!_sem.take_nonblocking()) return false;
-    rt_bool_t ok = RT_TRUE;
-    rt_tick_t tick = rt_tick_from_millisecond(_timeout_ms > 0 ? _timeout_ms : 4);
-    if (rt_i2c_bus_lock(_bus, tick) != RT_EOK) {
-        _sem.give();
-        return false;
+    if (!_sem.take(HAL_SEMAPHORE_BLOCK_FOREVER)) return false;
+
+    bool ok = false;
+    for (uint8_t attempt = 0; attempt <= _retries; attempt++) {
+        rt_tick_t tick = rt_tick_from_millisecond(_timeout_ms > 0 ? _timeout_ms : 4);
+        if (rt_i2c_bus_lock(_bus, tick) != RT_EOK) {
+            continue;
+        }
+
+        bool xfer_ok = true;
+        if (send_len > 0 && send != nullptr) {
+            rt_ssize_t n = rt_i2c_master_send(_bus, _address, RT_I2C_WR, send, send_len);
+            if (n != (rt_ssize_t)send_len) xfer_ok = false;
+        }
+        if (xfer_ok && recv_len > 0 && recv != nullptr) {
+            rt_ssize_t n = rt_i2c_master_recv(_bus, _address, RT_I2C_RD, recv, recv_len);
+            if (n != (rt_ssize_t)recv_len) xfer_ok = false;
+        }
+        rt_i2c_bus_unlock(_bus);
+
+        if (xfer_ok) {
+            ok = true;
+            break;
+        }
     }
-    if (send_len > 0 && send != nullptr) {
-        rt_ssize_t n = rt_i2c_master_send(_bus, _address, RT_I2C_WR, send, send_len);
-        if (n != (rt_ssize_t)send_len) ok = RT_FALSE;
-    }
-    if (ok && recv_len > 0 && recv != nullptr) {
-        rt_ssize_t n = rt_i2c_master_recv(_bus, _address, RT_I2C_RD, recv, recv_len);
-        if (n != (rt_ssize_t)recv_len) ok = RT_FALSE;
-    }
-    rt_i2c_bus_unlock(_bus);
+
     _sem.give();
-    return ok == RT_TRUE;
+    return ok;
 }
 
 bool I2CDevice::read_registers_multiple(uint8_t first_reg, uint8_t *recv,
                                         uint32_t recv_len, uint8_t times)
 {
-    (void)times;
-    return read_registers(first_reg, recv, recv_len);
+    for (uint8_t i = 0; i < times; i++) {
+        if (!read_registers(first_reg, recv + i * recv_len, recv_len)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 AP_HAL::Semaphore *I2CDevice::get_semaphore()
@@ -80,13 +95,12 @@ AP_HAL::Semaphore *I2CDevice::get_semaphore()
 }
 
 AP_HAL::Device::PeriodicHandle I2CDevice::register_periodic_callback(
-    uint32_t period_usec, AP_HAL::Device::PeriodicCb)
+    uint32_t period_usec, AP_HAL::Device::PeriodicCb cb)
 {
-    (void)period_usec;
-    return nullptr;
+    return _bus_dev.register_periodic_callback(period_usec, cb, this);
 }
 
-bool I2CDevice::adjust_periodic_callback(AP_HAL::Device::PeriodicHandle, uint32_t)
+bool I2CDevice::adjust_periodic_callback(AP_HAL::Device::PeriodicHandle h, uint32_t period_usec)
 {
-    return false;
+    return _bus_dev.adjust_timer(h, period_usec);
 }

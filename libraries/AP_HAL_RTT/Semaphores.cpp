@@ -10,34 +10,34 @@ using namespace RTT;
 
 Semaphore::Semaphore()
 {
-    _sem = rt_sem_create("hal_sem", 1, RT_IPC_FLAG_PRIO);
+    _mtx = rt_mutex_create("hal_mtx", RT_IPC_FLAG_PRIO);
 }
 
 Semaphore::~Semaphore()
 {
-    if (_sem != nullptr) {
-        rt_sem_delete(_sem);
-        _sem = nullptr;
+    if (_mtx != nullptr) {
+        rt_mutex_delete(_mtx);
+        _mtx = nullptr;
     }
 }
 
 bool Semaphore::give()
 {
-    if (_sem == nullptr) return false;
-    return rt_sem_release(_sem) == RT_EOK;
+    if (_mtx == nullptr) return false;
+    return rt_mutex_release(_mtx) == RT_EOK;
 }
 
 bool Semaphore::take(uint32_t timeout_ms)
 {
-    if (_sem == nullptr) return false;
+    if (_mtx == nullptr) return false;
     rt_int32_t tick = (timeout_ms == 0) ? RT_WAITING_FOREVER : (rt_int32_t)rt_tick_from_millisecond(timeout_ms);
-    return rt_sem_take(_sem, tick) == RT_EOK;
+    return rt_mutex_take(_mtx, tick) == RT_EOK;
 }
 
 bool Semaphore::take_nonblocking()
 {
-    if (_sem == nullptr) return false;
-    return rt_sem_take(_sem, 0) == RT_EOK;
+    if (_mtx == nullptr) return false;
+    return rt_mutex_take(_mtx, 0) == RT_EOK;
 }
 
 void Semaphore::take_blocking()

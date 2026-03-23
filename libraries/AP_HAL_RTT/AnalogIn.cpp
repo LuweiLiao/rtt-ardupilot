@@ -1,13 +1,12 @@
 /*
- * ArduPilot + RT-Thread HAL - AnalogIn
- * Pixhawk6C-Mini: PC5(BATT_VOLTAGE), PC4(BATT_CURRENT).
- * When RT_USING_ADC and adc1 device exist, reads via rt_adc_read; else returns 0V.
+ * AP_HAL_RTT — AnalogIn implementation
+ * Uses RT-Thread ADC device framework.
+ * VDD_5V_SENS channel provides board_voltage().
  */
 
 #include "AnalogIn.h"
 #include <AP_HAL/AP_HAL.h>
 #include <rtthread.h>
-#include <stddef.h>
 
 #if defined(RT_USING_ADC)
 extern "C" {
@@ -15,42 +14,27 @@ extern "C" {
 }
 #endif
 
-#define VOLTAGE_SCALING (3.3f / 4095.0f)
-
-// Pixhawk6C ADC channel map: pin_index -> (adc_dev_name, rt channel)
-// Ch0: BATT_VOLTAGE PC5 -> ADC1 CH19, Ch1: BATT_CURRENT PC4 -> ADC1 CH14
-static const struct { const char *dev; uint8_t ch; } _adc_map[RTT_ANALOG_MAX_CHANNELS] = {
-    {"adc1", 19},   // 0: PC5 BATT_VOLTAGE
-    {"adc1", 14},   // 1: PC4 BATT_CURRENT
-    {"adc1", 14},   // 2: spare
-    {"adc1", 14},   // 3
-    {"adc1", 14},   // 4
-    {"adc1", 14},   // 5
-    {"adc1", 14},   // 6
-    {"adc1", 14},   // 7
-};
+#define ADC_VREF 3.3f
+#define ADC_RESOLUTION 4095.0f
+#define VOLTAGE_SCALING (ADC_VREF / ADC_RESOLUTION)
 
 namespace RTT
 {
 
-float AnalogSource::_read_raw()
+void AnalogSource::_add_sample(float v)
 {
-#if defined(RT_USING_ADC)
-    if (_pin < 0 || _pin >= RTT_ANALOG_MAX_CHANNELS) return 0.0f;
-    rt_device_t dev = rt_device_find(_adc_map[_pin].dev);
-    if (dev == nullptr) return 0.0f;
-    rt_uint32_t val = rt_adc_read((struct rt_adc_device *)dev, _adc_map[_pin].ch);
-    return (float)(val & 0xFFF);  // 12-bit
-#else
-    (void)_pin;
-    return 0.0f;
-#endif
+    _sum += v;
+    _count++;
+    _latest_value = v;
 }
 
 float AnalogSource::read_average()
 {
-    _value = _read_raw() * VOLTAGE_SCALING;
-    _latest_value = _value;
+    if (_count > 0) {
+        _value = _sum / _count;
+        _sum = 0;
+        _count = 0;
+    }
     return _value;
 }
 
@@ -61,22 +45,18 @@ float AnalogSource::read_latest()
 
 bool AnalogSource::set_pin(uint8_t p)
 {
-    if (p < RTT_ANALOG_MAX_CHANNELS) {
-        _pin = (int16_t)p;
-        return true;
-    }
-    return false;
+    _pin = (int16_t)p;
+    return true;
 }
 
 float AnalogSource::voltage_average()
 {
-    read_average();
-    return _value;
+    return read_average() * VOLTAGE_SCALING;
 }
 
 float AnalogSource::voltage_latest()
 {
-    return _latest_value;
+    return _latest_value * VOLTAGE_SCALING;
 }
 
 float AnalogSource::voltage_average_ratiometric()
@@ -87,14 +67,12 @@ float AnalogSource::voltage_average_ratiometric()
 void AnalogIn::init()
 {
     if (_initialized) return;
-    for (int i = 0; i < RTT_ANALOG_MAX_CHANNELS; i++) {
-        IGNORE_RETURN(_sources[i].set_pin(i));
-    }
 #if defined(RT_USING_ADC)
     rt_device_t dev = rt_device_find("adc1");
-    if (dev != nullptr) {
-        rt_adc_enable((struct rt_adc_device *)dev, 19);
-        rt_adc_enable((struct rt_adc_device *)dev, 14);
+    if (dev) {
+        for (uint8_t ch = 0; ch < 16; ch++) {
+            rt_adc_enable((struct rt_adc_device *)dev, ch);
+        }
     }
 #endif
     _initialized = true;
@@ -104,30 +82,43 @@ AP_HAL::AnalogSource* AnalogIn::channel(int16_t n)
 {
     init();
     if (n < 0 || n >= RTT_ANALOG_MAX_CHANNELS) return nullptr;
+    IGNORE_RETURN(_sources[n].set_pin(n));
     return &_sources[n];
 }
 
 float AnalogIn::board_voltage()
 {
-    init();
-#if defined(HAL_BATT_VOLT_PIN) && defined(HAL_BATT_VOLT_SCALE)
-    AP_HAL::AnalogSource *v = channel(HAL_BATT_VOLT_PIN);
-    if (v != nullptr) {
-        float vv = v->voltage_average() * (float)HAL_BATT_VOLT_SCALE;
-        if (vv > 0.1f) {
-            _board_voltage = vv;
-        }
-    }
-#else
-    AP_HAL::AnalogSource *v = channel(0);
-    if (v != nullptr) {
-        float vv = v->voltage_average();
-        if (vv > 0.1f) {
-            _board_voltage = vv;
-        }
-    }
-#endif
     return _board_voltage;
+}
+
+float AnalogIn::servorail_voltage()
+{
+    return _servorail_voltage;
+}
+
+uint16_t AnalogIn::power_status_flags()
+{
+    return 0;
+}
+
+void AnalogIn::_timer_tick()
+{
+#if defined(RT_USING_ADC)
+    rt_device_t dev = rt_device_find("adc1");
+    if (!dev) return;
+
+    for (int16_t i = 0; i < RTT_ANALOG_MAX_CHANNELS; i++) {
+        if (_sources[i].read_latest() >= 0 || true) {
+            rt_uint32_t val = rt_adc_read((struct rt_adc_device *)dev, i);
+            _sources[i]._add_sample((float)(val & 0xFFF));
+        }
+    }
+
+    /* VDD_5V_SENS: scale factor 2x voltage divider */
+    rt_uint32_t vdd = rt_adc_read((struct rt_adc_device *)dev, 10);
+    float v5 = (float)(vdd & 0xFFF) * VOLTAGE_SCALING * 2.0f;
+    if (v5 > 0.5f) _board_voltage = v5;
+#endif
 }
 
 } // namespace RTT

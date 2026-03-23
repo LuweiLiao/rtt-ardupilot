@@ -112,6 +112,11 @@ HAL_RTT::HAL_RTT() :
     )
 {}
 
+/* Debug flags to track initialization */
+volatile uint32_t rtt_dbg_hal_run_called = 0xDEADBEEF;
+volatile uint32_t rtt_dbg_main_loop_entry_called = 0xCAFEBABE;
+volatile uint32_t rtt_dbg_main_loop_iterations = 0;
+
 struct main_loop_arg {
     RTT::Scheduler* sched;
     AP_HAL::HAL::Callbacks* callbacks;
@@ -119,51 +124,37 @@ struct main_loop_arg {
 
 static void _main_loop_entry(void* arg)
 {
+    rtt_dbg_main_loop_entry_called = 0x12345678;  /* Magic number to verify we're here */
+
     main_loop_arg* a = (main_loop_arg*)arg;
     a->sched->set_main_thread_id(rt_thread_self());
     a->callbacks->setup();
     a->sched->set_system_initialized();
+
+    rtt_dbg_hal_run_called = 0x11111111;  /* Second magic number after setup */
+
     for (;;) {
         a->callbacks->loop();
+        rtt_dbg_main_loop_iterations++;
     }
 }
 
 void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
 {
+    rtt_dbg_hal_run_called = 0xAAAAAAAA;  /* Magic: entered run() */
+
     (void)argc;
     (void)argv;
-
-    rt_hw_board_init();
-    /* ~1.5s delay before USB init so host sees a clean connect (ChibiOS: usbDisconnectBus + 1.5s + usbConnectBus) */
-    for (volatile uint32_t i = 0; i < 100000000U; i++) {
-        (void)i;
-    }
-#ifdef RT_USING_COMPONENTS_INIT
-    rt_components_init();  /* CherryUSB CDC, 其他 INIT_COMPONENT_EXPORT */
-#endif
-    rt_system_timer_init();
-    rt_system_scheduler_init();
 
     ((RTT::Scheduler*)scheduler)->set_callbacks(callbacks);
     scheduler->init();
 
-    static main_loop_arg s_arg;
-    s_arg.sched = (RTT::Scheduler*)scheduler;
-    s_arg.callbacks = callbacks;
+    rtt_dbg_hal_run_called = 0xBBBBBBBB;  /* Magic: before main_loop_entry */
 
-    rt_thread_t main_thread = rt_thread_create(
-        "ap_main",
-        _main_loop_entry,
-        &s_arg,
-        4096,
-        RT_THREAD_PRIORITY_MAX - 2,
-        20);
-    if (main_thread == nullptr) {
-        AP_HAL::panic("RTT: failed to create main thread");
-    }
-    rt_thread_startup(main_thread);
-
-    rt_system_scheduler_start();
+    main_loop_arg arg;
+    arg.sched = (RTT::Scheduler*)scheduler;
+    arg.callbacks = callbacks;
+    _main_loop_entry(&arg);
 }
 
 void AP_HAL::init()

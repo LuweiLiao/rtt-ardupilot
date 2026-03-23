@@ -200,6 +200,7 @@ def _collect_defines_f7():
         'CONFIG_HAL_BOARD=HAL_BOARD_RTT',
         'USE_HAL_DRIVER=1',
         'STM32F767xx=1',
+        'HAL_STORAGE_SIZE=16384',
         '__AP_LINE__=__LINE__',
         'APM_BUILD_DIRECTORY=APM_BUILD_ArduCopter',
         'AP_BUILD_TARGET_NAME="arducopter"',

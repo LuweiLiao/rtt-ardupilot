@@ -1,8 +1,9 @@
 /*
- * This file is free software: you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
+ * AP_HAL_RTT Scheduler — mirrors ChibiOS HAL thread architecture:
+ *   timer thread  : 1kHz  _run_timers() + UART _timer_tick
+ *   io thread     : 1kHz  _run_io()
+ *   storage thread: 1kHz  hal.storage->_timer_tick()
+ * GCS is driven by main-thread delay() -> call_delay_cb() mechanism.
  */
 
 #pragma once
@@ -32,8 +33,9 @@ public:
     bool is_system_initialized() override;
     bool thread_create(AP_HAL::MemberProc proc, const char* name, uint32_t stack_size,
                        priority_base base, int8_t priority) override;
+    void expect_delay_ms(uint32_t ms) override;
+    bool in_expected_delay() const override { return _expected_delay_ms > 0; }
 
-    /** Called from main loop entry to record main thread id (RTT port) */
     void set_main_thread_id(rt_thread_t id) { _main_thread_id = id; }
 
 private:
@@ -54,9 +56,19 @@ private:
     bool _in_timer_proc = false;
     bool _in_io_proc = false;
 
+    uint32_t _expected_delay_ms = 0;
+
     void _run_timers();
     void _run_io();
 
+    static void _timer_thread_entry(void *arg);
+    rt_thread_t _timer_thread_ctx = nullptr;
+
+    static void _io_thread_entry(void *arg);
+    rt_thread_t _io_thread_ctx = nullptr;
+
     static void _storage_thread_entry(void *arg);
     rt_thread_t _storage_thread_ctx = nullptr;
+
+    static void _thread_create_trampoline(void *arg);
 };

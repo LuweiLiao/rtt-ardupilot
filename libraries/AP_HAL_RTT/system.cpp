@@ -1,11 +1,7 @@
 /*
- * This file is free software: you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * 提供 AP_HAL::millis / micros64 / panic 等，供 ArduPilot 全局使用。
- * 依赖 hal.util 为 RTT::Util，需链接 librtthread。
+ * AP_HAL_RTT — system functions
+ * Provides AP_HAL::millis / micros64 / panic.
+ * millis/micros64 delegate to Util which uses DWT CYCCNT for sub-tick precision.
  */
 
 #include <AP_HAL/AP_HAL.h>

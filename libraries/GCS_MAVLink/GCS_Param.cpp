@@ -220,6 +220,9 @@ void GCS_MAVLINK::handle_param_request_list(const mavlink_message_t &msg)
     _queued_parameter_index = 0;
     _queued_parameter_count = AP_Param::count_parameters();
     _queued_parameter_send_time_ms = AP_HAL::millis(); // avoid initial flooding
+
+    // Ensure MSG_NEXT_PARAM is scheduled even if _PARAMS stream rate is 0
+    send_message(MSG_NEXT_PARAM);
 }
 
 void GCS_MAVLINK::handle_param_request_read(const mavlink_message_t &msg)

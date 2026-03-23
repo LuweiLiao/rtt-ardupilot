@@ -1,8 +1,6 @@
 /*
- * This file is free software: you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
+ * AP_HAL_RTT — Util
+ * Time functions, memory stats, system ID, persistent data.
  */
 
 #pragma once
@@ -14,11 +12,12 @@ class RTT::Util : public AP_HAL::Util
 {
 public:
     uint32_t available_memory() override;
+    bool get_system_id(char buf[50]) override;
+    bool get_system_id_unformatted(uint8_t buf[], uint8_t &len) override;
     void set_hw_rtc(uint64_t time_utc_usec) override;
     uint64_t get_hw_rtc() const override;
     void thread_info(ExpandingString& str) override;
 
-    /** Used by system.cpp for AP_HAL::millis() / micros64() (RTT port). */
     uint32_t get_millis() const;
     uint64_t get_micros64() const;
 };

@@ -152,8 +152,13 @@ class Board:
         else:
             cfg.msg("Enabled OpenDroneID", 'no', color='YELLOW')
 
-        # allow enable of firmware ID checking for any board
-        if cfg.options.enable_check_firmware:
+        # allow enable/disable of firmware ID checking for any board (e.g. bootloader for RTT debug)
+        if getattr(cfg.options, 'no_check_firmware', False):
+            env.DEFINES.update(
+                AP_CHECK_FIRMWARE_ENABLED=0,
+            )
+            cfg.msg("Firmware ID checking", 'disabled (e.g. for RTT at 0x08008000)', color='YELLOW')
+        elif cfg.options.enable_check_firmware:
             env.CHECK_FIRMWARE_ENABLED = True
             env.DEFINES.update(
                 AP_CHECK_FIRMWARE_ENABLED=1,
@@ -1494,17 +1499,10 @@ class rtt(Board):
         env.DEFINES.update(
             CONFIG_HAL_BOARD='HAL_BOARD_RTT',
         )
-        hwdef_subdir = getattr(self, 'hwdef_board', getattr(self, 'name', ''))
-        is_h7 = (hwdef_subdir == 'pixhawk6c_mini' or self.name == 'rtt_pixhawk6c_mini')
-        if is_h7:
-            env.DEFINES.update(
-                USE_HAL_DRIVER=1, STM32H743xx=1, BSP_USING_GPIO=1, RT_USING_SERIAL=1, SOC_SERIES_STM32H7=1,
-                USE_FLASH_ECC=0, USE_SDIO_TRANSCEIVER=0, USE_MULTI_CORE_SHARED_CODE=0, USE_SPI_CRC=0,
-                LSI_VALUE=32000,  # HAL optional macros, avoid -Werror=undef / undeclared
-                HAL_WITH_RAMTRON=1, HAL_STORAGE_SIZE=32768
-            )
-        else:
-            env.DEFINES.update(USE_HAL_DRIVER=1, STM32F427xx=1, BSP_USING_GPIO=1, RT_USING_SERIAL=1, SOC_SERIES_STM32F4=1)
+        # MCU-specific defines flow through hwdef.dat → hwdef.h.
+        # Keep essential ones here too so they're available before hwdef.h is generated.
+        env.DEFINES.update(USE_HAL_DRIVER=1, BSP_USING_GPIO=1, RT_USING_SERIAL=1,
+                           HAL_STORAGE_SIZE=16384)
         # f4/h7 usbd_config.h uses #if BSP_USBD_*; not using USB device
         env.DEFINES.update(BSP_USBD_SPEED_HSINFS=0, BSP_USBD_PHY_UTMI=0)
         # board.h uses #if __ICCARM__; we use GCC

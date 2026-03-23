@@ -1,12 +1,13 @@
 /*
- * ArduPilot + RT-Thread HAL - SPIDevice
- * Wraps RT-Thread SPI device for AP_HAL::SPIDevice interface.
+ * AP_HAL_RTT — SPI device driver
+ * Board-independent: device table driven by HAL_SPI_DEVICE_LIST from hwdef.h.
  */
 
 #pragma once
 
 #include <AP_HAL/SPIDevice.h>
 #include "Semaphores.h"
+#include "DeviceBus.h"
 #include "HAL_RTT_Namespace.h"
 
 struct rt_spi_device;
@@ -14,10 +15,20 @@ struct rt_spi_device;
 namespace RTT
 {
 
+struct RTT_SPIDesc {
+    const char *name;
+    const char *rtt_devname;
+    uint8_t bus;
+    uint8_t devid;
+    uint8_t mode;
+    uint32_t lowspeed;
+    uint32_t highspeed;
+};
+
 class SPIDevice : public AP_HAL::SPIDevice
 {
 public:
-    SPIDevice(const char *name, uint8_t bus_id);
+    SPIDevice(RTT_SPIDesc &desc);
     ~SPIDevice();
 
     bool set_speed(AP_HAL::Device::Speed speed) override;
@@ -32,9 +43,10 @@ public:
     bool set_chip_select(bool set) override;
 
 private:
+    RTT_SPIDesc &_desc;
     struct rt_spi_device *_dev;
-    uint8_t _bus_id;
     Semaphore _sem;
+    DeviceBus _bus{0};
     bool _cs_held = false;
 };
 

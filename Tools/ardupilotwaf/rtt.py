@@ -48,6 +48,8 @@ RTT_FLASH_TOTAL = {
 RTT_BSP_FMUV2_SRC = 'libraries/AP_HAL_RTT/rtt_bsp_fmuv2'
 # BSP source for Pixhawk6C-Mini; deployed to RTT_ROOT/bsp/stm32/stm32h743-pixhawk6c-mini when missing
 RTT_BSP_PIXHAWK6C_MINI_SRC = 'libraries/AP_HAL_RTT/rtt_bsp_pixhawk6c_mini'
+# BSP source in repo; deployed to RTT_ROOT/bsp/stm32/stm32f765-cuav-v5 when missing
+RTT_BSP_CUAV_V5_SRC = 'libraries/AP_HAL_RTT/rtt_bsp_cuav_v5'
 
 
 def configure(cfg):
@@ -103,10 +105,10 @@ def configure(cfg):
     if ret != 0:
         cfg.fatal("Failed to process hwdef.dat ret=%d" % ret)
 
-    # Match RTT BSP ABI: cortex-m4 (F4) or cortex-m7 (H7), hard float, so linking with librtthread.a works
+    # Match RTT BSP ABI: cortex-m4 (F4) or cortex-m7 (F7/H7), hard float, so linking with librtthread.a works
     if env.get_flat('CC') and 'arm-none-eabi' in env.get_flat('CC'):
         mcu = _rtt_mcu_family(env)
-        if mcu == 'h7':
+        if mcu in ('h7', 'f7'):
             cpu_flags = ['-mcpu=cortex-m7', '-mthumb', '-mfpu=fpv5-d16', '-mfloat-abi=hard']
         else:
             cpu_flags = ['-mcpu=cortex-m4', '-mthumb', '-mfpu=fpv4-sp-d16', '-mfloat-abi=hard']
@@ -158,6 +160,32 @@ def _deploy_fmuv2_bsp_if_needed(env):
     if os.path.isdir(deploy_dir):
         return
     src_dir = os.path.join(srcroot, RTT_BSP_FMUV2_SRC.replace('/', os.sep))
+    if not os.path.isdir(src_dir):
+        return
+    try:
+        import shutil
+        os.makedirs(os.path.dirname(deploy_dir), exist_ok=True)
+        shutil.copytree(src_dir, deploy_dir)
+    except Exception:
+        pass
+
+
+def _deploy_cuav_v5_bsp_if_needed(env):
+    """
+    If BOARD uses CUAV V5 BSP (stm32/stm32f765-cuav-v5) and the deploy target
+    does not exist, copy from libraries/AP_HAL_RTT/rtt_bsp_cuav_v5.
+    """
+    bsp_rel = RTT_BSP_MAP.get(getattr(env, 'BOARD', None))
+    if bsp_rel != 'stm32/stm32f765-cuav-v5':
+        return
+    rtt_root = getattr(env, 'RTT_ROOT', None)
+    srcroot = getattr(env, 'SRCROOT', None)
+    if not rtt_root or not srcroot or not os.path.isdir(rtt_root):
+        return
+    deploy_dir = os.path.join(rtt_root, 'bsp', 'stm32', 'stm32f765-cuav-v5')
+    if os.path.isdir(deploy_dir):
+        return
+    src_dir = os.path.join(srcroot, RTT_BSP_CUAV_V5_SRC.replace('/', os.sep))
     if not os.path.isdir(src_dir):
         return
     try:
@@ -273,18 +301,29 @@ def _rtt_bsp_dir(env):
 
 
 def _rtt_mcu_family(env):
-    """Return 'f4' or 'h7' based on RTT_BSP_MAP for current BOARD."""
+    """Return 'f4', 'f7', or 'h7' based on RTT_BSP_MAP for current BOARD."""
     bsp_rel = RTT_BSP_MAP.get(getattr(env, 'BOARD', None), '')
-    if 'h743' in bsp_rel or 'h7' in bsp_rel:
+    # F7 BSP path contains stm32f765 / stm32f7; must run before H7 (paths are disjoint).
+    if 'stm32f7' in bsp_rel or 'f765' in bsp_rel:
+        return 'f7'
+    if 'stm32h7' in bsp_rel or 'h743' in bsp_rel:
         return 'h7'
     return 'f4'
 
 
 # HAL/CMSIS package paths; selected by _rtt_mcu_family
-_RTT_HAL_PKG = {'f4': 'packages/stm32f4_hal_driver-latest', 'h7': 'packages/stm32h7_hal_driver-latest'}
-_RTT_CMSIS_PKG = {'f4': 'packages/stm32f4_cmsis_driver-latest', 'h7': 'packages/stm32h7_cmsis_driver-latest'}
-_RTT_SYSTEM_C = {'f4': 'system_stm32f4xx.c', 'h7': 'system_stm32h7xx.c'}
-_RTT_STARTUP_O = {'f4': 'startup_stm32f427xx.o', 'h7': 'startup_stm32h743xx.o'}
+_RTT_HAL_PKG = {
+    'f4': 'packages/stm32f4_hal_driver-latest',
+    'f7': 'packages/stm32f7_hal_driver-latest',
+    'h7': 'packages/stm32h7_hal_driver-latest',
+}
+_RTT_CMSIS_PKG = {
+    'f4': 'packages/stm32f4_cmsis_driver-latest',
+    'f7': 'packages/stm32f7_cmsis_driver-latest',
+    'h7': 'packages/stm32h7_cmsis_driver-latest',
+}
+_RTT_SYSTEM_C = {'f4': 'system_stm32f4xx.c', 'f7': 'system_stm32f7xx.c', 'h7': 'system_stm32h7xx.c'}
+_RTT_STARTUP_O = {'f4': 'startup_stm32f427xx.o', 'f7': 'startup_stm32f767xx.o', 'h7': 'startup_stm32h743xx.o'}
 
 # STM32 common HAL_Drivers (drv_gpio, drv_usart) - scons may not build them into librtthread.a; waf compiles them for rt_hw_pin_init/rt_hw_usart_init
 RTT_STM32_HAL_DRIVERS = 'modules/rt-thread/bsp/stm32/libraries/HAL_Drivers'
@@ -548,7 +587,7 @@ def rtt_dynamic_includes(self):
     rtt_root = getattr(self.env, 'RTT_ROOT', None)
     if rtt_root and os.path.isdir(rtt_root):
         mcu = _rtt_mcu_family(self.env)
-        cpu_subdir = 'cortex-m7' if mcu == 'h7' else 'cortex-m4'
+        cpu_subdir = 'cortex-m7' if mcu in ('h7', 'f7') else 'cortex-m4'
         libcpu_inc = os.path.join(rtt_root, 'libcpu', 'arm', cpu_subdir)
         incs = [
             os.path.join(rtt_root, 'include'),
@@ -661,6 +700,7 @@ def build(bld):
     ensure librtthread.a is available: try auto build (scons + ar) or print manual steps and set LIBPATH."""
     env = bld.env
     _deploy_fmuv2_bsp_if_needed(env)
+    _deploy_cuav_v5_bsp_if_needed(env)
     _deploy_pixhawk6c_mini_bsp_if_needed(env)
     _ensure_pixhawk6c_mini_packages(env)
     py = env.get_flat('PYTHON')
@@ -692,6 +732,10 @@ def build(bld):
     env.LIBPATH = Utils.to_list(getattr(env, 'LIBPATH', []))
     env.INCLUDES = Utils.to_list(getattr(env, 'INCLUDES', [])) + [env.BUILDROOT, os.path.join(env.AP_HAL_ROOT, 'include')]
     env.LINKFLAGS = Utils.to_list(getattr(env, 'LINKFLAGS', []))
+
+    hwdef_h = os.path.join(env.BUILDROOT, 'hwdef.h')
+    env.append_value('CFLAGS', ['-include', hwdef_h])
+    env.append_value('CXXFLAGS', ['-include', hwdef_h])
 
     # When BOARD has an RTT BSP: use BSP's full link.lds (defines _estack, _sdata, _edata, etc.);
     # otherwise use hwdef-generated ldscript.ld. Linker runs from BUILDROOT so -T needs absolute path for BSP.

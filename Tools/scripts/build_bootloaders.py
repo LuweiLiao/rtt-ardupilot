@@ -18,6 +18,8 @@ from argparse import ArgumentParser
 parser = ArgumentParser(description='make_secure_bl')
 parser.add_argument("--signing-key", type=str, default=None, help="signing key for secure bootloader")
 parser.add_argument("--debug", action='store_true', default=False, help="build with debug symbols")
+parser.add_argument("--no-check-firmware", action='store_true', default=False,
+                    help="build bootloader without firmware ID check (for RTT/non-AP app at 0x08008000)")
 parser.add_argument("--periph-only", action='store_true', default=False, help="only build AP_Periph boards")
 parser.add_argument("pattern", type=str, default='*', help="board wildcard pattern", nargs='?')
 args = parser.parse_args()
@@ -78,6 +80,9 @@ def build_board(board):
     if args.signing_key is not None:
         print("Building secure bootloader")
         configure_args.append("--signed-fw")
+    if getattr(args, 'no_check_firmware', False):
+        print("Building without firmware ID check (for RTT debug)")
+        configure_args.append("--no-check-firmware")
     if args.debug:
         print("Building with debug symbols")
         configure_args.append("--debug")

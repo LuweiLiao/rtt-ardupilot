@@ -6,6 +6,12 @@
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Common/ExpandingString.h>
 #include <AP_Math/AP_Math.h>
+#include <cstring>
+#include "hwdef.h"
+
+#ifndef HAL_RTT_SERIAL0_OTG
+#define HAL_RTT_SERIAL0_OTG 0
+#endif
 
 extern const AP_HAL::HAL &hal;
 
@@ -20,6 +26,27 @@ using namespace RTT;
 static const char *const _device_names[] = { HAL_RTT_UART_DEVICE_LIST };
 
 UARTDriver *UARTDriver::_drivers[RTT_UART_MAX_DRIVERS] = {};
+
+uint32_t UARTDriver::bw_in_bytes_per_second() const
+{
+    /* Match AP_HAL_ChibiOS: USB CDC is ~FS bulk; UART uses nominal byte rate/10 like ChibiOS */
+#if HAL_RTT_SERIAL0_OTG
+    /* hwdef: SERIAL_ORDER starts with OTG — GCS is on serial0; must not fall back to 5760 default */
+    if (_port_num == 0) {
+        return 200U * 1024U;
+    }
+#endif
+    if (_port_num < ARRAY_SIZE(_device_names)) {
+        const char *name = _device_names[_port_num];
+        if (name != nullptr && std::strncmp(name, "usb", 3) == 0) {
+            return 200U * 1024U;
+        }
+    }
+    if (_baudrate > 0) {
+        return _baudrate / 10U;
+    }
+    return 5760U;
+}
 
 UARTDriver::UARTDriver(uint8_t port_num)
     : AP_HAL::UARTDriver()
@@ -46,27 +73,63 @@ rt_err_t UARTDriver::_rx_indicate_cb(rt_device_t dev, rt_size_t size)
     return RT_EOK;
 }
 
+/* Per-port debug tracking */
+volatile uint32_t rtt_dbg_uart_port_begin_count[10] = {0};  /* How many times begin() was called per port */
+volatile uint32_t rtt_dbg_uart_port_dev_ptr[10] = {0};      /* _dev value after each begin() */
+volatile uint8_t rtt_dbg_uart_port_init[10] = {0};          /* _initialized value after each begin() */
+
+volatile int rtt_dbg_uart_begin_called = 0;
+volatile int rtt_dbg_uart_begin_port = -1;
+volatile int rtt_dbg_uart_begin_result = 0;
+volatile uint32_t rtt_dbg_uart_begin_dev = 0;
+
 void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
 {
+    if (_port_num < 10) {
+        rtt_dbg_uart_port_begin_count[_port_num]++;
+    }
+
+    rtt_dbg_uart_begin_called++;
+    rtt_dbg_uart_begin_port = _port_num;
+
     if (baud == 0 && rxSpace == 0 && txSpace == 0 && _initialized) {
+        rtt_dbg_uart_begin_result = 1;
         return;
     }
 
     if (_port_num >= RTT_UART_MAX_DRIVERS ||
         _port_num >= ARRAY_SIZE(_device_names)) {
+        rtt_dbg_uart_begin_result = 2;
         return;
     }
 
     const char *name = _device_names[_port_num];
     rt_device_t dev = rt_device_find(name);
     if (dev == nullptr) {
+        for (int retry = 0; retry < 10 && dev == nullptr; retry++) {
+            rt_thread_mdelay(200);
+            dev = rt_device_find(name);
+        }
+    }
+    rtt_dbg_uart_begin_dev = (uint32_t)(uintptr_t)dev;
+    if (_port_num < 10) {
+        rtt_dbg_uart_port_dev_ptr[_port_num] = (uint32_t)(uintptr_t)dev;
+    }
+    if (dev == nullptr) {
+        rtt_dbg_uart_begin_result = 3;
+        _deferred_open = true;
+        _baudrate = baud;
+        uint16_t rxS = rxSpace < 512 ? 512 : rxSpace;
+        uint16_t txS = txSpace < 512 ? 512 : txSpace;
+        if (_readbuf.get_size() == 0) { _readbuf.set_size(rxS); }
+        if (_writebuf.get_size() == 0) { _writebuf.set_size(txS); }
         return;
     }
 
-    /* INT_RX 或 DMA_RX 以便 rx_indicate 被驱动调用 */
-    rt_err_t err = rt_device_open(dev, RT_DEVICE_FLAG_INT_RX);
+    /* RDWR + INT_RX 与延期打开路径一致；部分 CDC 字符设备仅 INT_RX 时写路径异常 */
+    rt_err_t err = rt_device_open(dev, RT_DEVICE_FLAG_RDWR | RT_DEVICE_FLAG_INT_RX);
     if (err != RT_EOK) {
-        err = rt_device_open(dev, RT_DEVICE_FLAG_DMA_RX);
+        err = rt_device_open(dev, RT_DEVICE_FLAG_RDWR | RT_DEVICE_FLAG_DMA_RX);
     }
     if (err != RT_EOK) {
         return;
@@ -104,6 +167,12 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
     }
 
     _initialized = true;
+
+    /* Track per-port state for debugging */
+    if (_port_num < 10) {
+        rtt_dbg_uart_port_dev_ptr[_port_num] = (uint32_t)(uintptr_t)_dev;
+        rtt_dbg_uart_port_init[_port_num] = _initialized ? 1 : 0;
+    }
 }
 
 void UARTDriver::_end()
@@ -157,12 +226,21 @@ void UARTDriver::_drain_writebuf_to_dev()
     if (_dev == nullptr) {
         return;
     }
-    uint32_t n = _writebuf.peekbytes(_tx_bounce, sizeof(_tx_bounce));
-    if (n > 0) {
-        rt_size_t w = rt_device_write(_dev, 0, _tx_bounce, n);
-        if (w > 0) {
-            _writebuf.advance(w);
+    /*
+     * 同一 timer tick 内尽量多刷几包，避免发送环里积压时仍按「每 tick 一包」限流。
+     * USB CDC 的 rt_device_write 会阻塞到 IN 完成，chunk 数不宜过大以免饿死同线程其它串口。
+     */
+    const unsigned max_chunks = 8;
+    for (unsigned c = 0; c < max_chunks; c++) {
+        uint32_t n = _writebuf.peekbytes(_tx_bounce, sizeof(_tx_bounce));
+        if (n == 0) {
+            break;
         }
+        rt_size_t w = rt_device_write(_dev, 0, _tx_bounce, n);
+        if (w == 0) {
+            break;
+        }
+        _writebuf.advance(w);
     }
 }
 
@@ -242,10 +320,36 @@ uint32_t UARTDriver::txspace()
 void UARTDriver::_timer_tick(void)
 {
     if (!_initialized) {
+        if (_deferred_open && _port_num < ARRAY_SIZE(_device_names)) {
+            rt_device_t dev = rt_device_find(_device_names[_port_num]);
+            if (dev != nullptr) {
+                rt_err_t err = rt_device_open(dev, RT_DEVICE_FLAG_RDWR | RT_DEVICE_FLAG_INT_RX);
+                if (err == RT_EOK) {
+                    _dev = dev;
+                    if (_rx_sem == nullptr) {
+                        char sem_name[RT_NAME_MAX];
+                        rt_snprintf(sem_name, sizeof(sem_name), "urx%u", (unsigned)_port_num);
+                        _rx_sem = rt_sem_create(sem_name, 0, RT_IPC_FLAG_FIFO);
+                    }
+                    if (_rx_sem) {
+                        rt_device_set_rx_indicate(_dev, _rx_indicate_cb);
+                    }
+                    if (_readbuf.get_size() == 0) { _readbuf.set_size(512); }
+                    if (_writebuf.get_size() == 0) { _writebuf.set_size(512); }
+                    _initialized = true;
+                    _deferred_open = false;
+                }
+            }
+        }
         return;
     }
     _drain_rx_to_readbuf();
     _drain_writebuf_to_dev();
+}
+
+void UARTDriver::set_flow_control(enum flow_control flow)
+{
+    _flow_control = flow;
 }
 
 #if HAL_UART_STATS_ENABLED

@@ -1,23 +1,15 @@
 import os
 from building import *
 
-objs = []
-cwd  = GetCurrentDir()
-
-# add general drivers
-src = []
-path =  [cwd]
-
-if GetDepend(['BSP_USING_ETH']):
-    src += Glob('phy_reset.c')
-
-
-CPPDEFINES = ['STM32F767xx']
-group = DefineGroup('Drivers', src, depend = [''], CPPPATH = path, CPPDEFINES = CPPDEFINES)
-
+cwd = GetCurrentDir()
 list = os.listdir(cwd)
+group = None
 for item in list:
     if os.path.isfile(os.path.join(cwd, item, 'SConscript')):
-        group = group + SConscript(os.path.join(item, 'SConscript'))
-
+        if group is None:
+            group = SConscript(os.path.join(item, 'SConscript'))
+        else:
+            group = group + SConscript(os.path.join(item, 'SConscript'))
+if group is None:
+    group = DefineGroup('ports', [], depend = [])
 Return('group')

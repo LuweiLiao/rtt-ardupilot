@@ -296,6 +296,10 @@ submodules at specific revisions.
                  default=False,
                  help="Enables firmware ID checking on boot")
 
+    g.add_option('--no-check-firmware', action='store_true',
+                 default=False,
+                 help="Disable firmware ID checking in bootloader (for RTT/non-AP app at 0x08008000)")
+
     g.add_option('--enable-custom-controller', action='store_true',
                  default=False,
                  help="Enables custom controller")

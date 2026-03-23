@@ -1,5 +1,7 @@
 /*
- * ArduPilot + RT-Thread HAL - SPIDevice implementation
+ * AP_HAL_RTT — SPI device driver
+ * Board-independent: uses RTT_SPIDesc from hwdef-generated HAL_SPI_DEVICE_LIST.
+ * SPI bus locking is handled internally by rt_spi_send_then_recv / rt_spi_send / rt_spi_recv.
  */
 
 #include "SPIDevice.h"
@@ -10,13 +12,26 @@
 
 using namespace RTT;
 
-SPIDevice::SPIDevice(const char *name, uint8_t bus_id)
-    : AP_HAL::SPIDevice()
-    , _dev(nullptr)
-    , _bus_id(bus_id)
+static uint32_t _spi_mode_to_rtt(uint8_t mode)
 {
-    set_device_bus(bus_id);
-    _dev = (struct rt_spi_device *)rt_device_find(name);
+    switch (mode) {
+    case 0: return RT_SPI_MODE_0 | RT_SPI_MSB;
+    case 1: return RT_SPI_MODE_1 | RT_SPI_MSB;
+    case 2: return RT_SPI_MODE_2 | RT_SPI_MSB;
+    default: return RT_SPI_MODE_3 | RT_SPI_MSB;
+    }
+}
+
+SPIDevice::SPIDevice(RTT_SPIDesc &desc)
+    : AP_HAL::SPIDevice()
+    , _desc(desc)
+    , _dev(nullptr)
+{
+    set_device_bus(desc.bus);
+    _dev = (struct rt_spi_device *)rt_device_find(desc.rtt_devname);
+    if (_dev != nullptr) {
+        set_speed(AP_HAL::Device::SPEED_LOW);
+    }
 }
 
 SPIDevice::~SPIDevice()
@@ -28,9 +43,9 @@ bool SPIDevice::set_speed(AP_HAL::Device::Speed speed)
     if (_dev == nullptr) return false;
     struct rt_spi_configuration cfg;
     memset(&cfg, 0, sizeof(cfg));
-    cfg.mode = RT_SPI_MODE_3;
+    cfg.mode = _spi_mode_to_rtt(_desc.mode);
     cfg.data_width = 8;
-    cfg.max_hz = (speed == AP_HAL::Device::SPEED_HIGH) ? 10000000 : 1000000;
+    cfg.max_hz = (speed == AP_HAL::Device::SPEED_HIGH) ? _desc.highspeed : _desc.lowspeed;
     return rt_spi_configure(_dev, &cfg) == RT_EOK;
 }
 
@@ -39,53 +54,34 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
 {
     if (_dev == nullptr) return false;
     bool need_sem = !_cs_held;
-    if (need_sem && !_sem.take_nonblocking()) return false;
+    if (need_sem && !_sem.take(HAL_SEMAPHORE_BLOCK_FOREVER)) return false;
+
     rt_err_t err = RT_EOK;
-    bool need_bus = !_cs_held;
-    if (need_bus && rt_spi_take_bus(_dev) != RT_EOK) {
-        if (need_sem) _sem.give();
-        return false;
-    }
-    if (need_bus && rt_spi_take(_dev) != RT_EOK) {
-        rt_spi_release_bus(_dev);
-        if (need_sem) _sem.give();
-        return false;
-    }
     if (send_len > 0 && recv_len > 0) {
         err = rt_spi_send_then_recv(_dev, send, send_len, recv, recv_len);
     } else if (send_len > 0) {
-        err = rt_spi_send(_dev, send, send_len);
+        rt_size_t ret = rt_spi_send(_dev, send, send_len);
+        err = (ret == send_len) ? RT_EOK : -RT_EIO;
     } else if (recv_len > 0) {
-        err = rt_spi_recv(_dev, recv, recv_len);
+        rt_size_t ret = rt_spi_recv(_dev, recv, recv_len);
+        err = (ret == recv_len) ? RT_EOK : -RT_EIO;
     }
-    if (need_bus) {
-        rt_spi_release(_dev);
-        rt_spi_release_bus(_dev);
-    }
+
     if (need_sem) _sem.give();
     return err == RT_EOK;
 }
 
 bool SPIDevice::set_chip_select(bool set)
 {
-    if (_dev == nullptr) return false;
-    if (set) {
-        if (_cs_held) return true;
-        if (rt_spi_take_bus(_dev) != RT_EOK || rt_spi_take(_dev) != RT_EOK) return false;
-        _cs_held = true;
-    } else {
-        if (!_cs_held) return true;
-        rt_spi_release(_dev);
-        rt_spi_release_bus(_dev);
-        _cs_held = false;
-    }
+    _cs_held = set;
     return true;
 }
 
 bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t len)
 {
     if (_dev == nullptr) return false;
-    if (!_sem.take_nonblocking()) return false;
+    if (!_sem.take(HAL_SEMAPHORE_BLOCK_FOREVER)) return false;
+
     struct rt_spi_message msg;
     msg.send_buf = send;
     msg.recv_buf = recv;
@@ -93,6 +89,7 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
     msg.cs_take = 1;
     msg.cs_release = 1;
     msg.next = RT_NULL;
+
     bool ok = false;
     if (rt_spi_take_bus(_dev) == RT_EOK && rt_spi_take(_dev) == RT_EOK) {
         struct rt_spi_message *ret = rt_spi_transfer_message(_dev, &msg);
@@ -110,12 +107,12 @@ AP_HAL::Semaphore *SPIDevice::get_semaphore()
 }
 
 AP_HAL::Device::PeriodicHandle SPIDevice::register_periodic_callback(
-    uint32_t, AP_HAL::Device::PeriodicCb)
+    uint32_t period_usec, AP_HAL::Device::PeriodicCb cb)
 {
-    return nullptr;
+    return _bus.register_periodic_callback(period_usec, cb, this);
 }
 
-bool SPIDevice::adjust_periodic_callback(AP_HAL::Device::PeriodicHandle, uint32_t)
+bool SPIDevice::adjust_periodic_callback(AP_HAL::Device::PeriodicHandle h, uint32_t period_usec)
 {
-    return false;
+    return _bus.adjust_timer(h, period_usec);
 }

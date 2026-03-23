@@ -10,7 +10,7 @@ MEMORY
     RAM (rw) : ORIGIN = 0x20000000, LENGTH =  512k /* 512K sram */
 }
 ENTRY(Reset_Handler)
-_system_stack_size = 0x400;
+_system_stack_size = 0x800;
 
 SECTIONS
 {
@@ -48,10 +48,26 @@ SECTIONS
 
         . = ALIGN(4);
 
-        PROVIDE(__ctors_start__ = .);
+        /* C++ global constructors (newlib __libc_init_array) */
+        . = ALIGN(4);
+        __preinit_array_start = .;
+        KEEP (*(.preinit_array*))
+        __preinit_array_end = .;
+
+        . = ALIGN(4);
+        __init_array_start = .;
         KEEP (*(SORT(.init_array.*)))
-        KEEP (*(.init_array))
-        PROVIDE(__ctors_end__ = .);
+        KEEP (*(.init_array*))
+        __init_array_end = .;
+
+        PROVIDE(__ctors_start__ = __init_array_start);
+        PROVIDE(__ctors_end__ = __init_array_end);
+
+        . = ALIGN(4);
+        __fini_array_start = .;
+        KEEP (*(SORT(.fini_array.*)))
+        KEEP (*(.fini_array*))
+        __fini_array_end = .;
 
         . = ALIGN(4);
 

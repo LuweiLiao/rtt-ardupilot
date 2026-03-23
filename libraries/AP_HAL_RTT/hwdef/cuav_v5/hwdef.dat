@@ -8,10 +8,50 @@ MCU STM32F7xx STM32F765xx
 # 2M flash, 32KB reserved for ArduPilot bootloader
 FLASH_SIZE_KB 2048
 FLASH_RESERVE_START_KB 32
-OSCILLATOR_HZ 8000000
+# Match ArduPilot CUAVv5/fmuv5: 16MHz HSE -> 216MHz SYSCLK
+OSCILLATOR_HZ 16000000
 
-# Serial order for RTT (match CUAV V5 UART layout; adjust as needed)
-SERIAL_ORDER USART3
+# Serial order for RTT: USB CDC first (GCS MAVLink), then USART3
+SERIAL_ORDER OTG1 USART3
 
 # APJ board ID for bootloader/GCS (same as ChibiOS fmuv5 / CUAV V5)
 APJ_BOARD_ID TARGET_HW_PX4_FMU_V5
+
+# ---- CS pin definitions ----
+PF2  ICM20689_CS CS
+PF3  ICM20602_CS CS
+PF11 ICM42688_CS CS
+PF4  BMI055_G_CS CS
+PG10 BMI055_A_CS CS
+PF5  RAMTRON_CS  CS
+PF10 MS5611_CS   CS
+
+# ---- SPI device table ----
+# SPIDEV name      bus   devid    cs_pin        mode    lowspeed  highspeed
+SPIDEV icm20689    SPI1  DEVID1   ICM20689_CS   MODE3   2*MHZ     8*MHZ
+SPIDEV icm20602    SPI1  DEVID2   ICM20602_CS   MODE3   2*MHZ     8*MHZ
+SPIDEV icm42688    SPI1  DEVID3   ICM42688_CS   MODE3   2*MHZ     8*MHZ
+SPIDEV bmi055_g    SPI1  DEVID4   BMI055_G_CS   MODE3  10*MHZ    10*MHZ
+SPIDEV bmi055_a    SPI1  DEVID5   BMI055_A_CS   MODE3  10*MHZ    10*MHZ
+SPIDEV ramtron     SPI2  DEVID1   RAMTRON_CS    MODE3   8*MHZ     8*MHZ
+SPIDEV ms5611      SPI4  DEVID1   MS5611_CS     MODE3  20*MHZ    20*MHZ
+
+# ---- Sensor probe lists ----
+IMU Invensense SPI:icm20689 ROTATION_NONE
+IMU Invensense SPI:icm20602 ROTATION_NONE
+IMU Invensensev3 SPI:icm42688 ROTATION_PITCH_180_YAW_270
+IMU BMI055 SPI:bmi055_a SPI:bmi055_g ROTATION_ROLL_180_YAW_90
+IMU BMI088 SPI:bmi055_a SPI:bmi055_g ROTATION_ROLL_180_YAW_90
+
+BARO MS5611 SPI:ms5611
+
+define HAL_PROBE_EXTERNAL_I2C_COMPASSES
+
+# MCU-specific defines for RT-Thread BSP and STM32 HAL
+define STM32F767xx 1
+define USE_HAL_DRIVER 1
+define HAL_STORAGE_SIZE 16384
+# FRAM 未在 AP_HAL_RTT 中可靠初始化时勿开启，否则 Storage 会走 RAMTRON 并 panic
+define HAL_WITH_RAMTRON 0
+# 双精度 EKF 显著增大 NavEKF3_core；在 RTT 堆上易触发 "EKF3 not enough memory"，与 F4 板一致用单精度
+define HAL_WITH_EKF_DOUBLE 0

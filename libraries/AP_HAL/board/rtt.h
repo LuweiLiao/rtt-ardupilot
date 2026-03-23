@@ -6,6 +6,15 @@
  * HAL implementation is provided by AP_HAL_RTT (libraries/AP_HAL_RTT).
  */
 
+/*
+ * GPS/WGS84 等需要 double 与 libm（RAD_TO_DEG_DOUBLE、sqrt 等），与 EKF 是否双精度无关。
+ * AP_HAL_Macros.h 仅在 SITL/Linux/HAL_WITH_EKF_DOUBLE/AP_SIM 时开启 ALLOW_DOUBLE_MATH_FUNCTIONS；
+ * 若 hwdef 设 HAL_WITH_EKF_DOUBLE=0 而不定义此项，整机会无法编译。
+ */
+#ifndef ALLOW_DOUBLE_MATH_FUNCTIONS
+#define ALLOW_DOUBLE_MATH_FUNCTIONS
+#endif
+
 #define HAL_BOARD_NAME "RTT"
 
 #define HAL_BOARD_SUBTYPE_RTT_GENERIC 7000
@@ -94,6 +103,11 @@
 
 #ifndef HAL_WITH_IO_MCU
 #define HAL_WITH_IO_MCU 0
+#endif
+
+/* 与 ChibiOS 一致：默认关闭 RAMTRON；具体板子在 hwdef.dat 中 define HAL_WITH_RAMTRON 1 */
+#ifndef HAL_WITH_RAMTRON
+#define HAL_WITH_RAMTRON 0
 #endif
 
 /* Macros used in #if (not #ifdef) in HAL headers; must be defined before

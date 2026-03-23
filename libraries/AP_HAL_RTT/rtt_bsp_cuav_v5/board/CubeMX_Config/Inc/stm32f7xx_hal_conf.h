@@ -45,9 +45,11 @@
 
 /* ########################## Module Selection ############################## */
 /**
-  * @brief This is the list of modules to be used in the HAL driver 
+  * @brief This is the list of modules to be used in the HAL driver
   */
-#define HAL_MODULE_ENABLED  
+#define HAL_MODULE_ENABLED
+
+#define ART_ACCELERATOR_ENABLE 1U  /* Fix for stm32f7xx_hal.c compilation */
 
 /* #define HAL_ADC_MODULE_ENABLED   */
 /* #define HAL_CRYP_MODULE_ENABLED   */
@@ -105,12 +107,13 @@
   *        This value is used by the RCC HAL module to compute the system frequency
   *        (when HSE is used as system clock source, directly or through the PLL).  
   */
-#if !defined  (HSE_VALUE) 
-  #define HSE_VALUE    ((uint32_t)8000000U) /*!< Value of the External oscillator in Hz */
+#if !defined  (HSE_VALUE)
+  /* Match ArduPilot CUAVv5/fmuv5: 16MHz crystal */
+  #define HSE_VALUE    ((uint32_t)16000000U) /*!< Value of the External oscillator in Hz */
 #endif /* HSE_VALUE */
 
 #if !defined  (HSE_STARTUP_TIMEOUT)
-  #define HSE_STARTUP_TIMEOUT    ((uint32_t)100U)   /*!< Time out for HSE start up, in ms */
+  #define HSE_STARTUP_TIMEOUT    ((uint32_t)500U)   /*!< Time out for HSE start up, in ms (longer for slow crystals) */
 #endif /* HSE_STARTUP_TIMEOUT */
 
 /**

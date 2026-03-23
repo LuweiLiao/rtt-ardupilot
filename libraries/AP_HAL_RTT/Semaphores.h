@@ -24,7 +24,7 @@ public:
     bool take_nonblocking() override WARN_IF_UNUSED;
     void take_blocking() override;
 private:
-    rt_sem_t _sem = nullptr;
+    rt_mutex_t _mtx = nullptr;
 };
 
 class BinarySemaphore : public AP_HAL::BinarySemaphore

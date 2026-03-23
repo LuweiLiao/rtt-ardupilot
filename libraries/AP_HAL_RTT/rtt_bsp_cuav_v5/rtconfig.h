@@ -69,16 +69,21 @@
 #define RT_ALIGN_SIZE 8
 #define RT_THREAD_PRIORITY_32
 #define RT_THREAD_PRIORITY_MAX 32
-#define RT_TICK_PER_SECOND 100
+/*
+ * 必须为 1000：RT-Thread 在 RT_TICK_PER_SECOND!=1000 时，rt_thread_mdelay(1) 会换算成
+ * 至少 1 个 tick；100Hz 下 1 tick=10ms，导致 ap_timer 线程实际 ~100Hz，UART/USB 每 10ms
+ * 才刷写一次发送缓冲，MAVLink 参数下载极慢。见 Scheduler::_timer_thread_entry 中 rt_thread_mdelay(1)。
+ */
+#define RT_TICK_PER_SECOND 1000
 #define RT_USING_OVERFLOW_CHECK
 #define RT_USING_HOOK
 #define RT_HOOK_USING_FUNC_PTR
 #define RT_USING_IDLE_HOOK
 #define RT_IDLE_HOOK_LIST_SIZE 4
 #define IDLE_THREAD_STACK_SIZE 256
-#define RT_USING_TIMER_SOFT
+/* #define RT_USING_TIMER_SOFT */
 #define RT_TIMER_THREAD_PRIO 4
-#define RT_TIMER_THREAD_STACK_SIZE 512
+#define RT_TIMER_THREAD_STACK_SIZE 4096
 
 /* kservice options */
 
@@ -122,7 +127,7 @@
 
 #define RT_USING_COMPONENTS_INIT
 #define RT_USING_USER_MAIN
-#define RT_MAIN_THREAD_STACK_SIZE 2048
+#define RT_MAIN_THREAD_STACK_SIZE 16384
 #define RT_MAIN_THREAD_PRIORITY 10
 #define RT_USING_MSH
 #define RT_USING_FINSH
@@ -161,6 +166,10 @@
 #define RT_USING_PIN
 #define RT_USING_I2C
 #define RT_USING_SPI
+#define BSP_USING_SPI
+#define BSP_USING_SPI1
+#define BSP_USING_SPI2
+#define BSP_USING_SPI4
 /* end of Device Drivers */
 
 /* C/C++ and POSIX layer */
@@ -424,6 +433,7 @@
 /* Onboard Peripheral Drivers */
 
 #define BSP_USING_USB_TO_USART
+#define BSP_USING_USB_DEVICE
 /* end of Onboard Peripheral Drivers */
 
 /* On-chip Peripheral Drivers */
@@ -437,5 +447,15 @@
 /* Board extended module Drivers */
 
 /* end of Hardware Drivers Config */
+
+/* CherryUSB Device (USB CDC ACM on OTG_FS PA11/PA12) */
+#define RT_USING_CHERRYUSB
+#define RT_CHERRYUSB_DEVICE
+#define RT_CHERRYUSB_DEVICE_SPEED_FS
+#define RT_CHERRYUSB_DEVICE_DWC2_ST
+#define RT_CHERRYUSB_DEVICE_CDC_ACM
+#define RT_CHERRYUSB_DEVICE_CDC_ACM_CHARDEV
+#define RT_CHERRYUSB_DEVICE_TEMPLATE_CDC_ACM_CHARDEV
+#define USBDEV_REQUEST_BUFFER_LEN 512
 
 #endif

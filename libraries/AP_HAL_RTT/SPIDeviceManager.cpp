@@ -1,5 +1,6 @@
 /*
- * ArduPilot + RT-Thread HAL - SPIDeviceManager implementation
+ * AP_HAL_RTT — SPI device manager
+ * Board-independent: device table driven by HAL_SPI_DEVICE_LIST from hwdef.h.
  */
 
 #include "SPIDeviceManager.h"
@@ -9,19 +10,19 @@
 namespace RTT
 {
 
-static const struct { const char *ap_name; const char *rtt_name; uint8_t bus_id; } _spi_table[] = {
-    {"icm42688", "spi10", 1},
-    {"bmi055_g", "spi11", 1},
-    {"bmi055_a", "spi12", 1},
-    {"ramtron", "spi20", 2},
-};
-#define _SPI_TABLE_COUNT (sizeof(_spi_table) / sizeof(_spi_table[0]))
+#ifdef HAL_SPI_DEVICE_LIST
+static RTT_SPIDesc _device_table[] = { HAL_SPI_DEVICE_LIST };
+#define _DEVICE_TABLE_COUNT ARRAY_SIZE(_device_table)
+#else
+static RTT_SPIDesc *_device_table = nullptr;
+#define _DEVICE_TABLE_COUNT 0
+#endif
 
 AP_HAL::SPIDevice *SPIDeviceManager::get_device_ptr(const char *name)
 {
-    for (size_t i = 0; i < _SPI_TABLE_COUNT; i++) {
-        if (strcmp(name, _spi_table[i].ap_name) == 0) {
-            return NEW_NOTHROW SPIDevice(_spi_table[i].rtt_name, _spi_table[i].bus_id);
+    for (uint8_t i = 0; i < _DEVICE_TABLE_COUNT; i++) {
+        if (strcmp(name, _device_table[i].name) == 0) {
+            return NEW_NOTHROW SPIDevice(_device_table[i]);
         }
     }
     return nullptr;
@@ -29,13 +30,13 @@ AP_HAL::SPIDevice *SPIDeviceManager::get_device_ptr(const char *name)
 
 uint8_t SPIDeviceManager::get_count()
 {
-    return _SPI_TABLE_COUNT;
+    return _DEVICE_TABLE_COUNT;
 }
 
 const char *SPIDeviceManager::get_device_name(uint8_t idx)
 {
-    if (idx >= _SPI_TABLE_COUNT) return nullptr;
-    return _spi_table[idx].ap_name;
+    if (idx >= _DEVICE_TABLE_COUNT) return nullptr;
+    return _device_table[idx].name;
 }
 
 } // namespace RTT

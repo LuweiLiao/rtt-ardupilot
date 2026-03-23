@@ -315,6 +315,9 @@ void HAL_PCD_MspInit(PCD_HandleTypeDef* hpcd)
 
     /* Peripheral clock enable */
     __HAL_RCC_USB_OTG_FS_CLK_ENABLE();
+    /* USB_OTG_FS interrupt Init */
+    HAL_NVIC_SetPriority(OTG_FS_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(OTG_FS_IRQn);
   /* USER CODE BEGIN USB_OTG_FS_MspInit 1 */
 
   /* USER CODE END USB_OTG_FS_MspInit 1 */
@@ -349,6 +352,7 @@ void HAL_PCD_MspDeInit(PCD_HandleTypeDef* hpcd)
     */
     HAL_GPIO_DeInit(GPIOA, USB_SOF_Pin|USB_VBUS_Pin|USB_ID_Pin|USB_DM_Pin
                           |USB_DP_Pin);
+    HAL_NVIC_DisableIRQ(OTG_FS_IRQn);
 
   /* USER CODE BEGIN USB_OTG_FS_MspDeInit 1 */
 
@@ -358,6 +362,49 @@ void HAL_PCD_MspDeInit(PCD_HandleTypeDef* hpcd)
 }
 
 /* USER CODE BEGIN 1 */
+
+void HAL_SPI_MspInit(SPI_HandleTypeDef *hspi)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    if (hspi->Instance == SPI1) {
+        __HAL_RCC_SPI1_CLK_ENABLE();
+        __HAL_RCC_GPIOG_CLK_ENABLE();
+        __HAL_RCC_GPIOA_CLK_ENABLE();
+        __HAL_RCC_GPIOD_CLK_ENABLE();
+        /* SPI1: PG11=SCK(AF5), PA6=MISO(AF5), PD7=MOSI(AF5) */
+        GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+        GPIO_InitStruct.Pull = GPIO_NOPULL;
+        GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+        GPIO_InitStruct.Alternate = GPIO_AF5_SPI1;
+        GPIO_InitStruct.Pin = GPIO_PIN_11;
+        HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
+        GPIO_InitStruct.Pin = GPIO_PIN_6;
+        HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+        GPIO_InitStruct.Pin = GPIO_PIN_7;
+        HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+    } else if (hspi->Instance == SPI2) {
+        __HAL_RCC_SPI2_CLK_ENABLE();
+        __HAL_RCC_GPIOI_CLK_ENABLE();
+        /* SPI2: PI1=SCK(AF5), PI2=MISO(AF5), PI3=MOSI(AF5) */
+        GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+        GPIO_InitStruct.Pull = GPIO_NOPULL;
+        GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+        GPIO_InitStruct.Alternate = GPIO_AF5_SPI2;
+        GPIO_InitStruct.Pin = GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3;
+        HAL_GPIO_Init(GPIOI, &GPIO_InitStruct);
+    } else if (hspi->Instance == SPI4) {
+        __HAL_RCC_SPI4_CLK_ENABLE();
+        __HAL_RCC_GPIOE_CLK_ENABLE();
+        /* SPI4: PE2=SCK(AF5), PE13=MISO(AF5), PE6=MOSI(AF5) */
+        GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+        GPIO_InitStruct.Pull = GPIO_NOPULL;
+        GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+        GPIO_InitStruct.Alternate = GPIO_AF5_SPI4;
+        GPIO_InitStruct.Pin = GPIO_PIN_2 | GPIO_PIN_13 | GPIO_PIN_6;
+        HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+    }
+}
 
 /* USER CODE END 1 */
 

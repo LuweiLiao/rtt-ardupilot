@@ -1,0 +1,1 @@
+/home/pix/firmare/pogo/pogo-apm/build/rtt_cuav_v5/hwdef.h

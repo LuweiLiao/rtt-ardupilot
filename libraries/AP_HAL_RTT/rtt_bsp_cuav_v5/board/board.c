@@ -10,6 +10,10 @@
  */
 
 #include "board.h"
+#include <rtthread.h>
+
+/* GDB can inspect: 0=none yet, 1=HSE, 2=HSE_BYPASS, 3=HSI */
+volatile uint8_t clock_source_used;
 
 /**
   * @brief System Clock Configuration
@@ -17,9 +21,19 @@
   */
 void SystemClock_Config(void)
 {
+  /* Idempotent: only configure once (avoid re-entry from USB EP0 or other path) */
+  static volatile uint8_t clock_configured = 0;
+  if (clock_configured) {
+    return;
+  }
+  clock_source_used = 0;
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
   RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
+
+  /* Bootloader jump may leave RCC/PLL in a non-reset state.
+   * Bring clocks back to HAL defaults before reconfiguring them. */
+  HAL_RCC_DeInit();
 
   /**Configure LSE Drive Capability
   */
@@ -28,19 +42,52 @@ void SystemClock_Config(void)
   */
   __HAL_RCC_PWR_CLK_ENABLE();
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
-  /**Initializes the CPU, AHB and APB busses clocks
-  */
+  /**Initializes the CPU, AHB and APB busses clocks (align with ArduPilot CUAVv5/fmuv5: 16MHz HSE -> 216MHz) */
+  /* Try 1: HSE crystal 16MHz (RCC_HSE_ON), PLL 16/8*216/2 = 216 MHz */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-  RCC_OscInitStruct.HSEState = RCC_HSE_BYPASS;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 8;
-  RCC_OscInitStruct.PLL.PLLN = 432;
+  RCC_OscInitStruct.PLL.PLLN = 216;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 9;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) == HAL_OK) {
+    clock_source_used = 1; /* HSE OK */
+  } else {
+    /* HAL: transition HSE On -> HSE Bypass requires HSE Off first */
+    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+    RCC_OscInitStruct.HSEState = RCC_HSE_OFF;
+    (void)HAL_RCC_OscConfig(&RCC_OscInitStruct);
+
+    /* Try 2: HSE external clock (BYPASS) in case board uses active oscillator */
+    RCC_OscInitStruct.HSEState = RCC_HSE_BYPASS;
+    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+    RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+    RCC_OscInitStruct.PLL.PLLM = 8;
+    RCC_OscInitStruct.PLL.PLLN = 216;
+    RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+    RCC_OscInitStruct.PLL.PLLQ = 9;
+    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) == HAL_OK) {
+      clock_source_used = 2; /* HSE BYPASS OK */
+    } else {
+      RCC_OscInitStruct.HSEState = RCC_HSE_OFF;
+      (void)HAL_RCC_OscConfig(&RCC_OscInitStruct);
+
+      /* Try 3: HSI 16MHz -> PLL 216MHz so system runs and USB can be debugged */
+      RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+      RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+      RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+      RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+      RCC_OscInitStruct.PLL.PLLM = 8;
+      RCC_OscInitStruct.PLL.PLLN = 216;   /* 16/8*216/2 = 216 MHz */
+      RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+      RCC_OscInitStruct.PLL.PLLQ = 9;
+      if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
+        Error_Handler();
+      }
+      clock_source_used = 3; /* HSI OK */
+    }
   }
   /**Activate the Over-Drive mode
   */
@@ -68,5 +115,7 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+  clock_configured = 1;
 }
 
+/* _Error_Handler is provided by drv_common.c - no need to redefine here */
