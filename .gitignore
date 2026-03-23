@@ -177,3 +177,20 @@ env.bak/
 venv.bak/
 autotest_result_*_junit.xml
 .python-version
+
+# RT-Thread BSP 构建产物
+libraries/AP_HAL_RTT/rtt_bsp_cuav_v5/.sconsign.dblite
+libraries/AP_HAL_RTT/rtt_bsp_cuav_v5/rtthread.map
+libraries/AP_HAL_RTT/rtt_bsp_cuav_v5/packages/
+.sconsign.dblite
+
+# Bootloader 备份
+Tools/bootloaders/*.rtt_bak
+
+# Cursor / Claude 大文件
+.cursor/cursor_ardupilot_at32_gd32.md
+.cursor/worktrees.json
+.claude/
+
+# ChibiOS-Contrib (未使用)
+modules/ChibiOS-Contrib/
