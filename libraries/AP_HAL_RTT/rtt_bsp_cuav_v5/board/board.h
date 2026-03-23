@@ -39,4 +39,21 @@ extern int __bss_end;
 
 void SystemClock_Config(void);
 
+/*
+ * Force SPI1 to alternate DMA2 streams so SPI4 can use its
+ * default assignments (Stream0-RX, Stream1-TX).  Without this
+ * override both SPI1 and SPI4 try to use DMA2_Stream0 for RX.
+ */
+#define SPI1_DMA_RX_IRQHandler    DMA2_Stream2_IRQHandler
+#define SPI1_RX_DMA_RCC           RCC_AHB1ENR_DMA2EN
+#define SPI1_RX_DMA_INSTANCE      DMA2_Stream2
+#define SPI1_RX_DMA_CHANNEL       DMA_CHANNEL_3
+#define SPI1_RX_DMA_IRQ           DMA2_Stream2_IRQn
+
+#define SPI1_DMA_TX_IRQHandler    DMA2_Stream5_IRQHandler
+#define SPI1_TX_DMA_RCC           RCC_AHB1ENR_DMA2EN
+#define SPI1_TX_DMA_INSTANCE      DMA2_Stream5
+#define SPI1_TX_DMA_CHANNEL       DMA_CHANNEL_3
+#define SPI1_TX_DMA_IRQ           DMA2_Stream5_IRQn
+
 #endif

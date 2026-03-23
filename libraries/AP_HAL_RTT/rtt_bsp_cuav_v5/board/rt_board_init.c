@@ -37,6 +37,51 @@ static void _spi_device_init(void)
 }
 #endif
 
+static void _mpu_config(void)
+{
+    HAL_MPU_Disable();
+
+    MPU_Region_InitTypeDef mpu;
+
+    /*
+     * Region 0: SRAM1+SRAM2 (0x20020000, 384KB)
+     * Normal memory, Write-Through, No Write-Allocate, Shareable
+     * DMA reads from RAM directly; CPU reads through D-Cache.
+     * Write-through ensures invalidate never discards dirty data.
+     */
+    mpu.Enable           = MPU_REGION_ENABLE;
+    mpu.Number           = MPU_REGION_NUMBER0;
+    mpu.BaseAddress      = 0x20020000;
+    mpu.Size             = MPU_REGION_SIZE_512KB;
+    mpu.SubRegionDisable = 0x00;
+    mpu.TypeExtField     = MPU_TEX_LEVEL0;
+    mpu.AccessPermission = MPU_REGION_FULL_ACCESS;
+    mpu.DisableExec      = MPU_INSTRUCTION_ACCESS_ENABLE;
+    mpu.IsShareable      = MPU_ACCESS_SHAREABLE;
+    mpu.IsCacheable      = MPU_ACCESS_CACHEABLE;
+    mpu.IsBufferable     = MPU_ACCESS_NOT_BUFFERABLE;
+    HAL_MPU_ConfigRegion(&mpu);
+
+    /*
+     * Region 1: Peripheral space (0x40000000, 512MB)
+     * Device memory, non-cacheable, non-bufferable
+     */
+    mpu.Enable           = MPU_REGION_ENABLE;
+    mpu.Number           = MPU_REGION_NUMBER1;
+    mpu.BaseAddress      = 0x40000000;
+    mpu.Size             = MPU_REGION_SIZE_512MB;
+    mpu.SubRegionDisable = 0x00;
+    mpu.TypeExtField     = MPU_TEX_LEVEL0;
+    mpu.AccessPermission = MPU_REGION_FULL_ACCESS;
+    mpu.DisableExec      = MPU_INSTRUCTION_ACCESS_DISABLE;
+    mpu.IsShareable      = MPU_ACCESS_SHAREABLE;
+    mpu.IsCacheable      = MPU_ACCESS_NOT_CACHEABLE;
+    mpu.IsBufferable     = MPU_ACCESS_BUFFERABLE;
+    HAL_MPU_ConfigRegion(&mpu);
+
+    HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
+}
+
 void rt_hw_board_init(void)
 {
 #ifdef FLASH_ORIGIN
@@ -44,6 +89,10 @@ void rt_hw_board_init(void)
 #else
     SCB->VTOR = 0x08008000U;
 #endif
+
+    _mpu_config();
+    SCB_EnableICache();
+    // SCB_EnableDCache();  // temporarily disabled to diagnose HardFault
 
     if (HAL_Init() != HAL_OK) {
         while (1) { }

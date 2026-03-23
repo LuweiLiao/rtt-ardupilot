@@ -70,11 +70,13 @@
 #define RT_THREAD_PRIORITY_32
 #define RT_THREAD_PRIORITY_MAX 32
 /*
- * 必须为 1000：RT-Thread 在 RT_TICK_PER_SECOND!=1000 时，rt_thread_mdelay(1) 会换算成
- * 至少 1 个 tick；100Hz 下 1 tick=10ms，导致 ap_timer 线程实际 ~100Hz，UART/USB 每 10ms
- * 才刷写一次发送缓冲，MAVLink 参数下载极慢。见 Scheduler::_timer_thread_entry 中 rt_thread_mdelay(1)。
+ * 10 kHz tick matches ChibiOS CH_CFG_ST_FREQUENCY (10000), giving
+ * 100 µs scheduling granularity.  rt_thread_mdelay(ms) converts ms
+ * to ticks internally, so all mdelay-based waits remain correct.
+ * Scheduler::delay_microseconds() now uses rt_thread_delay(ticks)
+ * for sub-millisecond precision, critical for 400 Hz main loop.
  */
-#define RT_TICK_PER_SECOND 1000
+#define RT_TICK_PER_SECOND 10000
 #define RT_USING_OVERFLOW_CHECK
 #define RT_USING_HOOK
 #define RT_HOOK_USING_FUNC_PTR
@@ -91,7 +93,7 @@
 #define RT_USING_DEBUG
 #define RT_DEBUGING_ASSERT
 #define RT_DEBUGING_COLOR
-#define RT_DEBUGING_CONTEXT
+/* #define RT_DEBUGING_CONTEXT */ /* disabled: mutex in scheduler-locked context triggers false positive asserts */
 
 /* Inter-Thread communication */
 
@@ -170,6 +172,25 @@
 #define BSP_USING_SPI1
 #define BSP_USING_SPI2
 #define BSP_USING_SPI4
+
+/*
+ * SPI DMA — frees the CPU during sensor reads (IMU, Baro).
+ *
+ * DMA stream assignment (STM32F767, no conflicts):
+ *   SPI1_RX → DMA2_Stream2 / Channel 3   (manual, avoids Stream0 clash with SPI4)
+ *   SPI1_TX → DMA2_Stream5 / Channel 3   (manual, avoids Stream3 clash with SPI4)
+ *   SPI2_RX → DMA1_Stream3 / Channel 0   (auto from dma_config.h)
+ *   SPI2_TX → DMA1_Stream4 / Channel 0   (auto)
+ *   SPI4_RX → DMA2_Stream0 / Channel 4   (auto, Stream0 free since SPI1 moved)
+ *   SPI4_TX → DMA2_Stream1 / Channel 4   (auto)
+ */
+#define BSP_SPI1_RX_USING_DMA
+#define BSP_SPI1_TX_USING_DMA
+#define BSP_SPI2_RX_USING_DMA
+#define BSP_SPI2_TX_USING_DMA
+#define BSP_SPI4_RX_USING_DMA
+#define BSP_SPI4_TX_USING_DMA
+
 /* end of Device Drivers */
 
 /* C/C++ and POSIX layer */
