@@ -7,6 +7,8 @@ cwd = GetCurrentDir()
 src = Glob('board.c')
 src += Glob('rt_board_init.c')
 src += Glob('CubeMX_Config/Src/stm32f7xx_hal_msp.c')
+# STM32F7 Low-Level SPI DMA driver: eliminates HAL busy-wait from DMA ISR
+src += Glob('drv_spi_lld.c')
 
 
 

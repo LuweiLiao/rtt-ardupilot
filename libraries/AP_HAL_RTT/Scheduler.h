@@ -1,6 +1,7 @@
 /*
  * AP_HAL_RTT Scheduler — mirrors ChibiOS HAL thread architecture:
- *   timer thread  : 1kHz  _run_timers() + UART _timer_tick
+ *   timer thread  : 1kHz  _run_timers() (no UART — separated to avoid CDC blocking)
+ *   uart thread   : 1kHz  UART _timer_tick() (isolated from timer callbacks)
  *   io thread     : 1kHz  _run_io()
  *   storage thread: 1kHz  hal.storage->_timer_tick()
  * GCS is driven by main-thread delay() -> call_delay_cb() mechanism.
@@ -24,6 +25,9 @@ public:
     void set_callbacks(AP_HAL::HAL::Callbacks* cb) { callbacks = cb; }
     void delay(uint16_t ms) override;
     void delay_microseconds(uint16_t us) override;
+    void delay_microseconds_boost(uint16_t us) override;
+    bool check_called_boost(void);
+    void boost_end(void) override;
     void register_timer_process(AP_HAL::MemberProc proc) override;
     void register_io_process(AP_HAL::MemberProc proc) override;
     void register_timer_failsafe(AP_HAL::Proc failsafe, uint32_t period_us) override;
@@ -34,7 +38,8 @@ public:
     bool thread_create(AP_HAL::MemberProc proc, const char* name, uint32_t stack_size,
                        priority_base base, int8_t priority) override;
     void expect_delay_ms(uint32_t ms) override;
-    bool in_expected_delay() const override { return _expected_delay_ms > 0; }
+    bool in_expected_delay() const override;
+    void watchdog_pat(void);
 
     void set_main_thread_id(rt_thread_t id) { _main_thread_id = id; }
 
@@ -48,6 +53,7 @@ private:
     uint8_t _num_io_procs = 0;
 
     static bool _system_initialized;
+    bool _hal_initialized = false;
     rt_thread_t _main_thread_id = nullptr;
 
     Semaphore _timer_sem;
@@ -55,14 +61,24 @@ private:
 
     bool _in_timer_proc = false;
     bool _in_io_proc = false;
+    bool _priority_boosted = false;
+    bool _called_boost = false;
 
     uint32_t _expected_delay_ms = 0;
+    uint32_t _expect_delay_start = 0;
+    uint32_t _expect_delay_length = 0;
+    uint8_t  _expect_delay_nesting = 0;
 
     void _run_timers();
     void _run_io();
 
+    static void _delay_microseconds_dwt(uint16_t us);
+
     static void _timer_thread_entry(void *arg);
     rt_thread_t _timer_thread_ctx = nullptr;
+
+    static void _uart_thread_entry(void *arg);
+    rt_thread_t _uart_thread_ctx = nullptr;
 
     static void _io_thread_entry(void *arg);
     rt_thread_t _io_thread_ctx = nullptr;

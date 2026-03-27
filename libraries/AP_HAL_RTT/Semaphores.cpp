@@ -30,8 +30,10 @@ bool Semaphore::give()
 bool Semaphore::take(uint32_t timeout_ms)
 {
     if (_mtx == nullptr) return false;
-    rt_int32_t tick = (timeout_ms == 0) ? RT_WAITING_FOREVER : (rt_int32_t)rt_tick_from_millisecond(timeout_ms);
-    return rt_mutex_take(_mtx, tick) == RT_EOK;
+    if (timeout_ms == 0) {
+        return rt_mutex_take(_mtx, 0) == RT_EOK;
+    }
+    return rt_mutex_take(_mtx, (rt_int32_t)rt_tick_from_millisecond(timeout_ms)) == RT_EOK;
 }
 
 bool Semaphore::take_nonblocking()
@@ -42,7 +44,8 @@ bool Semaphore::take_nonblocking()
 
 void Semaphore::take_blocking()
 {
-    IGNORE_RETURN(take(0));
+    if (_mtx == nullptr) return;
+    rt_mutex_take(_mtx, RT_WAITING_FOREVER);
 }
 
 BinarySemaphore::BinarySemaphore(bool initial_state)
@@ -61,13 +64,16 @@ BinarySemaphore::~BinarySemaphore()
 bool BinarySemaphore::wait(uint32_t timeout_us)
 {
     if (_sem == nullptr) return false;
-    rt_int32_t tick = (timeout_us == 0) ? RT_WAITING_FOREVER : (rt_int32_t)rt_tick_from_millisecond((timeout_us + 999) / 1000);
-    return rt_sem_take(_sem, tick) == RT_EOK;
+    if (timeout_us == 0) {
+        return rt_sem_take(_sem, 0) == RT_EOK;
+    }
+    return rt_sem_take(_sem, (rt_int32_t)rt_tick_from_millisecond((timeout_us + 999) / 1000)) == RT_EOK;
 }
 
 bool BinarySemaphore::wait_blocking()
 {
-    return wait(0);
+    if (_sem == nullptr) return false;
+    return rt_sem_take(_sem, RT_WAITING_FOREVER) == RT_EOK;
 }
 
 void BinarySemaphore::signal()

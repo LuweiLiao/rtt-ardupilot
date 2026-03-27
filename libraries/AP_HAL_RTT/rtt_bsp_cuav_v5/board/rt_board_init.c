@@ -12,6 +12,11 @@
 
 #include "hwdef.h"
 
+/* SPI Low-Level DMA driver (STM32F7 only) */
+#ifdef SOC_SERIES_STM32F7
+#include "drv_spi_lld.h"
+#endif
+
 extern int rt_hw_pin_init(void);
 extern int rt_hw_usart_init(void);
 extern void __libc_init_array(void);
@@ -82,6 +87,35 @@ static void _mpu_config(void)
     HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
 }
 
+/*
+ * SPI LLD context for SPI1 (primary IMU bus on CUAV V5).
+ * Registered before rt_components_board_init() so that rt_hw_spi_init()
+ * (INIT_BOARD_EXPORT) finds it during rt_hw_spi_bus_init().
+ *
+ * Pin/DMA assignments from board.h:
+ *   SPI1 RX: DMA2_Stream2, CHANNEL_3
+ *   SPI1 TX: DMA2_Stream5, CHANNEL_3
+ */
+#ifdef SOC_SERIES_STM32F7
+#if defined(BSP_USING_SPI1) && defined(BSP_SPI1_TX_USING_DMA) && defined(BSP_SPI1_RX_USING_DMA)
+static spi_lld_bus_t s_spi1_lld = {
+    .spi     = SPI1,
+    .dma_rx  = SPI1_RX_DMA_INSTANCE,   /* DMA2_Stream2 */
+    .dma_tx  = SPI1_TX_DMA_INSTANCE,   /* DMA2_Stream5 */
+    .ch_rx   = SPI1_RX_DMA_CHANNEL,    /* DMA_CHANNEL_3 */
+    .ch_tx   = SPI1_TX_DMA_CHANNEL,    /* DMA_CHANNEL_3 */
+    .irq_rx  = SPI1_RX_DMA_IRQ,        /* DMA2_Stream2_IRQn */
+    .irq_tx  = SPI1_TX_DMA_IRQ,        /* DMA2_Stream5_IRQn */
+};
+
+static void _spi_lld_board_init(void)
+{
+    spi_lld_register(&s_spi1_lld);
+    spi_lld_bus_init(&s_spi1_lld);
+}
+#endif /* BSP_USING_SPI1 && DMA */
+#endif /* SOC_SERIES_STM32F7 */
+
 void rt_hw_board_init(void)
 {
 #ifdef FLASH_ORIGIN
@@ -92,7 +126,7 @@ void rt_hw_board_init(void)
 
     _mpu_config();
     SCB_EnableICache();
-    // SCB_EnableDCache();  // temporarily disabled to diagnose HardFault
+    SCB_EnableDCache();
 
     if (HAL_Init() != HAL_OK) {
         while (1) { }
@@ -103,17 +137,28 @@ void rt_hw_board_init(void)
 #ifdef RT_USING_HEAP
     rt_system_heap_init(HEAP_BEGIN, HEAP_END);
 #endif
+
+#ifdef RT_USING_CONSOLE
+    rt_console_set_device(RT_CONSOLE_DEVICE_NAME);
+#endif
+
+    /* Register SPI LLD contexts before rt_components_board_init() so that
+     * rt_hw_spi_init() (INIT_BOARD_EXPORT) finds them. */
+#ifdef SOC_SERIES_STM32F7
+#if defined(BSP_USING_SPI1) && defined(BSP_SPI1_TX_USING_DMA) && defined(BSP_SPI1_RX_USING_DMA)
+    _spi_lld_board_init();
+#endif
+#endif
+
+#ifdef RT_USING_COMPONENTS_INIT
+    rt_components_board_init();
+#endif
 }
 
-#ifdef BSP_USING_SPI
-extern int rt_hw_spi_init(void);
-
+#if defined(BSP_USING_SPI) && defined(HAL_RTT_SPI_ATTACH_LIST)
 static int _spi_device_board_init(void)
 {
-    rt_hw_spi_init();
-#ifdef HAL_RTT_SPI_ATTACH_LIST
     _spi_device_init();
-#endif
     return 0;
 }
 INIT_PREV_EXPORT(_spi_device_board_init);
@@ -125,3 +170,43 @@ static int rtt_run_cpp_ctors(void)
     return 0;
 }
 INIT_COMPONENT_EXPORT(rtt_run_cpp_ctors);
+
+#ifdef BSP_USING_SDIO
+#include <dfs_fs.h>
+
+#define SD_POWER_PIN    GET_PIN(G, 7)   /* PG7 = VDD_3V3_SD_CARD_EN */
+
+static int sd_card_mount(void)
+{
+    rt_pin_mode(SD_POWER_PIN, PIN_MODE_OUTPUT);
+    rt_pin_write(SD_POWER_PIN, PIN_HIGH);
+    rt_thread_mdelay(100);
+
+    rt_device_t sd_dev = RT_NULL;
+    for (int retry = 0; retry < 10; retry++) {
+        sd_dev = rt_device_find("sd0");
+        if (sd_dev != RT_NULL) break;
+        rt_thread_mdelay(100);
+    }
+
+    if (sd_dev == RT_NULL) {
+        rt_kprintf("[sd] sd0 device not found\n");
+        return -1;
+    }
+
+    if (dfs_mount("sd0", "/sd", "elm", 0, 0) == 0) {
+        rt_kprintf("[sd] mounted /sd ok\n");
+    } else {
+        rt_kprintf("[sd] mount /sd failed\n");
+        return -1;
+    }
+
+    mkdir("/sd/APM", 0777);
+    mkdir("/sd/APM/LOGS", 0777);
+    mkdir("/sd/APM/TERRAIN", 0777);
+    mkdir("/sd/APM/STORAGE", 0777);
+
+    return 0;
+}
+INIT_ENV_EXPORT(sd_card_mount);
+#endif

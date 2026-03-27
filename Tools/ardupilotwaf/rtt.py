@@ -174,6 +174,8 @@ def _deploy_cuav_v5_bsp_if_needed(env):
     """
     If BOARD uses CUAV V5 BSP (stm32/stm32f765-cuav-v5) and the deploy target
     does not exist, copy from libraries/AP_HAL_RTT/rtt_bsp_cuav_v5.
+    If the deploy target already exists, sync key mutable files so that changes
+    to the source BSP (rtconfig.h, link.lds, board.c, etc.) are always reflected.
     """
     bsp_rel = RTT_BSP_MAP.get(getattr(env, 'BOARD', None))
     if bsp_rel != 'stm32/stm32f765-cuav-v5':
@@ -183,17 +185,59 @@ def _deploy_cuav_v5_bsp_if_needed(env):
     if not rtt_root or not srcroot or not os.path.isdir(rtt_root):
         return
     deploy_dir = os.path.join(rtt_root, 'bsp', 'stm32', 'stm32f765-cuav-v5')
-    if os.path.isdir(deploy_dir):
-        return
     src_dir = os.path.join(srcroot, RTT_BSP_CUAV_V5_SRC.replace('/', os.sep))
     if not os.path.isdir(src_dir):
         return
-    try:
-        import shutil
-        os.makedirs(os.path.dirname(deploy_dir), exist_ok=True)
-        shutil.copytree(src_dir, deploy_dir)
-    except Exception:
-        pass
+    if not os.path.isdir(deploy_dir):
+        try:
+            import shutil
+            os.makedirs(os.path.dirname(deploy_dir), exist_ok=True)
+            shutil.copytree(src_dir, deploy_dir)
+        except Exception:
+            pass
+        return
+    # Sync key mutable files so source BSP changes are always propagated to deploy dir.
+    # This prevents stale link.lds / rtconfig.h in the deployed copy from causing
+    # linker overflows or missing driver config after edits to the source BSP.
+    sync_list = [
+        'rtconfig.py', 'rtconfig.h', 'SConscript', '.config', 'dirent.h',
+        os.path.join('board', 'board.c'),
+        os.path.join('board', 'rt_board_init.c'),
+        os.path.join('board', 'SConscript'), os.path.join('board', 'Kconfig'),
+        os.path.join('board', 'linker_scripts', 'link.lds'),
+        os.path.join('board', 'drv_spi_lld.h'),
+        os.path.join('board', 'drv_spi_lld.c'),
+        os.path.join('board', 'ports', 'cherryusb', 'cherryusb.c'),
+        os.path.join('board', 'ports', 'cherryusb', 'SConscript'),
+        os.path.join('board', 'ports', 'cherryusb', 'usb_config.h'),
+        os.path.join('board', 'CubeMX_Config', 'Inc', 'stm32f7xx_hal_conf.h'),
+        os.path.join('board', 'CubeMX_Config', 'Src', 'stm32f7xx_hal_msp.c'),
+    ]
+    import shutil
+    for rel in sync_list:
+        src_f = os.path.join(src_dir, rel)
+        if not os.path.isfile(src_f):
+            continue
+        dst = os.path.join(deploy_dir, rel)
+        dst_dir = os.path.dirname(dst)
+        try:
+            if dst_dir:
+                os.makedirs(dst_dir, exist_ok=True)
+            # Only copy if source is newer or destination missing
+            if not os.path.isfile(dst) or os.path.getmtime(src_f) > os.path.getmtime(dst):
+                shutil.copy2(src_f, dst)
+        except Exception:
+            pass
+    # If any synced file (especially rtconfig.h or link.lds) changed, invalidate
+    # librtthread.a so _ensure_librtthread_a will rebuild from the updated rtconfig.h.
+    lib_path = os.path.join(deploy_dir, 'librtthread.a')
+    rtconfig_h = os.path.join(deploy_dir, 'rtconfig.h')
+    if os.path.isfile(lib_path) and os.path.isfile(rtconfig_h):
+        if os.path.getmtime(rtconfig_h) > os.path.getmtime(lib_path):
+            try:
+                os.remove(lib_path)
+            except OSError:
+                pass
 
 
 def _deploy_pixhawk6c_mini_bsp_if_needed(env):
@@ -421,28 +465,58 @@ def _ensure_librtthread_a(env):
     except OSError:
         return None, False
 
-    # 2) collect build/*.o and create librtthread.a in BSP dir (exclude RTT applications/main so ArduPilot main is used)
+    # 2) collect *.o and create librtthread.a.
+    #    Scons uses VariantDir for kernel/ and libraries/HAL_Drivers/ → those objects land in build/.
+    #    Board-level files (board.c, rt_board_init.c, cherryusb, stm32f7xx_hal_msp.c) are compiled
+    #    in-place (source directory), NOT in build/.  We must collect both sets.
     build_dir = os.path.join(bsp_dir, 'build')
     if not os.path.isdir(build_dir):
         return None, False
+
+    # Directories to scan for compiled objects (in addition to build/).
+    # board/ defines SystemClock_Config and other hardware-init symbols.
+    # packages/stm32f7_hal_driver*/Src and packages/stm32f7_cmsis_driver*/Source are compiled in-place by scons.
+    extra_scan_dirs = [os.path.join(bsp_dir, d) for d in ('board',)]
+
+    def _should_exclude(path, rel_to_bsp):
+        rel = rel_to_bsp.replace(os.sep, '/')
+        # Skip RTT application main so ArduPilot vehicle main is the single definition
+        if ('applications/' in rel or rel.startswith('applications/')) and \
+                os.path.basename(path) in ('main.o', 'arduino_main.o'):
+            return True
+        # Skip CubeMX interrupt handler; USB IRQ comes from cherryusb usb_irq.c
+        if os.path.basename(path) in ('stm32h7xx_it.o', 'stm32f7xx_it.o'):
+            return True
+        return False
+
     objs = []
-    for root, _dirs, files in os.walk(build_dir):
-        for f in files:
-            if not f.endswith('.o'):
-                continue
-            path = os.path.join(root, f)
-            rel = os.path.relpath(path, build_dir).replace(os.sep, '/')
-            if 'applications/' in rel and (f == 'main.o' or f == 'arduino_main.o'):
-                continue  # skip RTT app main so ArduPilot vehicle main is the single definition
-            if f == 'stm32h7xx_it.o':
-                continue  # skip CubeMX it.c; USB IRQ from cherryusb usb_irq.c
-            objs.append(path)
+    objs_set = set()
+
+    def _add_dir(scan_dir):
+        if not os.path.isdir(scan_dir):
+            return
+        for root, _dirs, files in os.walk(scan_dir):
+            for f in files:
+                if not f.endswith('.o'):
+                    continue
+                path = os.path.join(root, f)
+                rel = os.path.relpath(path, bsp_dir)
+                if _should_exclude(path, rel):
+                    continue
+                if path not in objs_set:
+                    objs_set.add(path)
+                    objs.append(path)
+
+    _add_dir(build_dir)
+    for d in extra_scan_dirs:
+        _add_dir(d)
+
     # include CMSIS startup (Reset_Handler) if built under packages (scons may output there)
     mcu = _rtt_mcu_family(env)
     startup_name = _RTT_STARTUP_O.get(mcu, _RTT_STARTUP_O['f4'])
     cmsis_pkg = _RTT_CMSIS_PKG.get(mcu, _RTT_CMSIS_PKG['f4'])
     startup_o = os.path.join(bsp_dir, cmsis_pkg, 'Source', 'Templates', 'gcc', startup_name)
-    if os.path.isfile(startup_o) and startup_o not in objs:
+    if os.path.isfile(startup_o) and startup_o not in objs_set:
         objs.append(startup_o)
     if not objs:
         return None, False
@@ -611,7 +685,8 @@ def rtt_dynamic_includes(self):
         hal_inc = os.path.join(bsp_dir, hal_pkg, 'Inc')
         hal_conf_inc = os.path.join(bsp_dir, 'board', 'CubeMX_Config', 'Inc')
         cmsis_inc = os.path.join(bsp_dir, cmsis_pkg, 'Include')
-        for d in (hal_inc, hal_conf_inc, cmsis_inc):
+        cmsis_core_inc = os.path.join(bsp_dir, 'packages', 'CMSIS-Core-latest', 'Include')
+        for d in (hal_inc, hal_conf_inc, cmsis_inc, cmsis_core_inc):
             if os.path.isdir(d):
                 self.env.append_value('INCLUDES', [d])
     # For the main program: add STM32F4 HAL Src/*.c and stm32 HAL_Drivers (drv_gpio, drv_usart) so undefined refs are resolved

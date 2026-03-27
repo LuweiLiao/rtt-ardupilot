@@ -88,6 +88,7 @@ private:
     volatile uint32_t _open_error_ms;
     const char *_log_directory;
     bool _last_write_failed;
+    bool _have_ever_opened{false};
 
     uint32_t _io_timer_heartbeat;
     bool io_thread_alive() const;

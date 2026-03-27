@@ -2,54 +2,75 @@
 
 ## 完整编译 RTT 固件
 - 用途：构建 `CUAV v5` 的 RT-Thread ArduPilot 固件
-- 命令：`python3 -m SCons --v=ArduCopter --target=cuav_v5 -j16`
-- 成功判据：生成 `build/rtt_deploy/cuav_v5/rt-thread.elf` 与 `rtthread.bin`
-- 常见失败：RT-Thread packages、工具链路径、include 冲突、`ap_config.h` 生成链路
+- 命令：`python3 -m SCons --v=ArduCopter --target=cuav_v5 -j8`
+- 成功判据：生成 `build/rtt_deploy/cuav_v5/rt-thread.elf` 与 `rtthread.bin`，ROM < 2016KB
+- 常见失败：RT-Thread packages 缺失、工具链路径、include 冲突
 
-## 生成 hwdef 和源列表
-- 用途：更新 `hwdef.h` 与 ArduPilot 源文件列表
-- 命令：`./waf configure --board rtt_cuav_v5 && ./waf copter`
-- 成功判据：相关生成文件刷新，无明显 `hwdef` 或源表错误
-- 常见失败：板型名错误、waf 生成链与 SCons 预期不一致
+## 生成 hwdef.h
+- 用途：从 `hwdef.dat` 重新生成 `hwdef.h`
+- 命令：`python3 libraries/AP_HAL_RTT/hwdef/scripts/rtt_hwdef.py`
+- 成功判据：`libraries/AP_HAL_RTT/rtt_bsp_cuav_v5/hwdef.h` 刷新
+- 注意：修改 `hwdef.dat` 后必须手动执行此命令再编译
 
-## OpenOCD 连接 STM32F7
-- 用途：启动调试服务器
+## OpenOCD 一步烧录（推荐）
+- 用途：直接烧录 + 验证 + 复位，无需持久 OpenOCD 服务器
+- 命令：`openocd -f interface/stlink.cfg -f target/stm32f7x.cfg -c "program build/rtt_deploy/cuav_v5/rtthread.bin verify 0x08008000 reset exit"`
+- 成功判据：`Verified OK` + `Resetting Target`
+- 常见失败：ST-Link 未连入 WSL2（需先 `usbipd attach`）、旧 OpenOCD 进程占端口
+
+## OpenOCD 启动调试服务器
+- 用途：启动 GDB 调试服务器
 - 命令：`openocd -f interface/stlink.cfg -f target/stm32f7x.cfg`
 - 成功判据：端口 `:3333` 可被 GDB 连接
-- 常见失败：`claim interface failed`、旧 openocd 占用、调试器未绑进 WSL
+- 常见失败：`claim interface failed`、旧 openocd 占用
 
-## GDB 烧录 RTT 应用
-- 用途：将 `rtthread.bin` 写入 `0x08008000`
-- 命令：`arm-none-eabi-gdb -batch -ex "target remote :3333" -ex "monitor halt" -ex "monitor reset halt" -ex "monitor flash write_image erase build/rtt_deploy/cuav_v5/rtthread.bin 0x08008000" -ex "monitor reset run" build/rtt_deploy/cuav_v5/rt-thread.elf`
-- 成功判据：应用区烧录完成，目标能重新运行
-- 常见失败：应用地址写错、OpenOCD 未就绪、目标处于异常状态
+## GDB 单次快速检查（推荐）
+- 用途：不启动持久 OpenOCD 服务器，一次性连接检查后断开
+- 命令：`arm-none-eabi-gdb -batch -ex "target remote | openocd -f interface/stlink.cfg -f target/stm32f7x.cfg -c 'gdb_port pipe'" -ex "monitor halt" -ex "p rtt_dbg_main_loop_iterations" -ex "monitor resume" build/rtt_deploy/cuav_v5/rt-thread.elf`
+- 成功判据：读到变量值，板子继续运行
+- 注意：多次 halt/resume 可能触发 IBUSERR HardFault（DMA 状态不一致），建议单次 halt-check-resume
 
-## GDB 连接运行中的 RTT 固件
-- 用途：查看停点、变量、计数器
-- 命令：`arm-none-eabi-gdb build/rtt_deploy/cuav_v5/rt-thread.elf`
-- 成功判据：`target remote :3333` 后可读到符号与变量
-- 常见失败：ELF 与板上固件不一致、调试器被占用
+## UART7 串口调试（msh 控制台）
+- 用途：通过 UART7 调试串口连接 RT-Thread msh shell
+- 硬件连接：飞控 PE8(TX) → USB-TTL(RX)，飞控 PF6(RX) → USB-TTL(TX)
+- Windows 端：用 PuTTY / MobaXterm / 终端打开 COM33，波特率 **115200**
+- WSL2 注意：CH343（VID:PID 1A86:55D3）在 WSL2 无驱动，必须从 Windows 端读
+- PowerShell 快速读取：
+  ```powershell
+  $port = New-Object System.IO.Ports.SerialPort('COM33', 115200, 'None', 8, 'One')
+  $port.Open(); Start-Sleep -ms 500
+  $port.Write("`r`n"); Start-Sleep -ms 1000
+  Write-Output $port.ReadExisting()
+  $port.Close()
+  ```
+- 常用 msh 命令：
+  - `list thread` — 查看线程列表
+  - `list device` — 查看设备列表
+  - `free` — 查看内存使用
+  - `ls /sd` — 查看 SD 卡挂载
+  - `version` — RT-Thread 版本
 
-## 读取 Windows 上的 ArduPilot 串口
-- 用途：确认飞控 USB CDC 在 Windows 侧是否出现
-- 命令：`powershell.exe -Command "Get-WmiObject Win32_SerialPort | Where-Object { $_.Description -match 'ArduPilot' } | Select-Object DeviceID, Description"`
-- 成功判据：出现带 `ArduPilot` 描述的 `COMx`
-- 常见失败：设备未枚举、被占用、仍停留在 WSL 侧
+## MAVProxy 连接测试
+- 用途：在 WSL2 中验证 MAVLink 通信
+- 前提：先 `usbipd attach --wsl --busid <busid>` 连入 ArduPilot USB
+- 命令：`mavproxy.py --master=/dev/ttyACM0 --baudrate=115200 --non-interactive`
+- 成功判据：`Received 943 parameters (ftp)`
+- 注意：WSL2 usbipd 下偶尔断链，Windows 侧验证更可信
 
-## 列出 usbipd 设备
-- 用途：确认 ST-Link / CMSIS-DAP / USB 设备是否可转入 WSL2
-- 命令：`powershell.exe -Command "usbipd list"`
-- 成功判据：目标设备出现在列表中
-- 常见失败：Windows 侧未识别、设备仍被其他应用占用
+## usbipd 设备管理
+- 列出设备：`powershell.exe -Command "usbipd list"`
+- 绑定并连入 WSL2：`powershell.exe -Command "usbipd bind --busid <id> --force; usbipd attach --wsl --busid <id>"`
+- 断开：`powershell.exe -Command "usbipd detach --busid <id>"`
 
-## 当前推荐的 MAVLink 验证顺序
-- 用途：避免把 WSL2 环境问题误判为固件问题
-- 顺序：先看 Windows COM / MissionPlanner 或 Windows 侧 pymavlink，再考虑 WSL2 桥接
-- 成功判据：`HEARTBEAT`、关键消息、参数读取在 Windows 侧成立
-- 常见失败：直接从 WSL2 结果反推固件错误；环境优先级的正式取舍见 `decision-log.md`
+## 当前已知 USB 设备 busid
+| busid | 设备 | 用途 |
+|-------|------|------|
+| 3-1 | STM32 STLink (0483:3748) | 烧录/调试 |
+| 3-2 | CH343 USB-TTL (1A86:55D3) COM33 | UART7 调试串口 |
+| 3-4 | ArduPilot (1209:5741) COM32 | USB CDC MAVLink |
 
-## 当前推荐的逐驱动验证入口
-- 用途：在整机之外按驱动、总线、子系统逐层验证
-- 入口：先看 `.cursor/project/driver-validation-matrix.md`，再看 `docs/AP_HAL_RTT_DRIVER_VALIDATION.md` 与 `rtt-driver-validation` Skill
-- 成功判据：先确认当前问题已有对应门禁，再决定是补 example/test 规划还是继续整机 smoke
-- 常见失败：把 driver-validation 手册误写进 `status`、`open-issues` 或长 trace
+## 当前推荐的验证顺序
+1. **UART7 msh**：COM33 / 115200 — RT-Thread 底层状态
+2. **Windows 侧**：MissionPlanner 连接 COM32 — MAVLink 功能验证
+3. **WSL2**：MAVProxy `/dev/ttyACM0` — 辅助验证
+4. **GDB**：OpenOCD + GDB 读变量 — 底层诊断

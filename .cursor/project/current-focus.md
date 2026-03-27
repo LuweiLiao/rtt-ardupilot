@@ -1,21 +1,34 @@
 # Current Focus
 
 ## 当前阶段
-`CUAV v5` 的 RT-Thread ArduPilot 可运行基线已经建立，当前进入“治理系统搭建 + 架构清理”阶段。
+`CUAV v5` 的 RT-Thread ArduPilot 基线已稳定运行（400Hz / 6.5% CPU / 943 参数 / IMU+Baro+Compass / SD卡 / UART7调试），当前进入"飞行级能力补齐 + ChibiOS 深度对齐"阶段。
 
 ## 当前主线目标
-- 建立可持续运作的 Cursor 治理系统
-- 在不破坏 `CUAV v5` 基线的前提下，推动 `AP_HAL_RTT` 向 `hwdef.dat` 驱动、多板可扩展的结构演进
+- 对齐度已从约 55% 提升到约 70-75%
+- 优先补齐影响实际飞行的缺失项：RCOutput（PWM/DShot）、RCInput（SBUS）、安全机制
+- 验证 SD 卡日志实际写入与回读
+- 在不破坏已验证基线的前提下逐步对齐
 
 ## 当前优先级
-1. 固化项目记忆文件、Skill、Git 里程碑机制
-2. 清理 HAL / BSP / hwdef 的职责边界
-3. 为后续 `GD32` / `AT32` 等新板迁移建立模板
+1. SD 卡文件系统验证（实际插卡后挂载、日志写入、回读）
+2. RCOutput 完善（至少确保基础 PWM 可控电调）
+3. RCInput 完善（SBUS 路径验证）
+4. GPIO `usb_connected()` 正确实现
+5. Scheduler 线程模型进一步对齐（UART 独立线程等）
+6. Util 补充（toneAlarm、safety、watchdog）
+7. 架构清理与多板模板
+
+## 已完成的关键里程碑
+- [x] AnalogIn `_timer_tick()` 挂入 Scheduler 1kHz 路径
+- [x] 校准功能修复（BinarySemaphore/Semaphore 语义对齐）
+- [x] SD 卡支持实现（SDMMC1 + ELM-FAT + DFS）
+- [x] UART7 调试串口（PE8 TX / PF6 RX / 115200 / msh console）
+- [x] Logging PreArm 消除（Filesystem + MAVLink 双后端）
 
 ## 暂不处理
-- WSL2 `usbipd` 的兼容性细节
-- 非关键调试变量的风格统一
-- 在未建立结构基线前直接启动第二块板 bring-up
+- CAN 总线（当前硬件不需要）
+- IOMCU（需要独立固件支持）
+- 第二块板 bring-up（先完成 CUAV V5 对齐）
 
 ## 推荐起手动作
-先读 `status.md` 与 `open-issues.md`，确认当前稳定基线与未关闭问题，再决定是做 bring-up、调试、架构整理还是 Git 里程碑。
+先读 `status.md` 确认基线，再从 SD 卡实际验证或 RCOutput 入手。调试可直接用 UART7（Windows COM33 / 115200）。

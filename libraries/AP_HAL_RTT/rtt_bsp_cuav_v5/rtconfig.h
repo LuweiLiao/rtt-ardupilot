@@ -114,7 +114,7 @@
 #define RT_USING_DEVICE
 #define RT_USING_CONSOLE
 #define RT_CONSOLEBUF_SIZE 128
-#define RT_CONSOLE_DEVICE_NAME "uart3"
+#define RT_CONSOLE_DEVICE_NAME "uart7"
 #define RT_VER_NUM 0x50201
 #define RT_BACKTRACE_LEVEL_MAX_NR 32
 /* end of RT-Thread Kernel */
@@ -129,7 +129,7 @@
 
 #define RT_USING_COMPONENTS_INIT
 #define RT_USING_USER_MAIN
-#define RT_MAIN_THREAD_STACK_SIZE 16384
+#define RT_MAIN_THREAD_STACK_SIZE 32768
 #define RT_MAIN_THREAD_PRIORITY 10
 #define RT_USING_MSH
 #define RT_USING_FINSH
@@ -149,12 +149,25 @@
 /* DFS: device virtual file system */
 
 #define RT_USING_DFS
+#define RT_USING_DFS_DEVFS
 #define DFS_USING_POSIX
 #define DFS_USING_WORKDIR
 #define DFS_FD_MAX 16
 #define RT_USING_DFS_V1
 #define DFS_FILESYSTEMS_MAX 4
 #define DFS_FILESYSTEM_TYPES_MAX 4
+#define RT_USING_DFS_ELMFAT
+#define RT_DFS_ELM_CODE_PAGE 437
+#define RT_DFS_ELM_WORD_ACCESS
+#define RT_DFS_ELM_USE_LFN_3
+#define RT_DFS_ELM_USE_LFN 3
+#define RT_DFS_ELM_LFN_UNICODE_0
+#define RT_DFS_ELM_LFN_UNICODE 0
+#define RT_DFS_ELM_MAX_LFN 255
+#define RT_DFS_ELM_DRIVES 2
+#define RT_DFS_ELM_MAX_SECTOR_SIZE 4096
+#define RT_DFS_ELM_REENTRANT
+#define RT_DFS_ELM_MUTEX_TIMEOUT 3000
 /* end of DFS: device virtual file system */
 
 /* Device Drivers */
@@ -167,6 +180,14 @@
 #define RT_SERIAL_RB_BUFSZ 64
 #define RT_USING_PIN
 #define RT_USING_I2C
+/* Software (bit-bang) I2C for IST8310 compass on I2C3 (PH7=SCL, PH8=SDA) */
+/* PH7 = port 7 * 16 + 7 = 119, PH8 = 7 * 16 + 8 = 120 */
+#define RT_USING_I2C_BITOPS
+#define BSP_USING_I2C3
+#define BSP_I2C3_SCL_PIN 119
+#define BSP_I2C3_SDA_PIN 120
+#define RT_USING_SDIO
+#define RT_USING_BLK
 #define RT_USING_SPI
 #define BSP_USING_SPI
 #define BSP_USING_SPI1
@@ -176,14 +197,30 @@
 /*
  * SPI DMA — frees the CPU during sensor reads (IMU, Baro).
  *
- * DMA stream assignment (STM32F767, no conflicts):
- *   SPI1_RX → DMA2_Stream2 / Channel 3   (manual, avoids Stream0 clash with SPI4)
- *   SPI1_TX → DMA2_Stream5 / Channel 3   (manual, avoids Stream3 clash with SPI4)
+ * DMA stream assignment (STM32F767, manually resolved to avoid #if/#elif conflicts
+ * in f7/dma_config.h, which assigns streams via priority chains):
+ *   SPI1_RX → DMA2_Stream2 / Channel 3   (pre-defined here; frees Stream0 for SPI4)
+ *   SPI1_TX → DMA2_Stream5 / Channel 3   (pre-defined here; frees Stream3 for SPI4)
  *   SPI2_RX → DMA1_Stream3 / Channel 0   (auto from dma_config.h)
  *   SPI2_TX → DMA1_Stream4 / Channel 0   (auto)
- *   SPI4_RX → DMA2_Stream0 / Channel 4   (auto, Stream0 free since SPI1 moved)
+ *   SPI4_RX → DMA2_Stream0 / Channel 4   (auto, Stream0 now free)
  *   SPI4_TX → DMA2_Stream1 / Channel 4   (auto)
+ *
+ * Without the pre-defines below, dma_config.h assigns SPI1_RX to Stream0 (first #if),
+ * and SPI4_RX's #elif branch is never reached, leaving SPI4_RX_DMA_RCC etc. undefined.
  */
+/* Pre-define SPI1 DMA streams to override dma_config.h auto-assignment */
+#define SPI1_DMA_RX_IRQHandler           DMA2_Stream2_IRQHandler
+#define SPI1_RX_DMA_RCC                  RCC_AHB1ENR_DMA2EN
+#define SPI1_RX_DMA_INSTANCE             DMA2_Stream2
+#define SPI1_RX_DMA_CHANNEL              DMA_CHANNEL_3
+#define SPI1_RX_DMA_IRQ                  DMA2_Stream2_IRQn
+#define SPI1_DMA_TX_IRQHandler           DMA2_Stream5_IRQHandler
+#define SPI1_TX_DMA_RCC                  RCC_AHB1ENR_DMA2EN
+#define SPI1_TX_DMA_INSTANCE             DMA2_Stream5
+#define SPI1_TX_DMA_CHANNEL              DMA_CHANNEL_3
+#define SPI1_TX_DMA_IRQ                  DMA2_Stream5_IRQn
+
 #define BSP_SPI1_RX_USING_DMA
 #define BSP_SPI1_TX_USING_DMA
 #define BSP_SPI2_RX_USING_DMA
@@ -463,6 +500,9 @@
 #define BSP_USING_UART
 #define BSP_STM32_UART_V1_TX_TIMEOUT 4000
 #define BSP_USING_UART3
+#define BSP_USING_UART7
+#define BSP_USING_ON_CHIP_FLASH
+#define BSP_USING_SDIO
 /* end of On-chip Peripheral Drivers */
 
 /* Board extended module Drivers */

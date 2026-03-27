@@ -21,14 +21,13 @@
 #include "SPIDeviceManager.h"
 #include "I2CDeviceManager.h"
 #include <AP_HAL/OpticalFlow.h>
-#include <AP_HAL/Flash.h>
+#include "Flash.h"
 #if AP_SIM_ENABLED && CONFIG_HAL_BOARD != HAL_BOARD_SITL
 #include <AP_HAL/SIMState.h>
 #endif
 
 extern "C" void rt_hw_board_init(void);
 
-/* Minimal stubs for OpticalFlow and Flash (not in task list) */
 namespace RTT
 {
 class OpticalFlowStub : public AP_HAL::OpticalFlow
@@ -38,17 +37,6 @@ public:
     bool read(Data_Frame& frame) override { (void)frame; return false; }
     void push_gyro(float gyro_x, float gyro_y, float dt) override { (void)gyro_x; (void)gyro_y; (void)dt; }
     void push_gyro_bias(float gyro_bias_x, float gyro_bias_y) override { (void)gyro_bias_x; (void)gyro_bias_y; }
-};
-class FlashStub : public AP_HAL::Flash
-{
-public:
-    uint32_t getpageaddr(uint32_t page) override { (void)page; return 0; }
-    uint32_t getpagesize(uint32_t page) override { (void)page; return 0; }
-    uint32_t getnumpages() override { return 0; }
-    bool erasepage(uint32_t page) override { (void)page; return false; }
-    bool write(uint32_t addr, const void *buf, uint32_t count) override { (void)addr; (void)buf; (void)count; return false; }
-    void keep_unlocked(bool set) override { (void)set; }
-    bool ispageerased(uint32_t page) override { (void)page; return true; }
 };
 }
 
@@ -73,7 +61,7 @@ static RTT::RCOutput rcoutDriver;
 static RTT::Scheduler schedulerInstance;
 static RTT::Util utilInstance;
 static RTT::OpticalFlowStub opticalFlowDriver;
-static RTT::FlashStub flashDriver;
+static RTT::Flash flashDriver;
 #if AP_SIM_ENABLED && CONFIG_HAL_BOARD != HAL_BOARD_SITL
 static AP_HAL::SIMState xsimstate;
 #endif
@@ -116,6 +104,9 @@ HAL_RTT::HAL_RTT() :
 volatile uint32_t rtt_dbg_hal_run_called = 0xDEADBEEF;
 volatile uint32_t rtt_dbg_main_loop_entry_called = 0xCAFEBABE;
 volatile uint32_t rtt_dbg_main_loop_iterations = 0;
+volatile uint32_t rtt_dbg_loop_time_us = 0;
+volatile uint32_t rtt_dbg_loop_time_max_us = 0;
+volatile uint32_t rtt_dbg_loop_time_min_us = 0xFFFFFFFF;
 
 struct main_loop_arg {
     RTT::Scheduler* sched;
@@ -133,8 +124,18 @@ static void _main_loop_entry(void* arg)
 
     rtt_dbg_hal_run_called = 0x11111111;  /* Second magic number after setup */
 
+    uint32_t last_loop_us = AP_HAL::micros();
     for (;;) {
         a->callbacks->loop();
+        if (!schedulerInstance.check_called_boost()) {
+            hal.scheduler->delay_microseconds(50);
+        }
+        uint32_t now_us = AP_HAL::micros();
+        uint32_t dt = now_us - last_loop_us;
+        last_loop_us = now_us;
+        rtt_dbg_loop_time_us = dt;
+        if (dt > rtt_dbg_loop_time_max_us) rtt_dbg_loop_time_max_us = dt;
+        if (dt < rtt_dbg_loop_time_min_us && dt > 0) rtt_dbg_loop_time_min_us = dt;
         rtt_dbg_main_loop_iterations++;
     }
 }

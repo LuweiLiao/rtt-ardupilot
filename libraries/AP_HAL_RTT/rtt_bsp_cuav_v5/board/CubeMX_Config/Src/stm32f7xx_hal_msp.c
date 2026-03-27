@@ -243,6 +243,26 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
 
   /* USER CODE END USART3_MspInit 1 */
   }
+  else if(huart->Instance==UART7)
+  {
+    __HAL_RCC_UART7_CLK_ENABLE();
+    __HAL_RCC_GPIOE_CLK_ENABLE();
+    __HAL_RCC_GPIOF_CLK_ENABLE();
+    /**UART7 GPIO Configuration (fmuv5: PE8=TX, PF6=RX)
+    PE8     ------> UART7_TX  (AF8)
+    PF6     ------> UART7_RX  (AF8)
+    */
+    GPIO_InitStruct.Pin = GPIO_PIN_8;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF8_UART7;
+    HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = GPIO_PIN_6;
+    GPIO_InitStruct.Alternate = GPIO_AF8_UART7;
+    HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
+  }
 
 }
 
@@ -273,6 +293,12 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* huart)
   /* USER CODE BEGIN USART3_MspDeInit 1 */
 
   /* USER CODE END USART3_MspDeInit 1 */
+  }
+  else if(huart->Instance==UART7)
+  {
+    __HAL_RCC_UART7_CLK_DISABLE();
+    HAL_GPIO_DeInit(GPIOE, GPIO_PIN_8);
+    HAL_GPIO_DeInit(GPIOF, GPIO_PIN_6);
   }
 
 }
@@ -362,6 +388,53 @@ void HAL_PCD_MspDeInit(PCD_HandleTypeDef* hpcd)
 }
 
 /* USER CODE BEGIN 1 */
+
+void HAL_SD_MspInit(SD_HandleTypeDef *hsd)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    if (hsd->Instance == SDMMC1) {
+        __HAL_RCC_SDMMC1_CLK_ENABLE();
+        __HAL_RCC_GPIOC_CLK_ENABLE();
+        __HAL_RCC_GPIOD_CLK_ENABLE();
+        __HAL_RCC_DMA2_CLK_ENABLE();
+
+        /* SDMMC1: PC8=D0, PC9=D1, PC10=D2, PC11=D3, PC12=CK (AF12) */
+        GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_10 |
+                              GPIO_PIN_11 | GPIO_PIN_12;
+        GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+        GPIO_InitStruct.Pull = GPIO_PULLUP;
+        GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+        GPIO_InitStruct.Alternate = GPIO_AF12_SDMMC1;
+        HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+        /* PD2 = CMD (AF12) */
+        GPIO_InitStruct.Pin = GPIO_PIN_2;
+        GPIO_InitStruct.Alternate = GPIO_AF12_SDMMC1;
+        HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+        /* SDMMC1 DMA: RX = DMA2_Stream3/Ch4, TX = DMA2_Stream6/Ch4 */
+        HAL_NVIC_SetPriority(SDMMC1_IRQn, 2, 0);
+        HAL_NVIC_EnableIRQ(SDMMC1_IRQn);
+        HAL_NVIC_SetPriority(DMA2_Stream3_IRQn, 3, 0);
+        HAL_NVIC_EnableIRQ(DMA2_Stream3_IRQn);
+        HAL_NVIC_SetPriority(DMA2_Stream6_IRQn, 3, 0);
+        HAL_NVIC_EnableIRQ(DMA2_Stream6_IRQn);
+    }
+}
+
+void HAL_SD_MspDeInit(SD_HandleTypeDef *hsd)
+{
+    if (hsd->Instance == SDMMC1) {
+        __HAL_RCC_SDMMC1_CLK_DISABLE();
+        HAL_GPIO_DeInit(GPIOC, GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_10 |
+                                GPIO_PIN_11 | GPIO_PIN_12);
+        HAL_GPIO_DeInit(GPIOD, GPIO_PIN_2);
+        HAL_NVIC_DisableIRQ(SDMMC1_IRQn);
+        HAL_NVIC_DisableIRQ(DMA2_Stream3_IRQn);
+        HAL_NVIC_DisableIRQ(DMA2_Stream6_IRQn);
+    }
+}
 
 void HAL_SPI_MspInit(SPI_HandleTypeDef *hspi)
 {

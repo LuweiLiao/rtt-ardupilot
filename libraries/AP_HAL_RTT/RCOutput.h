@@ -1,18 +1,26 @@
 /*
  * AP_HAL_RTT — RC Output (PWM)
  * Uses RT-Thread PWM device framework for servo/ESC output.
- * Supports configurable frequency and cork/push batching.
+ * Channel-to-timer mapping driven by pwm_channel_map[].
  */
 
 #pragma once
 
 #include <AP_HAL/RCOutput.h>
 #include "HAL_RTT_Namespace.h"
+#include <rtthread.h>
 
 #define RTT_RCOUT_MAX_CHANNELS 16
 
+struct rt_device_pwm;
+
 namespace RTT
 {
+
+struct pwm_channel_config {
+    const char *dev_name;
+    uint8_t     timer_ch;
+};
 
 class RCOutput : public AP_HAL::RCOutput
 {
@@ -44,6 +52,8 @@ private:
     uint8_t _num_channels = 0;
     bool _corked = false;
     bool _initialized = false;
+
+    struct rt_device_pwm *_pwm_dev[RTT_RCOUT_MAX_CHANNELS];
 
     void _write_hw(uint8_t chan, uint16_t period_us);
 };

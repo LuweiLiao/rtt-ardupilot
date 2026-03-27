@@ -9,6 +9,9 @@
 #include <cstring>
 #include "hwdef.h"
 
+extern "C" bool usb_device_is_configured(uint8_t busid);
+extern "C" bool usb_cdc_dtr_active(void);
+
 #ifndef HAL_RTT_SERIAL0_OTG
 #define HAL_RTT_SERIAL0_OTG 0
 #endif
@@ -73,33 +76,14 @@ rt_err_t UARTDriver::_rx_indicate_cb(rt_device_t dev, rt_size_t size)
     return RT_EOK;
 }
 
-/* Per-port debug tracking */
-volatile uint32_t rtt_dbg_uart_port_begin_count[10] = {0};  /* How many times begin() was called per port */
-volatile uint32_t rtt_dbg_uart_port_dev_ptr[10] = {0};      /* _dev value after each begin() */
-volatile uint8_t rtt_dbg_uart_port_init[10] = {0};          /* _initialized value after each begin() */
-
-volatile int rtt_dbg_uart_begin_called = 0;
-volatile int rtt_dbg_uart_begin_port = -1;
-volatile int rtt_dbg_uart_begin_result = 0;
-volatile uint32_t rtt_dbg_uart_begin_dev = 0;
-
 void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
 {
-    if (_port_num < 10) {
-        rtt_dbg_uart_port_begin_count[_port_num]++;
-    }
-
-    rtt_dbg_uart_begin_called++;
-    rtt_dbg_uart_begin_port = _port_num;
-
     if (baud == 0 && rxSpace == 0 && txSpace == 0 && _initialized) {
-        rtt_dbg_uart_begin_result = 1;
         return;
     }
 
     if (_port_num >= RTT_UART_MAX_DRIVERS ||
         _port_num >= ARRAY_SIZE(_device_names)) {
-        rtt_dbg_uart_begin_result = 2;
         return;
     }
 
@@ -111,12 +95,7 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
             dev = rt_device_find(name);
         }
     }
-    rtt_dbg_uart_begin_dev = (uint32_t)(uintptr_t)dev;
-    if (_port_num < 10) {
-        rtt_dbg_uart_port_dev_ptr[_port_num] = (uint32_t)(uintptr_t)dev;
-    }
     if (dev == nullptr) {
-        rtt_dbg_uart_begin_result = 3;
         _deferred_open = true;
         _baudrate = baud;
         uint16_t rxS = rxSpace < 512 ? 512 : rxSpace;
@@ -124,6 +103,13 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
         if (_readbuf.get_size() == 0) { _readbuf.set_size(rxS); }
         if (_writebuf.get_size() == 0) { _writebuf.set_size(txS); }
         return;
+    }
+
+    /* USB CDC 端口扩大缓冲，对齐 ChibiOS USB×2×MEM_CLASS_500 策略（2048 字节） */
+    const bool is_usb = (std::strncmp(name, "usb", 3) == 0);
+    if (is_usb) {
+        if (txSpace < 2048) { txSpace = 2048; }
+        if (rxSpace < 2048) { rxSpace = 2048; }
     }
 
     /* RDWR + INT_RX 与延期打开路径一致；部分 CDC 字符设备仅 INT_RX 时写路径异常 */
@@ -166,13 +152,13 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
         _writebuf.set_size(txS);
     }
 
-    _initialized = true;
+    _is_usb = is_usb;
 
-    /* Track per-port state for debugging */
-    if (_port_num < 10) {
-        rtt_dbg_uart_port_dev_ptr[_port_num] = (uint32_t)(uintptr_t)_dev;
-        rtt_dbg_uart_port_init[_port_num] = _initialized ? 1 : 0;
+    if (is_usb) {
+        _flow_control = FLOW_CONTROL_ENABLE;
     }
+
+    _initialized = true;
 }
 
 void UARTDriver::_end()
@@ -227,11 +213,14 @@ void UARTDriver::_drain_writebuf_to_dev()
         return;
     }
     /*
-     * 同一 timer tick 内尽量多刷几包，避免发送环里积压时仍按「每 tick 一包」限流。
-     * USB CDC 的 rt_device_write 会阻塞到 IN 完成，chunk 数不宜过大以免饿死同线程其它串口。
+     * 每次 timer tick 把 _writebuf 里的数据尽量写进设备 tx ring buffer.
+     * USB CDC: rt_device_write 是非阻塞的（写入 cherryusb tx_rb 后立即返回），
+     * 每次循环写到返回 0（tx_rb 满）为止，不需要 chunk 数量限制.
+     * 硬件 UART: rt_device_write 可能阻塞等 DMA 完成，因此每次最多写一个
+     * _tx_bounce 大小的块，防止长时间占用 timer 线程.
      */
-    const unsigned max_chunks = 8;
-    for (unsigned c = 0; c < max_chunks; c++) {
+    const uint8_t max_chunks = 4;
+    for (uint8_t chunk = 0; chunk < max_chunks; chunk++) {
         uint32_t n = _writebuf.peekbytes(_tx_bounce, sizeof(_tx_bounce));
         if (n == 0) {
             break;
@@ -241,6 +230,9 @@ void UARTDriver::_drain_writebuf_to_dev()
             break;
         }
         _writebuf.advance(w);
+        if (w < n) {
+            break;
+        }
     }
 }
 
@@ -317,6 +309,11 @@ uint32_t UARTDriver::txspace()
     return _writebuf.space();
 }
 
+bool UARTDriver::_check_usb_connected() const
+{
+    return usb_device_is_configured(0);
+}
+
 void UARTDriver::_timer_tick(void)
 {
     if (!_initialized) {
@@ -343,8 +340,26 @@ void UARTDriver::_timer_tick(void)
         }
         return;
     }
+
+    if (_is_usb && !_check_usb_connected()) {
+        _writebuf.clear();
+        _readbuf.clear();
+        _usb_write_fail_count = 0;
+        return;
+    }
+
     _drain_rx_to_readbuf();
     _drain_writebuf_to_dev();
+
+    if (_is_usb && _writebuf.available() > 0) {
+        _usb_write_fail_count++;
+        if (_usb_write_fail_count > 20) {
+            _writebuf.clear();
+            _usb_write_fail_count = 0;
+        }
+    } else {
+        _usb_write_fail_count = 0;
+    }
 }
 
 void UARTDriver::set_flow_control(enum flow_control flow)

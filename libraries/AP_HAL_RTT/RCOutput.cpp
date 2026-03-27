@@ -1,8 +1,15 @@
 /*
  * AP_HAL_RTT — RC Output (PWM)
  * Uses RT-Thread PWM device framework.
- * Supports configurable frequency per channel group and cork/push batching.
- * Channel mapping driven by HAL_RTT_PWM_MAP (from hwdef.h) or built-in defaults.
+ *
+ * CUAV V5 PWM mapping (same as ChibiOS fmuv5):
+ *   CH1 → TIM1_CH4 (PE14)    CH5 → TIM4_CH2 (PD13)
+ *   CH2 → TIM1_CH3 (PA10)    CH6 → TIM4_CH3 (PD14)
+ *   CH3 → TIM1_CH2 (PE11)    CH7 → TIM12_CH1 (PH6)
+ *   CH4 → TIM1_CH1 (PE9)     CH8 → TIM12_CH2 (PH9)
+ *
+ * RT-Thread PWM device names: "pwm1", "pwm4", "pwm12"
+ * Channel numbers are 1-based in RT-Thread PWM API.
  */
 
 #include "RCOutput.h"
@@ -16,6 +23,18 @@
 namespace RTT
 {
 
+static const pwm_channel_config _cuav_v5_map[] = {
+    { "pwm1", 4 },   // CH1 → TIM1_CH4
+    { "pwm1", 3 },   // CH2 → TIM1_CH3
+    { "pwm1", 2 },   // CH3 → TIM1_CH2
+    { "pwm1", 1 },   // CH4 → TIM1_CH1
+    { "pwm4", 2 },   // CH5 → TIM4_CH2
+    { "pwm4", 3 },   // CH6 → TIM4_CH3
+    { "pwm12", 1 },  // CH7 → TIM12_CH1
+    { "pwm12", 2 },  // CH8 → TIM12_CH2
+};
+static const uint8_t _cuav_v5_map_count = sizeof(_cuav_v5_map) / sizeof(_cuav_v5_map[0]);
+
 void RCOutput::init()
 {
     if (_initialized) return;
@@ -24,7 +43,15 @@ void RCOutput::init()
         _pending_us[i] = 0;
         _failsafe_us[i] = 0;
         _freq_hz[i] = 50;
+        _pwm_dev[i] = nullptr;
     }
+
+#if defined(RT_USING_PWM)
+    for (uint8_t i = 0; i < _cuav_v5_map_count && i < RTT_RCOUT_MAX_CHANNELS; i++) {
+        _pwm_dev[i] = (struct rt_device_pwm *)rt_device_find(_cuav_v5_map[i].dev_name);
+    }
+#endif
+
     _initialized = true;
 }
 
@@ -59,16 +86,27 @@ void RCOutput::disable_ch(uint8_t chan)
 {
     if (chan < RTT_RCOUT_MAX_CHANNELS) {
         _enabled_mask &= ~(1U << chan);
+#if defined(RT_USING_PWM)
+        if (_pwm_dev[chan] && chan < _cuav_v5_map_count) {
+            rt_pwm_disable(_pwm_dev[chan], _cuav_v5_map[chan].timer_ch);
+        }
+#endif
     }
 }
 
 void RCOutput::_write_hw(uint8_t chan, uint16_t period_us)
 {
 #if defined(RT_USING_PWM)
+    if (chan >= _cuav_v5_map_count || !_pwm_dev[chan]) {
+        return;
+    }
+    uint32_t period_ns = 1000000000UL / _freq_hz[chan];
+    uint32_t pulse_ns  = (uint32_t)period_us * 1000U;
+    rt_pwm_set(_pwm_dev[chan], _cuav_v5_map[chan].timer_ch, period_ns, pulse_ns);
+    rt_pwm_enable(_pwm_dev[chan], _cuav_v5_map[chan].timer_ch);
+#else
     (void)chan;
     (void)period_us;
-    /* PWM hardware write will be connected when BSP enables RT_USING_PWM
-     * and timer/channel mapping is configured in hwdef.dat */
 #endif
 }
 

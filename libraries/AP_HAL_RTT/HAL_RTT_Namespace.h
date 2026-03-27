@@ -19,4 +19,5 @@ class RCInput;
 class RCOutput;
 class Storage;
 class AnalogIn;
+class Flash;
 }  // namespace RTT

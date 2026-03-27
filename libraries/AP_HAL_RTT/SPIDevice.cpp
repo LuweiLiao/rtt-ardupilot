@@ -56,19 +56,57 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
     bool need_sem = !_cs_held;
     if (need_sem && !_sem.take(HAL_SEMAPHORE_BLOCK_FOREVER)) return false;
 
-    rt_err_t err = RT_EOK;
+    bool ok = false;
+
     if (send_len > 0 && recv_len > 0) {
-        err = rt_spi_send_then_recv(_dev, send, send_len, recv, recv_len);
+        /*
+         * ChibiOS-style merged transfer: combine send+recv into a single
+         * full-duplex SPI transaction. This halves the number of SPI events
+         * vs rt_spi_send_then_recv() which splits into two xfer() calls.
+         */
+        const uint32_t total = send_len + recv_len;
+        uint8_t _bounce[32];
+        uint8_t *buf;
+        bool heap = false;
+
+        if (total <= sizeof(_bounce)) {
+            buf = _bounce;
+        } else {
+            buf = (uint8_t *)rt_malloc_align(total, 32);
+            if (buf == nullptr) {
+                if (need_sem) _sem.give();
+                return false;
+            }
+            heap = true;
+        }
+
+        memcpy(buf, send, send_len);
+        memset(&buf[send_len], 0, recv_len);
+
+        struct rt_spi_message msg = {};
+        msg.send_buf   = buf;
+        msg.recv_buf   = buf;
+        msg.length     = total;
+        msg.cs_take    = 1;
+        msg.cs_release = 1;
+        msg.next       = RT_NULL;
+
+        struct rt_spi_message *ret = rt_spi_transfer_message(_dev, &msg);
+        if (ret == RT_NULL) {
+            memcpy(recv, &buf[send_len], recv_len);
+            ok = true;
+        }
+        if (heap) rt_free_align(buf);
     } else if (send_len > 0) {
         rt_size_t ret = rt_spi_send(_dev, send, send_len);
-        err = (ret == send_len) ? RT_EOK : -RT_EIO;
+        ok = (ret == send_len);
     } else if (recv_len > 0) {
         rt_size_t ret = rt_spi_recv(_dev, recv, recv_len);
-        err = (ret == recv_len) ? RT_EOK : -RT_EIO;
+        ok = (ret == recv_len);
     }
 
     if (need_sem) _sem.give();
-    return err == RT_EOK;
+    return ok;
 }
 
 bool SPIDevice::set_chip_select(bool set)

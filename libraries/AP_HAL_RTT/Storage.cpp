@@ -1,8 +1,6 @@
 /*
  * AP_HAL_RTT — Storage driver
- * RAM-based storage with optional RAMTRON backend.
- * Parameters are kept in RAM and survive reboot only with RAMTRON.
- * Flash backend requires BSP-level support (future work).
+ * Backend order: RAMTRON(FRAM) -> Flash -> RAM stub(last resort).
  */
 
 #include "Storage.h"
@@ -26,12 +24,22 @@ void Storage::_storage_open(void)
 #if HAL_WITH_RAMTRON
     if (_fram.init() && _fram.read(0, _buffer, RTT_STORAGE_SIZE)) {
         _initialisedType = StorageBackend::FRAM;
+        ::printf("RTT Storage: FRAM backend\n");
+        return;
+    }
+#endif
+
+#ifdef STORAGE_FLASH_PAGE
+    _flash_load();
+    if (_initialisedType == StorageBackend::Flash) {
+        ::printf("RTT Storage: Flash backend page=%u\n", (unsigned)_flash_page);
         return;
     }
 #endif
 
     memset(_buffer, 0xFF, RTT_STORAGE_SIZE);
     _initialisedType = StorageBackend::Stub;
+    ::printf("RTT Storage: STUB backend (volatile)\n");
 }
 
 void Storage::_mark_dirty(uint16_t loc, uint16_t length)
@@ -71,6 +79,11 @@ void Storage::write_block(uint16_t dst, const void* src, size_t n)
 bool Storage::erase()
 {
     _storage_open();
+#ifdef STORAGE_FLASH_PAGE
+    if (_initialisedType == StorageBackend::Flash) {
+        return _flash.erase();
+    }
+#endif
     memset(_buffer, 0xFF, RTT_STORAGE_SIZE);
     _dirty_mask.clearall();
     return true;
@@ -82,30 +95,122 @@ void Storage::_timer_tick(void)
         return;
     }
     if (_dirty_mask.empty()) {
+        _last_empty_ms = AP_HAL::millis();
         return;
     }
 
-#if HAL_WITH_RAMTRON
-    if (_initialisedType == StorageBackend::FRAM) {
-        uint16_t i;
-        for (i = 0; i < RTT_STORAGE_NUM_LINES; i++) {
-            if (_dirty_mask.get(i)) break;
-        }
-        if (i == RTT_STORAGE_NUM_LINES) return;
-
-        _sem.take_blocking();
-        memcpy(_tmpline, &_buffer[RTT_STORAGE_LINE_SIZE * i], RTT_STORAGE_LINE_SIZE);
-        _sem.give();
-
-        if (_fram.write(RTT_STORAGE_LINE_SIZE * i, _tmpline, RTT_STORAGE_LINE_SIZE)) {
-            _sem.take_blocking();
-            if (memcmp(_tmpline, &_buffer[RTT_STORAGE_LINE_SIZE * i], RTT_STORAGE_LINE_SIZE) == 0) {
-                _dirty_mask.clear(i);
-            }
-            _sem.give();
+    uint16_t i;
+    for (i = 0; i < RTT_STORAGE_NUM_LINES; i++) {
+        if (_dirty_mask.get(i)) {
+            break;
         }
     }
+    if (i == RTT_STORAGE_NUM_LINES) {
+        return;
+    }
+
+    _sem.take_blocking();
+    memcpy(_tmpline, &_buffer[RTT_STORAGE_LINE_SIZE * i], RTT_STORAGE_LINE_SIZE);
+    _sem.give();
+
+    bool write_ok = false;
+
+#if HAL_WITH_RAMTRON
+    if (_initialisedType == StorageBackend::FRAM) {
+        write_ok = _fram.write(RTT_STORAGE_LINE_SIZE * i, _tmpline, RTT_STORAGE_LINE_SIZE);
+    }
 #endif
+
+#ifdef STORAGE_FLASH_PAGE
+    if (_initialisedType == StorageBackend::Flash) {
+        write_ok = _flash_write(i);
+    }
+#endif
+
+    if (write_ok) {
+        _sem.take_blocking();
+        if (memcmp(_tmpline, &_buffer[RTT_STORAGE_LINE_SIZE * i], RTT_STORAGE_LINE_SIZE) == 0) {
+            _dirty_mask.clear(i);
+        }
+        _sem.give();
+    }
+}
+
+bool Storage::healthy()
+{
+    return ((_initialisedType != StorageBackend::None) &&
+            (AP_HAL::millis() - _last_empty_ms < 2000U));
+}
+
+void Storage::_flash_load(void)
+{
+#ifdef STORAGE_FLASH_PAGE
+    _flash_page = STORAGE_FLASH_PAGE;
+    if (_flash.init()) {
+        _initialisedType = StorageBackend::Flash;
+    } else {
+        memset(_buffer, 0xFF, RTT_STORAGE_SIZE);
+        _initialisedType = StorageBackend::Stub;
+        ::printf("RTT Storage: flash init failed\n");
+    }
+#endif
+}
+
+bool Storage::_flash_write(uint16_t line)
+{
+#ifdef STORAGE_FLASH_PAGE
+    EXPECT_DELAY_MS(1);
+    return _flash.write(line * RTT_STORAGE_LINE_SIZE, RTT_STORAGE_LINE_SIZE);
+#else
+    (void)line;
+    return false;
+#endif
+}
+
+bool Storage::_flash_write_data(uint8_t sector, uint32_t offset, const uint8_t *data, uint16_t length)
+{
+#ifdef STORAGE_FLASH_PAGE
+    const uint32_t base_address = hal.flash->getpageaddr(_flash_page + sector);
+    EXPECT_DELAY_MS(1);
+    return hal.flash->write(base_address + offset, data, length);
+#else
+    (void)sector;
+    (void)offset;
+    (void)data;
+    (void)length;
+    return false;
+#endif
+}
+
+bool Storage::_flash_read_data(uint8_t sector, uint32_t offset, uint8_t *data, uint16_t length)
+{
+#ifdef STORAGE_FLASH_PAGE
+    const uint32_t base_address = hal.flash->getpageaddr(_flash_page + sector);
+    memcpy(data, ((const uint8_t *)base_address) + offset, length);
+    return true;
+#else
+    (void)sector;
+    (void)offset;
+    (void)data;
+    (void)length;
+    return false;
+#endif
+}
+
+bool Storage::_flash_erase_sector(uint8_t sector)
+{
+#ifdef STORAGE_FLASH_PAGE
+    EXPECT_DELAY_MS(1000);
+    return hal.flash->erasepage(_flash_page + sector);
+#else
+    (void)sector;
+    return false;
+#endif
+}
+
+bool Storage::_flash_erase_ok(void)
+{
+    return !hal.util->get_soft_armed();
 }
 
 } // namespace RTT

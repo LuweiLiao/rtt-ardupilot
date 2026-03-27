@@ -26,6 +26,8 @@
 
 #if defined(__APPLE__) || defined(__OpenBSD__)
 #include <sys/mount.h>
+#elif CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#include <sys/statfs.h>
 #elif CONFIG_HAL_BOARD != HAL_BOARD_QURT
 #include <sys/vfs.h>
 #endif
@@ -208,6 +210,16 @@ int64_t AP_Filesystem_Posix::disk_free(const char *path)
     }
     map_filename_free(path);
     return (((int64_t)stats.f_bavail) * stats.f_bsize);
+#elif CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    FS_CHECK_ALLOWED(-1);
+    path = map_filename(path);
+    struct statfs stats;
+    if (::statfs(path, &stats) < 0) {
+        map_filename_free(path);
+        return -1;
+    }
+    map_filename_free(path);
+    return (((int64_t)stats.f_bavail) * stats.f_bsize);
 #else
     return -1;
 #endif
@@ -217,6 +229,16 @@ int64_t AP_Filesystem_Posix::disk_free(const char *path)
 int64_t AP_Filesystem_Posix::disk_space(const char *path)
 {
 #if AP_FILESYSTEM_POSIX_HAVE_STATFS
+    FS_CHECK_ALLOWED(-1);
+    path = map_filename(path);
+    struct statfs stats;
+    if (::statfs(path, &stats) < 0) {
+        map_filename_free(path);
+        return -1;
+    }
+    map_filename_free(path);
+    return (((int64_t)stats.f_blocks) * stats.f_bsize);
+#elif CONFIG_HAL_BOARD == HAL_BOARD_RTT
     FS_CHECK_ALLOWED(-1);
     path = map_filename(path);
     struct statfs stats;

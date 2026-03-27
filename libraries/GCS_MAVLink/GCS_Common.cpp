@@ -4325,6 +4325,15 @@ void GCS_MAVLINK::handle_message(const mavlink_message_t &msg)
     case MAVLINK_MSG_ID_REMOTE_LOG_BLOCK_STATUS:
         AP::logger().handle_mavlink_msg(*this, msg);
         break;
+#else
+    case MAVLINK_MSG_ID_LOG_REQUEST_LIST:
+        mavlink_msg_log_entry_send(chan, 0, 0, 0, 0, 0);
+        break;
+    case MAVLINK_MSG_ID_LOG_REQUEST_DATA:
+    case MAVLINK_MSG_ID_LOG_ERASE:
+    case MAVLINK_MSG_ID_LOG_REQUEST_END:
+    case MAVLINK_MSG_ID_REMOTE_LOG_BLOCK_STATUS:
+        break;
 #endif
 
 #if AP_MAVLINK_FTP_ENABLED

@@ -207,7 +207,59 @@ powershell.exe -Command "usbipd list"
 
 ---
 
-## 7. 可选：串口上传（需 bootloader / 工具链支持）
+## 7. UART7 调试串口（msh 控制台）
+
+### 7.1 硬件连接
+
+CUAV V5 上 UART7 引脚（与 ChibiOS fmuv5 hwdef 一致）：
+
+| 信号 | MCU Pin | AF | 说明 |
+|------|---------|-----|------|
+| TX | PE8 | AF8 | 连接 USB-TTL 的 RX |
+| RX | PF6 | AF8 | 连接 USB-TTL 的 TX |
+
+波特率：**115200**
+
+### 7.2 Windows 端连接
+
+用 PuTTY、MobaXterm 或任何终端工具打开对应 COM 口（当前为 **COM33**，CH343 USB-TTL），配置 115200/8N1。
+
+PowerShell 快速读取：
+
+```powershell
+$port = New-Object System.IO.Ports.SerialPort('COM33', 115200, 'None', 8, 'One')
+$port.Open(); Start-Sleep -ms 500
+$port.Write("`r`n"); Start-Sleep -ms 1000
+Write-Output $port.ReadExisting()
+$port.Close()
+```
+
+### 7.3 WSL2 注意
+
+CH343（VID:PID `1A86:55D3`）在 WSL2 内核无驱动（ch341.ko 只匹配 `1A86:7523`），attach 后不会出现 `/dev/ttyUSB*`。必须从 **Windows 端**读写串口。如需 WSL2 内使用，需自编内核或 socat 桥接。
+
+### 7.4 常用 msh 命令
+
+| 命令 | 说明 |
+|------|------|
+| `list thread` | 查看线程列表（优先级、栈使用率） |
+| `list device` | 查看设备列表（引用计数） |
+| `free` | 查看内存使用 |
+| `ls /sd` | 查看 SD 卡挂载 |
+| `version` | RT-Thread 版本信息 |
+
+### 7.5 配置文件
+
+| 文件 | 关键配置 |
+|------|----------|
+| `rtconfig.h` | `RT_CONSOLE_DEVICE_NAME "uart7"`, `BSP_USING_UART7` |
+| `.config` | `CONFIG_RT_CONSOLE_DEVICE_NAME="uart7"`, `CONFIG_BSP_USING_UART7=y` |
+| `stm32f7xx_hal_msp.c` | `HAL_UART_MspInit` 中 UART7 GPIO 初始化 |
+| `config/f7/uart_config.h` | `UART7_CONFIG` 宏定义 |
+
+---
+
+## 8. 可选：串口上传（需 bootloader / 工具链支持）
 
 若构建时带 **`--upload`**，根 `SConstruct` 会将 `rtthread.bin` 转为 **apj** 并调用上传脚本（需正确串口与板型）：
 

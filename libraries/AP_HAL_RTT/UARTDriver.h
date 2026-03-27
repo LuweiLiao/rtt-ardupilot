@@ -59,7 +59,11 @@ private:
     uint32_t _baudrate;
     bool _initialized;
     bool _deferred_open;
+    bool _is_usb{false};
+    uint8_t _usb_write_fail_count{0};
     enum flow_control _flow_control = FLOW_CONTROL_DISABLE;
+
+    bool _check_usb_connected() const;
 
     ByteBuffer _readbuf{0};
     ByteBuffer _writebuf{0};

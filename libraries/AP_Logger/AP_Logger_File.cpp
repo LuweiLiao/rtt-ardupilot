@@ -846,6 +846,7 @@ void AP_Logger_File::start_new_log(void)
     _open_error_ms = 0;
     _write_offset = 0;
     _writebuf.clear();
+    _have_ever_opened = true;
     write_fd_semaphore.give();
 
     // now update lastlog.txt with the new log number
@@ -1070,11 +1071,14 @@ bool AP_Logger_File::logging_failed() const
         return true;
     }
     if (recent_open_error()) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        if (!_have_ever_opened) {
+            return false;
+        }
+#endif
         return true;
     }
     if (!io_thread_alive()) {
-        // No heartbeat in a second.  IO thread is dead?! Very Not
-        // Good.
         return true;
     }
     if (_last_write_failed) {

@@ -307,6 +307,15 @@ def main():
 
     h = RTTHWDef(outdir=outdir, hwdef=[hwdef_path])
     h.run()
+
+    # Generate placeholder ldscript.ld so waf dependency check passes.
+    # The actual linker script is the BSP's board/linker_scripts/link.lds;
+    # this file satisfies waf's target declaration only.
+    ldscript_path = os.path.join(outdir, 'ldscript.ld')
+    if not os.path.isfile(ldscript_path):
+        with open(ldscript_path, 'w') as f:
+            f.write('/* placeholder - actual linker script is BSP board/linker_scripts/link.lds */\n')
+
     return 0
 
 

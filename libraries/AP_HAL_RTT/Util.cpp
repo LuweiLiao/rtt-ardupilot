@@ -3,6 +3,7 @@
  * High-precision time via DWT CYCCNT (Cortex-M7).
  * System ID from STM32 UID registers.
  * available_memory from RT-Thread heap stats.
+ * thread_info lists all RT-Thread threads with stack usage.
  */
 
 #include "AP_HAL_RTT/Util.h"
@@ -41,11 +42,16 @@ uint32_t Util::get_millis() const
 uint64_t Util::get_micros64() const
 {
     _dwt_init();
-    uint64_t tick_us = (uint64_t)rt_tick_get() * 1000000ULL / RT_TICK_PER_SECOND;
+    const uint32_t tick_period_us = 1000000U / RT_TICK_PER_SECOND;
+
+    rt_base_t level = rt_hw_interrupt_disable();
+    rt_tick_t tick = rt_tick_get();
     uint32_t cyc = DWT_CYCCNT;
-    uint32_t sub_us = cyc / _cpu_freq_mhz;
-    uint32_t tick_period_us = 1000000U / RT_TICK_PER_SECOND;
-    return tick_us + (sub_us % tick_period_us);
+    rt_hw_interrupt_enable(level);
+
+    uint64_t tick_us = (uint64_t)tick * 1000000ULL / RT_TICK_PER_SECOND;
+    uint32_t sub_us = (cyc / _cpu_freq_mhz) % tick_period_us;
+    return tick_us + sub_us;
 }
 
 uint32_t Util::available_memory(void)
@@ -88,5 +94,54 @@ uint64_t Util::get_hw_rtc() const
 
 void Util::thread_info(ExpandingString& str)
 {
-    str.printf("ThreadsV1\n");
+    str.printf("ThreadsV2\n");
+    str.printf("%-16s %4s %8s %8s %5s\n", "Name", "Prio", "StackSz", "StackUse", "Stat");
+
+    rt_thread_t thread;
+    struct rt_object_information *info;
+    struct rt_list_node *node;
+
+    info = rt_object_get_information(RT_Object_Class_Thread);
+    if (info == RT_NULL) return;
+
+    rt_enter_critical();
+    for (node = info->object_list.next; node != &(info->object_list); node = node->next) {
+        /* rt_list_entry does pointer arithmetic that may trigger cast-align warning */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-align"
+        thread = rt_list_entry(node, struct rt_thread, parent.list);
+#pragma GCC diagnostic pop
+
+        uint32_t stack_size = thread->stack_size;
+        uint32_t stack_used = 0;
+
+#ifdef RT_USING_OVERFLOW_CHECK
+        uint8_t *sp = (uint8_t *)thread->stack_addr;
+        while (sp < (uint8_t *)thread->stack_addr + stack_size) {
+            if (*sp != '#') break;
+            sp++;
+        }
+        stack_used = stack_size - ((rt_ubase_t)sp - (rt_ubase_t)thread->stack_addr);
+#endif
+
+        uint8_t stat = RT_SCHED_CTX(thread).stat;
+        uint8_t prio = RT_SCHED_PRIV(thread).current_priority;
+
+        const char *stat_str;
+        switch (stat & RT_THREAD_STAT_MASK) {
+        case RT_THREAD_READY:   stat_str = "RDY"; break;
+        case RT_THREAD_SUSPEND: stat_str = "SUS"; break;
+        case RT_THREAD_RUNNING: stat_str = "RUN"; break;
+        case RT_THREAD_CLOSE:   stat_str = "CLS"; break;
+        default:                stat_str = "???"; break;
+        }
+
+        str.printf("%-16s %4d %8lu %8lu %5s\n",
+                   thread->parent.name,
+                   (int)prio,
+                   (unsigned long)stack_size,
+                   (unsigned long)stack_used,
+                   stat_str);
+    }
+    rt_exit_critical();
 }

@@ -24,15 +24,27 @@
 #define STM32_SRAM_SIZE           (512)
 #define STM32_SRAM_END            (0x20000000 + STM32_SRAM_SIZE * 1024)
 
+/*
+ * STM32F767 memory map:
+ *   0x20000000 – 0x2001FFFF  DTCM  128 KB  (CPU-only, DMA cannot access)
+ *   0x20020000 – 0x2007FFFF  SRAM1 384 KB  (DMA-accessible)
+ *
+ * BSS/data lives in DTCM.  The RT-Thread heap must start in SRAM1 so
+ * that rt_malloc'd buffers (DMA transfers, thread stacks) are always
+ * DMA-accessible.  ~18 KB at the tail of DTCM is unused but avoids
+ * silent DMA failures and HardFaults caused by DMA-to-DTCM writes.
+ */
+#define STM32F7_SRAM1_START  ((void *)0x20020000UL)
+
 #if defined(__ARMCC_VERSION)
 extern int Image$$RW_IRAM1$$ZI$$Limit;
-#define HEAP_BEGIN      (&Image$$RW_IRAM1$$ZI$$Limit)
+#define HEAP_BEGIN      STM32F7_SRAM1_START
 #elif __ICCARM__
 #pragma section="CSTACK"
-#define HEAP_BEGIN      (__segment_end("CSTACK"))
+#define HEAP_BEGIN      STM32F7_SRAM1_START
 #else
 extern int __bss_end;
-#define HEAP_BEGIN      (&__bss_end)
+#define HEAP_BEGIN      STM32F7_SRAM1_START
 #endif
 
 #define HEAP_END        STM32_SRAM_END
