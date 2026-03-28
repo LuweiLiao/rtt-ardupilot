@@ -33,6 +33,30 @@ build/<board>/hwdef.h            ─── 编译时宏（SPI 设备表、probe 
 | 互斥锁 | ChibiOS mutex | `rt_mutex_t` |
 | UART | ChibiOS serial driver | `rt_device` (UART + USB CDC) |
 
+## SPI DMA 架构
+
+STM32F7 SPI1 使用自研 Low-Level DMA (LLD) 驱动，替代 HAL 库的 DMA 传输路径：
+
+```
+应用层 (ArduPilot SPIDevice)
+    │
+    ▼
+drv_spi.c :: spixfer()
+    ├── lld 指针存在？ ──▶ spi_lld_xfer()  [LLD 路径]
+    │                        ├── 直接操作 DMA 寄存器
+    │                        ├── RX ISR: 清标志 + rt_completion_done
+    │                        └── 线程侧 poll BSY 后返回
+    └── 否 ──▶ HAL_SPI_TransmitReceive_DMA()  [HAL 路径]
+                 └── HAL ISR busy-wait (保留给低频总线)
+```
+
+关键设计：
+
+- LLD 上下文 (`spi_lld_bus_t`) 在 `rt_board_init.c` 中静态分配并注册
+- DMA 寄存器地址和 ISR 标志掩码在初始化时预计算，ISR 零开销
+- `rt_completion` 用于线程同步，消除 ISR 内阻塞
+- NVIC 由 HAL `stm32_spi_init()` 统一管理，LLD 不单独操作 NVIC
+
 ## 目录结构
 
 ```
@@ -42,8 +66,10 @@ libraries/AP_HAL_RTT/
 │   └── scripts/rtt_hwdef.py      # 生成脚本
 ├── rtt_bsp_<board>/              # RT-Thread BSP 包
 │   ├── SConstruct / SConscript
-│   ├── board/ (rt_board_init.c, link.lds, CubeMX, ports/)
+│   ├── board/ (rt_board_init.c, link.lds, CubeMX, ports/, drv_spi_lld.c/h, rtt_libc_compat.c)
 │   ├── packages/ (CMSIS, HAL driver)
+│   ├── pkgs_update_manual.sh
+│   ├── dirent.h
 │   └── rtconfig.h / .config
 ├── SPIDevice.cpp/h               # 板级无关 SPI 驱动
 ├── SPIDeviceManager.cpp/h        # 使用 HAL_SPI_DEVICE_LIST
@@ -55,6 +81,28 @@ libraries/AP_HAL_RTT/
 ├── Util.cpp/h                    # 时间/内存工具
 └── HAL_RTT_Class.cpp/h           # HAL 主类
 ```
+
+## STM32F767 内存布局
+
+```
+0x08000000 ┌─────────────────────┐
+           │  Bootloader (32KB)  │
+0x08008000 ├─────────────────────┤
+           │  Application        │
+           │  (~1.2MB / 2MB)     │
+0x08200000 └─────────────────────┘
+
+0x20000000 ┌─────────────────────┐
+           │  DTCM (128KB)       │  ← CPU only, DMA 不可访问
+           │  .data / .bss       │
+0x20020000 ├─────────────────────┤
+           │  SRAM1 (384KB)      │  ← DMA 可访问
+           │  RT-Thread Heap     │  ← HEAP_BEGIN = 0x20020000
+           │  (线程栈、DMA buf)  │
+0x20080000 └─────────────────────┘
+```
+
+关键约束：DTCM 仅 CPU 可访问，DMA 控制器无法读写。所有需要 DMA 访问的内存（SPI buffer、线程栈等）必须分配在 SRAM1 中。
 
 ## 逐驱动验证层
 

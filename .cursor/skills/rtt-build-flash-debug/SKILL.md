@@ -12,10 +12,9 @@ description: >-
 
 ## 工作流概览
 
-1. （按需）Waf 生成 `hwdef.h` 与 ArduPilot 源列表  
-2. **SCons** 在 `build/rtt_deploy/cuav_v5/` 内完成 RT-Thread BSP + ArduPilot 链接  
-3. **OpenOCD** 占用调试器 → **GDB** 烧录 / 调试  
-4. Windows / WSL2 下用 **usbipd** 把 ST-Link 或 DAP 绑进 WSL；GCS 多在 Windows COM 上连 USB CDC
+1. **SCons** 一条命令完成 BSP 部署 + packages 下载 + MAVLink 生成 + 编译链接
+2. **OpenOCD** 占用调试器 → **GDB** 烧录 / 调试  
+3. Windows / WSL2 下用 **usbipd** 把 ST-Link 或 DAP 绑进 WSL；GCS 多在 Windows COM 上连 USB CDC
 
 下文以 **`$AP_ROOT`** 表示仓库根目录（例如 `/home/pix/firmare/pogo/pogo-apm`）。
 
@@ -23,28 +22,41 @@ description: >-
 
 ## 1. 编译
 
+### 1.0 新电脑首次（干净 clone）
+
+前提：`arm-none-eabi-gcc` 在 PATH 中，`python3` + `pip install scons`，`git`。
+
+```bash
+git clone --recursive -b staging/pogo-rtt git@gitee-pogo:pogouav/ardupilot.git pogo-apm
+cd pogo-apm
+python3 -m SCons --target=cuav-v5 -j16
+```
+
+自动完成：BSP 部署（copytree）→ STM32F7 HAL/CMSIS packages 下载 → MAVLink 头文件生成 → ap_config.h 创建 → 编译链接。首次 clone 约 4 分钟，首次编译约 1.5 分钟。
+
 ### 1.1 环境
 
 - **`RTT_ROOT`**：未设置时，根目录 `SConstruct` 会把 `modules/rt-thread` 写入环境并调用 scons；若自定义 RT-Thread 路径，可先 `export RTT_ROOT=...`。
 - **`RTT_EXEC_PATH`**：若 scons 找不到 `arm-none-eabi-gcc`，把该变量设为工具链 **bin** 所在目录（SConstruct 会尝试从 PATH 自动推断）。
 - 并行：文档与历史实践推荐 **`-j16`**（或按 CPU 核数调整）。
 
-### 1.2 Waf（生成 hwdef / 源列表）
+### 1.2 Waf（仅在需要重新生成 hwdef.h 时）
 
 ```bash
 cd "$AP_ROOT"
 ./waf configure --board rtt_cuav_v5
-./waf copter
 ```
+
+注意：SCons 编译路径已能自动创建 `ap_config.h` 并复制 `hwdef.h`，日常编译不再需要先跑 Waf。
 
 ### 1.3 完整固件（SCons，推荐日常一条命令）
 
 ```bash
 cd "$AP_ROOT"
-python3 -m SCons --v=ArduCopter --target=cuav_v5 -j16
+python3 -m SCons --target=cuav-v5 -j16
 ```
 
-`--target` 别名：`cuav-v5`、`rtt_cuav_v5` 等，见根目录 `SConstruct`。
+`--target` 别名：`cuav-v5`、`cuav_v5`、`rtt_cuav_v5` 等，见根目录 `SConstruct`。
 
 ### 1.4 产物路径
 

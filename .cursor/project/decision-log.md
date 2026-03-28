@@ -71,3 +71,25 @@
 - 决定：`HAL_LOGGING_FILESYSTEM_ENABLED=1` + `HAL_LOGGING_MAVLINK_ENABLED=1`；日志目录 `/sd/APM/LOGS`
 - 效果：PreArm: Logging failed 消除（文件系统后端提供默认日志能力）
 - 放弃方案：仅 MAVLink Logging — 需地面站主动发起会话才能消除 PreArm
+
+## 2026-03-28: SPI LLD (Low-Level DMA) 驱动替代 HAL busy-wait
+- 原因：STM32 HAL 的 SPI DMA ISR 中存在 busy-wait（`while (FTLVL != 0)` + `while (BSY)`），在高频 SPI 传输时导致 ISR 长时间占用 CPU
+- 决定：为 STM32F7 SPI1 实现 LL DMA 驱动 (`drv_spi_lld.c/h`)，在 DMA RX 完成中断中仅清标志 + `rt_completion_done`，BSY 等待推迟到线程上下文
+- 集成方式：在 `drv_spi.c` 中检查 `spi_bus_obj.lld` 指针，有则走 LLD 路径，否则保留 HAL 路径
+- 放弃方案：(1) 修改 HAL 源码 — 影响面大，升级困难；(2) 全部异步化 — 改动量过大
+
+## 2026-03-28: DTCM 堆修复 — HEAP_BEGIN 从 DTCM 移到 SRAM1
+- 原因：STM32F767 的 DTCM (0x20000000-0x2001FFFF, 128KB) 仅 CPU 可访问，DMA 无法读写。rt_malloc 分配的 DMA buffer 落在 DTCM 导致 DMA 传输静默失败或 HardFault
+- 决定：`board.h` 中 `HEAP_BEGIN` 从 `&__bss_end`（DTCM, 0x2001BA04）改为 `0x20020000`（SRAM1 起始），浪费 ~18KB DTCM 尾部但确保所有堆分配 DMA 可访问
+- 放弃方案：(1) 双堆（DTCM 堆 + SRAM 堆）— RT-Thread 默认 memheap 不支持按属性选择；(2) 每次 DMA 分配手动指定地址 — 侵入性太强
+
+## 2026-03-28: newlib polyfill 策略（asprintf/vasprintf/memmem）
+- 原因：ARM newlib bare-metal 缺少 GNU 扩展函数，ArduPilot GPS/Filesystem 代码使用了 asprintf/memmem
+- 决定：在 BSP `board/rtt_libc_compat.c` 中提供 C 实现，在 `hwdef.h` 中添加 `extern "C"` 声明（通过 ap_config.h force include 传播到所有 ArduPilot 源文件）
+- 放弃方案：(1) 禁用使用这些函数的驱动 — 会丢失 GPS 支持；(2) 切换到 picolibc — 侵入性太大
+
+## 2026-03-28: 干净 clone 编译支持 — .gitmodules + 自动 packages
+- 原因：之前需要手动指定 rt-thread fork URL、手动下载 packages、手动运行 waf configure，新环境无法一步编译
+- 决定：(1) `.gitmodules` rt-thread URL 改为 pogo fork HTTPS；(2) `rtt_bsp_deploy.py` copytree 后自动调用 `pkgs_update_manual.sh`；(3) `SConscript` 自动创建 `ap_config.h` 并复制 `hwdef.h`
+- 效果：`git clone --recursive -b staging/pogo-rtt && cd pogo-apm && python3 -m SCons --target=cuav-v5 -j16` 一步完成
+- 放弃方案：维持手动步骤 — 换台电脑无法编译

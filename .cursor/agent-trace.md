@@ -581,3 +581,8 @@
 - 结果：`rm -rf build/rtt_deploy/cuav_v5 build/rtt_cuav_v5 && python3 -m SCons --target=cuav-v5 -j16` 一条命令从零编译成功
   - ROM 60.73%, RAM 21.58%, exit 0
 - 下一步：将修改 commit，继续 MAVLink/CPU/稳定性优化
+
+### 2026-03-28 — 同步 `.cursor/project/status.md`
+- 动作：按 SPI LLD、DTCM 堆、`HEAP_BEGIN`→SRAM1、dcb 8KB×4、一键编译/newlib polyfill、ROM/RAM 新占比、未对齐条目中 SPI 描述与日期 2026-03-28 更新 `status.md`（StrReplace 增量）。
+- 结果：文档与当前基线一致。
+- 下一步：无（文档任务）。

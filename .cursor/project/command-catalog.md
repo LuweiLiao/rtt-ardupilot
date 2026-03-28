@@ -1,8 +1,21 @@
 # Command Catalog
 
+## 干净环境编译（新电脑首次）
+- 前提：安装 `arm-none-eabi-gcc`（PATH 中）、`python3` + `pip install scons`、`git`
+- 命令：
+  ```bash
+  git clone --recursive -b staging/pogo-rtt git@gitee-pogo:pogouav/ardupilot.git pogo-apm
+  cd pogo-apm
+  python3 -m SCons --target=cuav-v5 -j16
+  ```
+- 成功判据：生成 `build/rtt_deploy/cuav_v5/rt-thread.elf` 与 `rtthread.bin`
+- 说明：自动从 GitHub 下载 STM32F7 HAL/CMSIS packages，自动生成 ap_config.h，无需手动 waf configure
+- 注意：首次 clone 约 4 分钟（含所有子模块），首次编译约 1.5 分钟
+
 ## 完整编译 RTT 固件
 - 用途：构建 `CUAV v5` 的 RT-Thread ArduPilot 固件
-- 命令：`python3 -m SCons --v=ArduCopter --target=cuav_v5 -j8`
+- 命令：`python3 -m SCons --target=cuav-v5 -j16`
+- 说明：自动完成 BSP 部署、packages 下载、MAVLink 生成、编译链接
 - 成功判据：生成 `build/rtt_deploy/cuav_v5/rt-thread.elf` 与 `rtthread.bin`，ROM < 2016KB
 - 常见失败：RT-Thread packages 缺失、工具链路径、include 冲突
 

@@ -1,12 +1,13 @@
 # Current Focus
 
 ## 当前阶段
-`CUAV v5` 的 RT-Thread ArduPilot 基线已稳定运行（400Hz / 6.5% CPU / 943 参数 / IMU+Baro+Compass / SD卡 / UART7调试），当前进入"飞行级能力补齐 + ChibiOS 深度对齐"阶段。
+`CUAV v5` 的 RT-Thread ArduPilot 基线已稳定运行并支持干净 clone 一条命令编译，SPI LLD DMA + DTCM 堆修复已完成。当前进入"飞行级能力补齐 + ChibiOS 深度对齐 + 性能优化"阶段。
 
 ## 当前主线目标
-- 对齐度已从约 55% 提升到约 70-75%
+- 对齐度约 75-80%
 - 优先补齐影响实际飞行的缺失项：RCOutput（PWM/DShot）、RCInput（SBUS）、安全机制
 - 验证 SD 卡日志实际写入与回读
+- 验证 SPI LLD 长时间稳定性（>5分钟已验证，需>1小时）
 - 在不破坏已验证基线的前提下逐步对齐
 
 ## 当前优先级
@@ -24,6 +25,10 @@
 - [x] SD 卡支持实现（SDMMC1 + ELM-FAT + DFS）
 - [x] UART7 调试串口（PE8 TX / PF6 RX / 115200 / msh console）
 - [x] Logging PreArm 消除（Filesystem + MAVLink 双后端）
+- [x] SPI LLD DMA 驱动（消除 ISR busy-wait）
+- [x] DTCM 堆修复（HEAP_BEGIN 移到 SRAM1）
+- [x] 干净 clone 一条命令编译支持
+- [x] newlib polyfill（asprintf/vasprintf/memmem）
 
 ## 暂不处理
 - CAN 总线（当前硬件不需要）
@@ -31,4 +36,4 @@
 - 第二块板 bring-up（先完成 CUAV V5 对齐）
 
 ## 推荐起手动作
-先读 `status.md` 确认基线，再从 SD 卡实际验证或 RCOutput 入手。调试可直接用 UART7（Windows COM33 / 115200）。
+先读 `status.md` 确认基线。新环境可直接 `git clone --recursive` + `python3 -m SCons --target=cuav-v5 -j16` 编译。调试用 UART7（Windows COM33 / 115200）。

@@ -33,6 +33,20 @@ description: 用症状到根因的判别树排查 AP_HAL_RTT 常见问题，适�
 - 先查调度架构、等待精度、周期线程模型
 - 再查单次传输耗时与线程优先级
 
+### 运行约 30 秒后 HardFault (BFSR.STKERR / Bus Error)
+- **首先检查**：DMA buffer 是否分配在 DTCM (0x20000000-0x2001FFFF)
+- STM32F767 的 DTCM 仅 CPU 可访问，DMA 控制器无法读写
+- 若 `HEAP_BEGIN` 在 DTCM 内（如 `&__bss_end`），`rt_malloc` 分配的 DMA buffer 会静默失败
+- **验证**：GDB 中检查崩溃线程的栈指针地址，若在 0x2000xxxx 范围则是 DTCM 问题
+- **修复**：确保 `HEAP_BEGIN = 0x20020000`（SRAM1 起始）
+- 若非 DTCM 问题，再查线程栈溢出（`list thread` 看栈使用率）
+
+### CPU 持续爆红 / SPI 传输 CPU 开销过高
+- 检查 SPI DMA ISR 是否有 busy-wait（`while (FTLVL)` / `while (BSY)`）
+- STM32 HAL 的 `HAL_SPI_IRQHandler` 在 ISR 内等待 FIFO 和 BSY 清零，高频传输时占满 CPU
+- **解决方案**：启用 SPI LLD 驱动 (`drv_spi_lld`)，将 BSY 等待移到线程上下文
+- 验证：`rtt_dbg_main_loop_iterations` 每秒增量应 ~400
+
 ## 收敛规则
 
 - 每轮只保留一个主假设

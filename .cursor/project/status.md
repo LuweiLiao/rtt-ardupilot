@@ -1,18 +1,20 @@
 # AP_HAL_RTT 当前状态
 
 > 基线：`CUAV v5` / `STM32F767` / `ArduCopter V4.7.0-dev on RT-Thread 5.3.0`
-> 最后更新：2026-03-24（USB CDC 重连 + DTR 修复后）
+> 最后更新：2026-03-28（SPI LLD + DTCM 堆修复 + 编译链路简化后）
 
 ## 当前稳定成立的事实
 
 - `bootloader -> RTT app -> scheduler -> main -> hal.run()` 主链路已跑通
 - `CUAV v5` 上的 USB CDC / MAVLink 已在 Windows 和 WSL2 侧验证到可用
 - SPI 传感器链已带起，`BMI055`（IMU）与 `MS5611`（Baro）形成有效数据路径
+- **SPI LLD**（`drv_spi_lld.c/h`）：低层 DMA 驱动替代 STM32 HAL 在 ISR 内的 busy-wait；在线程上下文 poll `BSY`，消除 ISR 内阻塞，CPU 负载进一步改善
 - I2C3 软件驱动已初始化，`IST8310`（磁力计）已识别
 - 已观测到 23 种 MAVLink 消息类型（HEARTBEAT、ATTITUDE、RAW_IMU、SYS_STATUS 等）
 - MAVLink 参数下载：**943 全部完成**（FTP 协议，快速）
 - 主循环频率：**~400Hz 稳定运行**
-- CPU 负载：**平均 72%**（SPI DMA 启用后，数据流开启时 min 17% / max 100%）
+- CPU 负载：**平均 72%**（SPI DMA / LLD 启用后，数据流开启时 min 17% / max 100%）
+- **DTCM 与 DMA**：STM32F767 的 DTCM（0x20000000–0x2001FFFF）不可被 DMA 访问；`HEAP_BEGIN` 从 `&__bss_end`（DTCM 内）改为 `0x20020000`（SRAM1 起始），消除运行约 30s 必现 HardFault
 - 参数持久化：Flash 后端验证闭环（on-chip Flash page 10-11, 0x08180000）
 - D-Cache 已启用、编译优化 `-O2 -Os`、无阻塞性 `rt_kprintf`
 - **信号量语义已对齐 ChibiOS**：`take(0)` / `wait(0)` = 非阻塞；`take_blocking()` / `wait_blocking()` = 永久阻塞
@@ -25,6 +27,8 @@
 - **USB CDC 重连稳定**：2s 间隔 5/5 成功（含数据流），纯心跳 13/15 成功
 - **CherryUSB DTR 处理已完善**：DTR set/clear 回调中正确 reset TX 状态 + `usbd_ep_recover_stuck`
 - **Logging PreArm 已解除**：只剩 "PreArm: RC not found"（预期行为）
+- **构建链路**：支持 `git clone --recursive` 后一条命令全量编译；`.gitmodules` 中 rt-thread 已指向 pogo fork；`rtt_bsp_deploy.py` 自动下载 packages；`SConscript` 自动创建 `ap_config.h`
+- **newlib polyfill**：`rtt_libc_compat.c` 提供 `asprintf` / `vasprintf` / `memmem`；`hwdef.h` 中含对应 `extern "C"` 声明
 
 ## 线程模型（实测 12 线程）
 
@@ -35,15 +39,15 @@
 | ap_io | 16 | 8KB | IO 线程 |
 | storage | 18 | 2KB | 存储后端 |
 | log_io | 15 | 2KB | 日志 IO |
-| dcb0-3 | 10 | 2KB×4 | SPI/I2C 延迟回调 |
+| dcb0-3 | 10 | 8KB×4 | SPI/I2C 延迟回调（SPI LLD 调用链需更大栈） |
 | tshell | 20 | 4KB | msh 控制台（UART7） |
 | mmcsd_detect | 22 | 1KB | SD 卡热插拔检测 |
 | tidle0 | 31 | 256B | 空闲线程 |
 
 ## 内存使用
 
-- RAM 总计 413KB，已用 ~143KB，剩余 ~270KB
-- ROM 1244KB / 2016KB（60.26%）
+- RAM：约 113KB / 512KB（21.58%）
+- ROM：约 1254KB / 2016KB（60.73%）
 
 ## 设备列表（实测）
 
@@ -86,7 +90,7 @@
 - I2C 无 clear_bus 恢复
 - 看门狗/安全机制空桩
 - CAN / IOMCU 未实现
-- **SPI DMA 已启用**：修改 HAL 把 busy-wait 从 ISR 移到线程侧，CPU 负载从 83-95% 降至 avg 72%
+- **SPI DMA 已启用**：SPI1 使用 LL DMA 驱动（`drv_spi_lld`），消除 ISR busy-wait；HAL 路径保留给未启用 LLD 的总线
 
 ## 当前已知限制
 

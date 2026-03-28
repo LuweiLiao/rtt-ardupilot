@@ -1,5 +1,11 @@
 # Open Issues
 
+## Issue: SPI LLD 仅覆盖 SPI1，SPI2/SPI4 仍走 HAL 路径
+- 级别：低
+- 现象：SPI1 (IMU) 已使用 LLD，但 SPI4 (Baro) 等仍走 HAL DMA 路径
+- 当前判断：SPI4 传输频率较低，HAL busy-wait 影响可忽略
+- 下一步：如需进一步降 CPU 负载，可为其他总线也注册 LLD 上下文
+
 ## Issue: SD 卡挂载需实际插卡验证
 - 级别：高
 - 现象：`sd0` Block Device 已在 RT-Thread 注册，`mmcsd_detect` 线程运行中，但 `ls /sd` 显示 `No such directory`
@@ -89,3 +95,12 @@
 
 ### ~~Issue: USB CDC 断开重连失败~~ [已关闭 2026-03-24]
 - **结论**：CherryUSB DTR 回调中未正确清理 TX 状态。修复：DTR set/clear 时调用 `usbd_ep_recover_stuck()` + `rt_ringbuffer_reset(&tx_rb)` + `tx_active = 0`。DISCONNECTED 事件中调用 `usbd_serial_reset_tx()`。UARTDriver 中不使用 DTR 控制数据流，始终 drain writebuf。
+
+### ~~Issue: SPI DMA ISR busy-wait 导致 CPU 爆红~~ [已关闭 2026-03-28]
+- **结论**：实现 SPI LLD (Low-Level DMA) 驱动，将 BSY 等待从 ISR 移到线程上下文。SPI1 已启用 LLD，其他总线保留 HAL 路径。
+
+### ~~Issue: 运行约 30 秒后 HardFault (BFSR.STKERR)~~ [已关闭 2026-03-28]
+- **结论**：根因是 DTCM 不可被 DMA 访问。堆起始从 DTCM 移到 SRAM1 (0x20020000) 后解决。dcb 线程栈从 4KB 增到 8KB。
+
+### ~~Issue: 干净 clone 无法编译~~ [已关闭 2026-03-28]
+- **结论**：修复 .gitmodules URL、自动下载 packages、自动生成 ap_config.h、newlib polyfill。已在 /tmp 干净 clone 验证通过。
