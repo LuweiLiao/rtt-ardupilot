@@ -119,9 +119,10 @@ def _ensure_packages(deploy_dir, target):
         print("Warning: packages missing but pkgs_update_manual.sh not found in %s" % deploy_dir,
               file=sys.stderr)
         return
-    print("Downloading required packages for %s ..." % target)
+    print("Downloading required packages for %s ..." % target, file=sys.stderr)
     try:
-        subprocess.check_call(['bash', script], cwd=deploy_dir, timeout=300)
+        subprocess.check_call(['bash', script], cwd=deploy_dir, timeout=300,
+                              stdout=sys.stderr)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
         print("Warning: package download failed: %s" % e, file=sys.stderr)
 
