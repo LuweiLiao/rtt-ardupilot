@@ -11,6 +11,7 @@ Usage: python3 rtt_bsp_deploy.py <AP_ROOT> <TARGET>
 import argparse
 import os
 import shutil
+import subprocess
 import sys
 
 
@@ -91,7 +92,38 @@ def deploy(ap_root, target):
     except Exception as e:
         return None, "Deploy copytree failed: %s" % e
 
+    _ensure_packages(deploy_dir, canonical)
     return deploy_dir, None
+
+
+REQUIRED_PACKAGES = {
+    'cuav_v5': ['CMSIS-Core-latest', 'stm32f7_cmsis_driver-latest', 'stm32f7_hal_driver-latest'],
+    'pixhawk6c_mini': ['CMSIS-Core-latest', 'stm32h7_cmsis_driver-latest', 'stm32h7_hal_driver-latest'],
+}
+
+
+def _ensure_packages(deploy_dir, target):
+    """If required packages are missing, run pkgs_update_manual.sh."""
+    pkgs = REQUIRED_PACKAGES.get(target, [])
+    if not pkgs:
+        return
+    need = False
+    for p in pkgs:
+        if not os.path.isdir(os.path.join(deploy_dir, 'packages', p)):
+            need = True
+            break
+    if not need:
+        return
+    script = os.path.join(deploy_dir, 'pkgs_update_manual.sh')
+    if not os.path.isfile(script):
+        print("Warning: packages missing but pkgs_update_manual.sh not found in %s" % deploy_dir,
+              file=sys.stderr)
+        return
+    print("Downloading required packages for %s ..." % target)
+    try:
+        subprocess.check_call(['bash', script], cwd=deploy_dir, timeout=300)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+        print("Warning: package download failed: %s" % e, file=sys.stderr)
 
 
 def main():

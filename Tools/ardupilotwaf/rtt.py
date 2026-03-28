@@ -201,12 +201,14 @@ def _deploy_cuav_v5_bsp_if_needed(env):
     # linker overflows or missing driver config after edits to the source BSP.
     sync_list = [
         'rtconfig.py', 'rtconfig.h', 'SConscript', '.config', 'dirent.h',
+        'pkgs_update_manual.sh',
         os.path.join('board', 'board.c'),
         os.path.join('board', 'rt_board_init.c'),
         os.path.join('board', 'SConscript'), os.path.join('board', 'Kconfig'),
         os.path.join('board', 'linker_scripts', 'link.lds'),
         os.path.join('board', 'drv_spi_lld.h'),
         os.path.join('board', 'drv_spi_lld.c'),
+        os.path.join('board', 'rtt_libc_compat.c'),
         os.path.join('board', 'ports', 'cherryusb', 'cherryusb.c'),
         os.path.join('board', 'ports', 'cherryusb', 'SConscript'),
         os.path.join('board', 'ports', 'cherryusb', 'usb_config.h'),
@@ -238,6 +240,49 @@ def _deploy_cuav_v5_bsp_if_needed(env):
                 os.remove(lib_path)
             except OSError:
                 pass
+
+
+def _ensure_cuav_v5_packages(env):
+    """
+    For CUAV V5 BSP: if STM32F7 HAL/CMSIS packages are missing in the deploy
+    directory, run pkgs_update_manual.sh to download them from GitHub.
+    No-op for other boards or if packages are already present.
+    """
+    bsp_rel = RTT_BSP_MAP.get(getattr(env, 'BOARD', None))
+    if bsp_rel != 'stm32/stm32f765-cuav-v5':
+        return
+    rtt_root = getattr(env, 'RTT_ROOT', None)
+    if not rtt_root or not os.path.isdir(rtt_root):
+        return
+    deploy_dir = os.path.join(rtt_root, 'bsp', 'stm32', 'stm32f765-cuav-v5')
+    if not os.path.isdir(deploy_dir):
+        return
+    need_pkgs = False
+    for pkg in ('CMSIS-Core-latest', 'stm32f7_cmsis_driver-latest', 'stm32f7_hal_driver-latest'):
+        if not os.path.isdir(os.path.join(deploy_dir, 'packages', pkg)):
+            need_pkgs = True
+            break
+    if not need_pkgs:
+        return
+    script = os.path.join(deploy_dir, 'pkgs_update_manual.sh')
+    if not os.path.isfile(script):
+        srcroot = getattr(env, 'SRCROOT', None)
+        if srcroot:
+            src_script = os.path.join(srcroot, RTT_BSP_CUAV_V5_SRC.replace('/', os.sep), 'pkgs_update_manual.sh')
+            if os.path.isfile(src_script):
+                try:
+                    import shutil
+                    shutil.copy2(src_script, script)
+                except Exception:
+                    return
+    if not os.path.isfile(script):
+        print("CUAV V5: packages missing. Run: cd %s && bash pkgs_update_manual.sh" % deploy_dir)
+        return
+    try:
+        print("CUAV V5: downloading STM32F7 HAL/CMSIS packages...")
+        subprocess.check_call(['bash', script], cwd=deploy_dir, timeout=180)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+        print("CUAV V5: package download failed: %s" % e)
 
 
 def _deploy_pixhawk6c_mini_bsp_if_needed(env):
@@ -776,6 +821,7 @@ def build(bld):
     env = bld.env
     _deploy_fmuv2_bsp_if_needed(env)
     _deploy_cuav_v5_bsp_if_needed(env)
+    _ensure_cuav_v5_packages(env)
     _deploy_pixhawk6c_mini_bsp_if_needed(env)
     _ensure_pixhawk6c_mini_packages(env)
     py = env.get_flat('PYTHON')

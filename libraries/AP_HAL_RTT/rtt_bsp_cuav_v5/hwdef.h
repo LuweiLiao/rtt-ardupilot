@@ -24,6 +24,19 @@
 #define SEEK_END 2
 #endif
 
+/* GNU libc extensions missing in newlib bare-metal; polyfills in rtt_libc_compat.c */
+#include <stdarg.h>
+#include <stddef.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+int asprintf(char **strp, const char *fmt, ...) __attribute__((format(printf,2,3)));
+int vasprintf(char **strp, const char *fmt, va_list ap);
+void *memmem(const void *haystack, size_t haystacklen, const void *needle, size_t needlelen);
+#ifdef __cplusplus
+}
+#endif
+
 /* Sensor probe macros */
 #define PROBE_IMU_SPI(driver, devname, args ...) ADD_BACKEND(AP_InertialSensor_ ## driver::probe(*this,hal.spi->get_device(devname),##args))
 #define PROBE_IMU_SPI2(driver, devname1, devname2, args ...) ADD_BACKEND(AP_InertialSensor_ ## driver::probe(*this,hal.spi->get_device(devname1),hal.spi->get_device(devname2),##args))

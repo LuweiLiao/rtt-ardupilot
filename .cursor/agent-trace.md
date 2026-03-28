@@ -563,3 +563,21 @@
   - 新增 dirent.h shim — BSP 目录中替代 newlib 的 #error dirent.h
   - rtt.py — sync_list 加 dirent.h、drv_spi_lld 文件
 - 下一步：MAVLink 连接验证、CPU 负载评估、长时间稳定性
+
+### 2026-03-28 — 干净 clone 编译修复
+- 动作：验证从干净 `build/` 目录能否一条命令完成 RTT CUAV V5 编译
+- 问题 1：`.gitmodules` 中 `modules/rt-thread` URL 指向上游 RT-Thread，不是 pogo fork
+  - 修复：URL 改为 `https://gitee.com/dronepogo/rtthread.git`，加 `branch = staging/pogo`
+- 问题 2：STM32F7 HAL/CMSIS packages 未跟踪，干净 clone 后缺失
+  - 修复：`rtt_bsp_deploy.py` 在 copytree 后自动调用 `pkgs_update_manual.sh`
+  - 同时 `rtt.py` 的 `_ensure_cuav_v5_packages()` 也在 waf build 路径中做同样检查
+- 问题 3：干净编译 `ap_config.h` 不存在（由 waf configure 生成），导致 `SEEK_SET` 等未定义
+  - 修复：`SConscript` 自动创建最小 `ap_config.h`（含 `#include "hwdef.h"`）
+  - 同时确保 `hwdef.h` 被复制到 `build/rtt_cuav_v5/`
+- 问题 4：`asprintf`/`vasprintf`/`memmem` 在 newlib bare-metal 中缺失
+  - 修复：新增 `board/rtt_libc_compat.c` 提供 polyfill 实现
+  - `hwdef.h` 中加入函数声明（extern "C"）
+  - `scons_ardupilot_sources.py` 排除 `posix_compat.cpp`（waf 也未编译此文件）
+- 结果：`rm -rf build/rtt_deploy/cuav_v5 build/rtt_cuav_v5 && python3 -m SCons --target=cuav-v5 -j16` 一条命令从零编译成功
+  - ROM 60.73%, RAM 21.58%, exit 0
+- 下一步：将修改 commit，继续 MAVLink/CPU/稳定性优化

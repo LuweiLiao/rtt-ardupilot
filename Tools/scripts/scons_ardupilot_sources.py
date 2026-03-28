@@ -121,6 +121,12 @@ def _collect_sources(ap_root, bsp_dir, rtt_root):
     # BSP HAL, HAL_Drivers, system_stm32h7xx: not added here; RTT BSP already builds
     # board/ and packages/ via its SConscript, so we avoid duplicate symbols.
 
+    # Exclude files incompatible with bare-metal newlib (no vasprintf/asprintf)
+    exclude_suffixes = [
+        'AP_Filesystem/posix_compat.cpp',
+    ]
+    sources = [s for s in sources if not any(s.endswith(e) for e in exclude_suffixes)]
+
     return sources
 
 
