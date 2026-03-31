@@ -1,7 +1,7 @@
 # AP_HAL_RTT 当前状态
 
 > 基线：`CUAV v5` / `STM32F767` / `ArduCopter V4.7.0-dev on RT-Thread 5.3.0`
-> 最后更新：2026-03-31（编译修复 + mmcsd 栈增大 + 固件烧录验证 + 22 消息类型确认）
+> 最后更新：2026-03-31（MAVLink 三层频率修复 + IWDG 骨架 + USB CDC TX buffer 增大）
 
 ## 当前稳定成立的事实
 
@@ -13,9 +13,9 @@
 - **Flash.cpp 寄存器化**：Flash erase/write 均使用直接寄存器操作，消除 HAL_FLASH_* 依赖
 - **HEAP/BSS 安全**：HEAP_BEGIN = max(&_end, SRAM1_START)，&_end 在 .bss 和 .sram1_bss 段之后，防止 cache_buf 等 DMA 缓冲区与堆重叠
 - **栈大小**：MSP 初始栈 16KB（link.lds _system_stack_size = 0x4000）
-- **开发环境**：已迁移到 Ubuntu 24.04 物理机（kernel 6.17），OpenOCD 0.12.0 直连 ST-Link V2
+- **开发环境**：Ubuntu 24.04 物理机（kernel 6.17.0-19-generic），OpenOCD 0.12.0 直连 ST-Link V2
 - **启动文件修复**：自定义 `startup_rtt_override.S` 覆盖 CMSIS 弱 `Reset_Handler`，跳过 `__libc_init_array`（C++ 全局构造函数由 `INIT_COMPONENT_EXPORT` 在堆初始化后执行），调用 `entry()` 进入 RT-Thread 标准启动链路
-- `CUAV v5` 上的 USB CDC / MAVLink 已在 Ubuntu 物理机、Windows 和 WSL2 侧验证到可用
+- `CUAV v5` 上的 USB CDC / MAVLink 已在 Ubuntu 物理机、Windows 侧验证到可用
 - SPI 传感器链已带起，`BMI055`（IMU）与 `MS5611`（Baro）形成有效数据路径
 - **SPI LLD**（`drv_spi_lld.c/h`）：低层 DMA 驱动替代 STM32 HAL 在 ISR 内的 busy-wait；SPI1（IMU）已注册 LLD 上下文
 - **SPI4/SPI2 DMA 已禁用**：改用轮询模式（HAL SPI DMA 完成中断不工作，根因待查）；MS5611 @20MHz 轮询足够
@@ -23,10 +23,10 @@
 - **SPI 短传输 LL 化**：`<16B` 传输使用 `spi_xfer_poll_ll()` 直接寄存器轮询替代 HAL 状态机（~8 指令/字节 vs ~50 指令/字节）
 - **GPIO 直接寄存器**：`drv_gpio.c` 的 `stm32_pin_write`/`stm32_pin_read` 已替换为 BSRR/IDR 直接操作
 - **USB CDC TX 事件驱动**：UART 线程使用 `rt_sem_take(_uart_wake_sem, 1ms)` 替代固定 `rt_thread_mdelay(1)`；`UARTDriver::_write()` 写入后立即唤醒
-- **CherryUSB FIFO 增大**：CDC IN TX FIFO 64→128B（允许双包队列）；CDC 软件环形缓冲 2048→4096B
+- **CherryUSB FIFO 增大**：CDC IN TX FIFO 64→128B（允许双包队列）；CDC 软件环形缓冲 2048→4096B（`usbd_serial.c`）；TX ring buffer 2048→8192B（`rtconfig.h CONFIG_USBDEV_SERIAL_TX_BUFSIZE`）
 - I2C3 软件驱动已初始化，`IST8310`（磁力计）已识别
 - 已观测到 23 种 MAVLink 消息类型（HEARTBEAT、ATTITUDE、RAW_IMU、SYS_STATUS 等）
-- MAVLink 参数下载：**943 全部完成**（FTP 协议，快速）
+- **MAVLink 参数下载**：**943 全部完成**（FTP 协议，快速）
 - **MAVFTP 综合回归通过**：`tests/test_mavftp.py` 在 Ubuntu 物理机 `/dev/ttyACM1` 上 **6/6 PASS**（根目录列举、`@PARAM/param.pck`、真实文件 Create/Write/OpenRO/Read/Delete、ResetSessions、稳定性）
 - **Mission 基础协议 smoke 已通过**：`tests/test_mission_protocol.py` 已在真实硬件上完成 `MISSION_CLEAR_ALL -> MISSION_COUNT -> REQUEST/ITEM -> MISSION_ACK -> REQUEST_LIST -> 下载 -> CLEAR_ALL` 闭环
 - 主循环频率：**~400Hz 稳定运行**（DeviceBus 重构 + 10kHz SysTick + OS sleep 优化后）
@@ -43,8 +43,10 @@
 - **RTT POSIX `stat()` ABI 已加兼容层**：`AP_Filesystem_Posix::stat()` 在 RTT 上不再把 C++ 侧 60B `struct stat` 直接传给 DFS/ELM-FAT；改为先经 C 编译单元 `ap_rtt_posix_stat()` 以 RT-Thread 原生 `struct stat` 调 `stat()`，再把共用字段拷回 C++，避免本地文件 `stat()` 踩坏相邻栈数据
 - **`AP_Scripting` 延时 HardFault 已跨过 80s 观测窗**：先将 RTT `log_io` 栈从 2KB 提升到 4KB 修掉第一层 `thread_timer.timeout_func=0 -> rt_timer_check()->blx 0`；随后把第二层 `log_io` / `f_stat()` 路径上的 RTT `stat()` ABI mismatch 修掉后，固件在两次单次 GDB 检查中分别跑过约 40s 和约 80s，`main_loop_iterations` 从 `0x33eb` 增到 `0x8329`，`rtt_dbg_hardfault_*` 保持为 0
 - **UART7 已有 `ap_rate` 调试命令**：可直接在 `msh` 中打印 `cpu_idle/load/loop_us/loop_hz/work_us/overrun/iterations`，用于不接 GDB 时快速判断 CPU 是否真忙、主循环是否真降频
-- **RTT Copter 默认 MAVLink 流率已加运行时 fallback**：若启动时检测到 `streamRates[]` 整组仍为 0，则仅在内存中为 `RAW_SENS/EXT_STAT/RC_CHAN/POSITION/EXTRA1/EXTRA2/EXTRA3` 填入保守默认值，再初始化 message intervals，不改持久化参数
-- **低频定位已闭环**：CPU 真实空闲仍约 98-99%，主循环稳态 `loop_us` 约 2185us（~457Hz）；修复前默认 `ATTITUDE/RAW_IMU/SYS_STATUS` 仅约 `0.07/0.33/0.33 Hz`，修复后在不发送 `SET_MESSAGE_INTERVAL` 的前提下提升到约 `5.86/4.07/2.00 Hz`
+- **RTT Copter 默认 MAVLink 流率已加运行时 fallback**：若启动时检测到 `streamRates[]` 整组仍为 0，则仅在内存中为 `RAW_SENS/EXT_STAT/RC_CHAN/POSITION/EXTRA1/EXTRA2/EXTRA3` 填入默认值，再初始化 message intervals，不改持久化参数
+- **MAVLink 消息频率三层修复**（2026-03-31）：(1) 主循环末尾显式 `call_delay_cb()` 弥补 RTT `delay_microseconds_boost()` 不触发 delay callback 的差异；(2) `should_send_message_in_delay_callback()` 对 RTT 返回 true 允许所有消息类型在 delay callback 中发送；(3) USB CDC TX ring buffer 从 2048B 增大到 8192B + `_usb_write_fail_count` 逻辑修正（仅 buffer 非空时递增）。修复后默认流率 96.6 msgs/s，ATTITUDE 13.3Hz
+- **IWDG 独立看门狗骨架已就位**（2026-03-31）：LSI enable + /256 prescaler + 10s reload；`watchdog_pat()` 中 kick；`set_system_initialized()` 中启动（当前 `#if 0` 暂禁用，因 GDB 无法在 reset loop 中 halt）；`was_watchdog_reset()` 读 RCC_CSR IWDGRSTF/WWDGRSTF 标志
+- **低频定位已闭环**：CPU 真实空闲仍约 98-99%，主循环稳态 `loop_us` 约 2185us（~457Hz）；修复前默认 `ATTITUDE/RAW_IMU/SYS_STATUS` 仅约 `0.07/0.33/0.33 Hz`，经三层修复后默认流率提升到 `13.3/5.4/4.1 Hz`（总 96.6 msgs/s）
 - **RTT MAVFTP OpenFileRO 本地文件路径**：对真实文件改为 **open-first + `lseek(SEEK_END)`** 取大小；`@PARAM` 等虚拟后端仍保留原 `stat()+open()` 路径
 - **MAVLink Logging 已禁用**（`HAL_LOGGING_MAVLINK_ENABLED=0`），避免无客户端时 PreArm 失败
 - **UART7 调试串口已启用**：PE8=TX / PF6=RX / 115200，RT-Thread msh 控制台已切到 UART7
@@ -180,10 +182,12 @@
 - `watchdog_pat()` 每次 loop 末尾调用
 
 #### UARTDriver CDC 改进 ★★
-- `_usb_write_fail_count` 阈值提高到 100（~100ms），避免参数下载突发丢包
+- `_usb_write_fail_count` 逻辑修正：仅在 buffer 非空时递增，buffer 清空时重置为 0（修复无条件递增导致每 ~100ms 清空写缓冲丢数据的 bug）
 - CDC max_chunks 提升到 8（4096B/tick），提高突发吞吐
+- UART7 msh 诊断：每 5s 打印 `[USB0] wb_avail/fails/clears`
 
 #### MAVLink 压测基线
+- 默认流率：96.6 msgs/s（ATTITUDE 13.3Hz, RAW_IMU 5.4Hz）
 - S1 参数全量下载 × 5 轮：≥4/5 PASS（单连接 12-30s/轮）
 - S2 断连重连 × 10 轮：≥8/10 PASS
 - S3 10 分钟长流：26.4 msg/s, CPU 0.9%, 无内存泄漏
@@ -200,8 +204,8 @@
 ## 当前已知限制
 
 - SYS_STATUS load=9 (0.9%)，真实 CPU 空闲 99%（DWT idle hook），主循环 ~400Hz 稳定
-- WSL2 `usbipd` 下 USB CDC 在 1.5s 间隔高流量重连时偶尔失败（usbipd 吞吐瓶颈）；真实物理 USB 或 Windows COM 更稳定
+- `SET_MESSAGE_INTERVAL` 设置特定频率后反而退化（96.6 → 16.2 msgs/s），可能与 `scheduler_delay_callback` 的 20ms 间隔限制有关
 - `mmcsd_detect` 线程栈使用率 90%，接近溢出
 - `EKF3` 仍存在内存压力，允许回退到 `DCM active`
-- CH343 USB-TTL 在 WSL2 内核无驱动（VID:PID 1A86:55D3 不匹配 ch341.ko），需从 Windows 端读串口
 - `RCOutput`、`RCInput`、部分 `GPIO/I2C` 仍未形成实体飞行级能力
+- IWDG 看门狗暂禁用（需 GDB 调试 prescaler/timeout 配置）
