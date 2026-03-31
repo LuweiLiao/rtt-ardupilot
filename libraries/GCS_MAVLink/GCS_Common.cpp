@@ -1220,6 +1220,16 @@ bool GCS_MAVLINK::should_send_message_in_delay_callback(const ap_message id) con
     // No ID we return true for may take more than a few hundred
     // microseconds to return!
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    // On RT-Thread, the scheduler task often has no time_available left for
+    // GCS update_send (time_budget=550us but remaining < 550us after all
+    // higher-priority tasks run). All GCS messaging goes through
+    // call_delay_cb() → scheduler_delay_callback() → update_send().
+    // Allow all message types in delay callback to avoid dropping them.
+    // The 5ms time window in update_send's while loop still limits burst size.
+    return true;
+#endif
+
     switch (id) {
     case MSG_NEXT_PARAM:
     case MSG_HEARTBEAT:
@@ -1576,24 +1586,14 @@ void GCS_MAVLINK::update_send()
     const uint16_t start16 = start & 0xFFFF;
 
 #if CONFIG_HAL_BOARD == HAL_BOARD_RTT && defined(GCS_DEBUG_SEND_MESSAGE_TIMINGS) == 0
-    // RTT diagnostic: count calls and out_of_time hits
-    static uint32_t _rtt_update_send_calls = 0;
-    static uint32_t _rtt_out_of_time_hits = 0;
-    static uint32_t _rtt_msgs_sent = 0;
+    // RTT diagnostic
+    extern "C" int rt_kprintf(const char *fmt, ...);
+    static uint32_t _rtt_call_count = 0;
     static uint32_t _rtt_last_report_ms = 0;
-    _rtt_update_send_calls++;
-
+    _rtt_call_count++;
     if (AP_HAL::millis() - _rtt_last_report_ms > 5000) {
-        // Write directly to serial0 to bypass MAVLink scheduling
-        hal.serial(0)->printf("GCS: calls=%u oot=%u sent=%u\r\n",
-            _rtt_update_send_calls, _rtt_out_of_time_hits, _rtt_msgs_sent);
-        // Also try STATUSTEXT
-        GCS_SEND_TEXT(MAV_SEVERITY_INFO,
-            "GCS: calls=%u oot=%u sent=%u",
-            _rtt_update_send_calls, _rtt_out_of_time_hits, _rtt_msgs_sent);
-        _rtt_update_send_calls = 0;
-        _rtt_out_of_time_hits = 0;
-        _rtt_msgs_sent = 0;
+        rt_kprintf("[GCS_ENTRY] ch=%u total=%u\n", (unsigned)chan, _rtt_call_count);
+        _rtt_call_count = 0;
         _rtt_last_report_ms = AP_HAL::millis();
     }
 #endif
@@ -1604,7 +1604,7 @@ void GCS_MAVLINK::update_send()
             try_send_message_stats.out_of_time++;
 #endif
 #if CONFIG_HAL_BOARD == HAL_BOARD_RTT && defined(GCS_DEBUG_SEND_MESSAGE_TIMINGS) == 0
-            _rtt_out_of_time_hits++;
+            _rtt_call_count++;
 #endif
             break;
         }
@@ -1621,7 +1621,7 @@ void GCS_MAVLINK::update_send()
                     break;
                 }
 #if CONFIG_HAL_BOARD == HAL_BOARD_RTT && defined(GCS_DEBUG_SEND_MESSAGE_TIMINGS) == 0
-                _rtt_msgs_sent++;
+                _rtt_call_count++;
 #endif
                 // we try to keep output on a regular clock to avoid
                 // user support questions:

@@ -352,22 +352,32 @@ void UARTDriver::_timer_tick(void)
     _drain_writebuf_to_dev();
 
     if (_is_usb) {
-        _usb_write_fail_count++;
-        if (_usb_write_fail_count > 100) {
-            _writebuf.clear();
-            _usb_write_fail_count = 0;
+        /* Track consecutive failures (ticks where drain could not write anything
+         * while data was available). Only clear the write buffer if we've failed
+         * to make progress for >100 ticks — this avoids the previous bug where
+         * _usb_write_fail_count was incremented unconditionally every tick,
+         * causing the write buffer to be cleared every ~100ms even when writes
+         * were succeeding. */
+        static uint32_t _diag_last_ms = 0;
+        static uint32_t _diag_clears = 0;
+        if (_writebuf.available() == 0) {
+            _usb_write_fail_count = 0;  /* buffer drained, reset counter */
+        } else {
+            _usb_write_fail_count++;
+            if (_usb_write_fail_count > 100) {
+                _writebuf.clear();
+                _usb_write_fail_count = 0;
+                _diag_clears++;
+            }
         }
         // Diagnostic: every 5s print USB write stats to rt_kprintf (UART7 msh)
-        static uint32_t _diag_last_ms = 0;
-        static uint32_t _diag_total_written = 0;
-        _diag_total_written += (uint32_t)_writebuf.available();
         if (AP_HAL::millis() - _diag_last_ms > 5000 && _port_num == 0) {
-            rt_kprintf("[USB0] wb_avail=%u fails=%u diag_total=%u\n",
+            rt_kprintf("[USB0] wb_avail=%u fails=%u clears=%u\n",
                        (unsigned)_writebuf.available(),
                        (unsigned)_usb_write_fail_count,
-                       (unsigned)_diag_total_written);
+                       (unsigned)_diag_clears);
+            _diag_clears = 0;
             _diag_last_ms = AP_HAL::millis();
-            _diag_total_written = 0;
         }
     } else {
         _usb_write_fail_count = 0;
