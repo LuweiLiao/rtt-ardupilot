@@ -351,11 +351,23 @@ void UARTDriver::_timer_tick(void)
     _drain_rx_to_readbuf();
     _drain_writebuf_to_dev();
 
-    if (_is_usb && _writebuf.available() > 0) {
+    if (_is_usb) {
         _usb_write_fail_count++;
         if (_usb_write_fail_count > 100) {
             _writebuf.clear();
             _usb_write_fail_count = 0;
+        }
+        // Diagnostic: every 5s print USB write stats to rt_kprintf (UART7 msh)
+        static uint32_t _diag_last_ms = 0;
+        static uint32_t _diag_total_written = 0;
+        _diag_total_written += (uint32_t)_writebuf.available();
+        if (AP_HAL::millis() - _diag_last_ms > 5000 && _port_num == 0) {
+            rt_kprintf("[USB0] wb_avail=%u fails=%u diag_total=%u\n",
+                       (unsigned)_writebuf.available(),
+                       (unsigned)_usb_write_fail_count,
+                       (unsigned)_diag_total_written);
+            _diag_last_ms = AP_HAL::millis();
+            _diag_total_written = 0;
         }
     } else {
         _usb_write_fail_count = 0;

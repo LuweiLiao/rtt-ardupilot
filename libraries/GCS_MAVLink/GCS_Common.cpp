@@ -1574,10 +1574,37 @@ void GCS_MAVLINK::update_send()
 
     const uint32_t start = AP_HAL::millis();
     const uint16_t start16 = start & 0xFFFF;
+
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && defined(GCS_DEBUG_SEND_MESSAGE_TIMINGS) == 0
+    // RTT diagnostic: count calls and out_of_time hits
+    static uint32_t _rtt_update_send_calls = 0;
+    static uint32_t _rtt_out_of_time_hits = 0;
+    static uint32_t _rtt_msgs_sent = 0;
+    static uint32_t _rtt_last_report_ms = 0;
+    _rtt_update_send_calls++;
+
+    if (AP_HAL::millis() - _rtt_last_report_ms > 5000) {
+        // Write directly to serial0 to bypass MAVLink scheduling
+        hal.serial(0)->printf("GCS: calls=%u oot=%u sent=%u\r\n",
+            _rtt_update_send_calls, _rtt_out_of_time_hits, _rtt_msgs_sent);
+        // Also try STATUSTEXT
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO,
+            "GCS: calls=%u oot=%u sent=%u",
+            _rtt_update_send_calls, _rtt_out_of_time_hits, _rtt_msgs_sent);
+        _rtt_update_send_calls = 0;
+        _rtt_out_of_time_hits = 0;
+        _rtt_msgs_sent = 0;
+        _rtt_last_report_ms = AP_HAL::millis();
+    }
+#endif
+
     while (AP_HAL::millis() - start < 5) { // spend a max of 5ms sending messages.  This should never trigger - out_of_time() should become true
         if (gcs().out_of_time()) {
 #if GCS_DEBUG_SEND_MESSAGE_TIMINGS
             try_send_message_stats.out_of_time++;
+#endif
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && defined(GCS_DEBUG_SEND_MESSAGE_TIMINGS) == 0
+            _rtt_out_of_time_hits++;
 #endif
             break;
         }
@@ -1593,6 +1620,9 @@ void GCS_MAVLINK::update_send()
                 if (!do_try_send_message(deferred_message[next].id)) {
                     break;
                 }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && defined(GCS_DEBUG_SEND_MESSAGE_TIMINGS) == 0
+                _rtt_msgs_sent++;
+#endif
                 // we try to keep output on a regular clock to avoid
                 // user support questions:
                 const uint16_t interval_ms = deferred_message[next].interval_ms;
@@ -7019,15 +7049,16 @@ void GCS_MAVLINK::initialise_message_intervals_from_streamrates()
     if (all_stream_rates_zero) {
         // Copter traditionally defaults these to 0 and waits for a GCS request.
         // On RTT bring-up this makes fresh or migrated parameter sets look
-        // almost silent on simple ground-station links, so seed conservative
+        // almost silent on simple ground-station links, so seed reasonable
         // in-memory defaults without overwriting stored params.
-        streamRates[STREAM_RAW_SENSORS].set(4);
-        streamRates[STREAM_EXTENDED_STATUS].set(2);
-        streamRates[STREAM_RC_CHANNELS].set(2);
-        streamRates[STREAM_POSITION].set(2);
-        streamRates[STREAM_EXTRA1].set(10);
-        streamRates[STREAM_EXTRA2].set(4);
-        streamRates[STREAM_EXTRA3].set(2);
+        // Rates chosen to match typical QGC/MissionPlanner expectations:
+        streamRates[STREAM_RAW_SENSORS].set(10);    // IMU, baro, mag
+        streamRates[STREAM_EXTENDED_STATUS].set(5);  // sys_status, power
+        streamRates[STREAM_RC_CHANNELS].set(5);      // RC channels
+        streamRates[STREAM_POSITION].set(5);         // GPS, position
+        streamRates[STREAM_EXTRA1].set(10);          // attitude
+        streamRates[STREAM_EXTRA2].set(5);           // VFR_HUD
+        streamRates[STREAM_EXTRA3].set(2);           // AHRS, EKF, vibration
     }
 #endif
     for (uint8_t i=0; all_stream_entries[i].ap_message_ids != nullptr; i++) {

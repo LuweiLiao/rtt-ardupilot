@@ -178,6 +178,12 @@ static void _main_loop_entry(void* arg)
         rtt_dbg_boost_total_us_per_loop = 0;
         uint32_t pre_loop_us = AP_HAL::micros();
         a->callbacks->loop();
+        /* Call delay callbacks after loop() completes.
+         * On ChibiOS, call_delay_cb() is called inside wait_for_sample() → delay(),
+         * but RTT's delay_microseconds_boost() bypasses delay(), so we must
+         * call it explicitly. Placing it after loop() ensures scheduler tasks
+         * have already run and time budgets are reset. */
+        a->sched->call_delay_cb();
         uint32_t post_loop_us = AP_HAL::micros();
         uint32_t work = post_loop_us - pre_loop_us;
         rtt_dbg_work_time_us = work;
