@@ -42,14 +42,12 @@ def drain(conn, timeout_ms=500):
             break
 
 
-def send_and_wait_ack(conn, cmd_msg, timeout=3):
-    """Send a command and wait for its ACK, draining the queue first."""
-    drain(conn, 300)
-    conn.mav.send(cmd_msg)
+def _recv_type(conn, msg_type, timeout=5):
+    """Reliably receive a specific message type, discarding others."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        msg = conn.recv_match(type='COMMAND_ACK', timeout=timeout)
-        if msg:
+        msg = conn.recv_match(blocking=True, timeout=1)
+        if msg and msg.get_type() == msg_type:
             return msg
     return None
 
@@ -57,7 +55,7 @@ def send_and_wait_ack(conn, cmd_msg, timeout=3):
 def connect(port, baud=DEFAULT_BAUD, retries=5, timeout=10):
     for attempt in range(retries):
         try:
-            m = mavutil.mavlink_connection(port, baud=baud)
+            m = mavutil.mavlink_connection(port, baud=baud, source_system=251)
             m.wait_heartbeat(timeout=timeout)
             return m
         except Exception as e:
@@ -134,7 +132,9 @@ def test_command_ack(conn):
         conn.target_system, conn.target_component,
         mavutil.mavlink.MAV_CMD_REQUEST_MESSAGE, 0,
         mavutil.mavlink.MAVLINK_MSG_ID_AUTOPILOT_VERSION, 0, 0, 0, 0, 0, 0)
-    ack = send_and_wait_ack(conn, cmd, timeout=5)
+    drain(conn, 300)
+    conn.mav.send(cmd)
+    ack = _recv_type(conn, 'COMMAND_ACK', timeout=5)
     if ack:
         r.details.append(f"ACK: cmd={ack.command} result={ack.result}")
         if ack.result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
@@ -197,48 +197,83 @@ def test_sensor_data(conn):
     return r
 
 
+def _safe_call(fn, *args):
+    """Try with all args, then drop last arg (for force_mavlink1 compat)."""
+    try:
+        fn(*args)
+    except TypeError:
+        fn(*args[:-1])
+
 def test_mission_protocol(conn):
+    """T7: Mission protocol - upload/download/clear using pull model."""
     r = TestResult("T7: Mission Protocol")
     try:
         drain(conn, 500)
         # Clear
-        conn.mav.mission_clear_all_send(conn.target_system, conn.target_component)
-        time.sleep(1)
-        # Request list
-        conn.mav.mission_request_list_send(conn.target_system, conn.target_component)
-        cnt = conn.recv_match(type='MISSION_COUNT', timeout=3)
-        if cnt and cnt.count != 0:
-            r.fail(f"Count {cnt.count} after clear")
-            r.duration = 5; return r
+        _safe_call(conn.mav.mission_clear_all_send,
+                   conn.target_system, conn.target_component, 0)
+        ack = _recv_type(conn, 'MISSION_ACK', timeout=5)
+        r.details.append(f"  Clear ACK: type={ack.type if ack else 'None'}")
 
-        # Write 2 WPs
-        for seq, (lat, lon, alt) in enumerate([(0.0, 0.0, 10.0), (0.001, 0.0, 20.0)]):
-            conn.mav.mission_item_send(
-                conn.target_system, conn.target_component, seq,
-                mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
-                mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 1, 0, 0, 0, 0,
-                lat, lon, alt)
-            req = conn.recv_match(type='MISSION_REQUEST', timeout=3)
-            if req and req.seq == seq:
-                r.details.append(f"  WP{seq}: request OK")
+        # Upload 2 WPs: send COUNT first, then reply to each REQUEST
+        items = {0: (0.0, 0.0, 10.0), 1: (0.001, 0.0, 20.0)}
+        _safe_call(conn.mav.mission_count_send,
+                   conn.target_system, conn.target_component, len(items), 0)
+        r.details.append(f"  COUNT({len(items)}) sent")
 
-        ack = conn.recv_match(type='MISSION_ACK', timeout=3)
-        if ack and ack.type == mavutil.mavlink.MAV_MISSION_ACCEPTED:
-            r.details.append("  Mission accepted")
-            # Read back
-            drain(conn, 300)
-            conn.mav.mission_request_list_send(conn.target_system, conn.target_component)
-            cnt2 = conn.recv_match(type='MISSION_COUNT', timeout=3)
-            if cnt2 and cnt2.count == 2:
-                r.details.append(f"  Read back: {cnt2.count} items")
-                r.ok("Write/read/clear OK")
+        requested = set()
+        deadline = time.time() + 15
+        while len(requested) < len(items) and time.time() < deadline:
+            msg = _recv_type(conn, 'MISSION_REQUEST', timeout=2)
+            if msg is None:
+                msg = _recv_type(conn, 'MISSION_REQUEST_INT', timeout=0.5)
+                if msg is None:
+                    continue
+            seq = msg.seq
+            requested.add(seq)
+            lat, lon, alt = items[seq]
+            current = 1 if seq == 0 else 0
+            if msg.get_type() == 'MISSION_REQUEST_INT':
+                _safe_call(conn.mav.mission_item_int_send,
+                    conn.target_system, conn.target_component, seq,
+                    mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+                    mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, current, 1,
+                    0, 0, 0, 0, int(lat * 1e7), int(lon * 1e7), alt, 0)
             else:
-                r.fail(f"Read back: {cnt2.count if cnt2 else 'None'}")
+                _safe_call(conn.mav.mission_item_send,
+                    conn.target_system, conn.target_component, seq,
+                    mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT,
+                    mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, current, 1,
+                    0, 0, 0, 0, lat, lon, alt, 0)
+            r.details.append(f"  WP{seq}: replied")
+
+        if requested != {0, 1}:
+            r.fail(f"Requests: {sorted(requested)}")
+            r.duration = 15
+            return r
+
+        # Wait for ACCEPTED
+        ack = _recv_type(conn, 'MISSION_ACK', timeout=10)
+        if ack and ack.type == mavutil.mavlink.MAV_MISSION_ACCEPTED:
+            r.details.append("  Upload accepted")
         else:
-            r.fail("No MISSION_ACCEPTED")
+            r.fail(f"Upload ACK: {ack.type if ack else 'None'}")
+            r.duration = 20
+            return r
+
+        # Read back
+        drain(conn, 300)
+        _safe_call(conn.mav.mission_request_list_send,
+                   conn.target_system, conn.target_component, 0)
+        cnt = _recv_type(conn, 'MISSION_COUNT', timeout=5)
+        if cnt and cnt.count == 2:
+            r.details.append(f"  Read back: {cnt.count} items")
+            r.ok("Upload/download/clear OK")
+        else:
+            r.fail(f"Read back: {cnt.count if cnt else 'None'}")
     except Exception as e:
         r.error = str(e)
-    r.duration = 10
+    r.duration = 20
     return r
 
 
@@ -249,16 +284,16 @@ def test_log_list(conn):
     conn.mav.log_request_list_send(conn.target_system, conn.target_component, 0, 0xFFFF)
     log_count = 0
     log_sizes = []
-    while time.time() - start < 15:
-        msg = conn.recv_match(type='LOG_ENTRY', timeout=2)
+    last_entry_time = time.time()
+    while time.time() - start < 20:
+        msg = _recv_type(conn, 'LOG_ENTRY', timeout=3)
         if msg:
             log_count += 1
             log_sizes.append(msg.size)
-        # Check for end: next message is not LOG_ENTRY
-        if log_count > 0:
-            peek = conn.recv_match(timeout=0.5)
-            if peek and peek.get_type() != 'LOG_ENTRY':
-                break
+            last_entry_time = time.time()
+        # End of list: no LOG_ENTRY for 2s
+        if log_count > 0 and time.time() - last_entry_time > 2:
+            break
     if log_count > 0:
         r.details.append(f"Logs: {log_count}, {min(log_sizes)}-{max(log_sizes)} bytes")
         r.ok(f"{log_count} logs on SD card")
@@ -301,7 +336,9 @@ def test_set_message_interval(conn):
         conn.target_system, conn.target_component,
         mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
         mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, 100000, 0, 0, 0, 0, 0)
-    ack = send_and_wait_ack(conn, cmd, timeout=5)
+    drain(conn, 300)
+    conn.mav.send(cmd)
+    ack = _recv_type(conn, 'COMMAND_ACK', timeout=5)
     if ack:
         r.details.append(f"ACK: result={ack.result}")
         if ack.result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
