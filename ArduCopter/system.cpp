@@ -13,28 +13,29 @@ static void failsafe_check_static()
     copter.failsafe_check();
 }
 
+extern volatile uint32_t rtt_dbg_setup_stage;
+
 void Copter::init_ardupilot()
 {
-    // init winch
+    rtt_dbg_setup_stage = 100;
 #if AP_WINCH_ENABLED
     g2.winch.init();
 #endif
 
-    // initialise notify system
     notify.init();
     notify_flight_mode();
 
-    // initialise battery monitor
+    rtt_dbg_setup_stage = 101;
     battery.init();
 
 #if AP_RSSI_ENABLED
-    // Init RSSI
     rssi.init();
 #endif
 
+    rtt_dbg_setup_stage = 102;
     barometer.init();
 
-    // setup telem slots with serial ports
+    rtt_dbg_setup_stage = 103;
     gcs().setup_uarts();
 
 #if OSD_ENABLED
@@ -60,7 +61,7 @@ void Copter::init_ardupilot()
     surface_tracking.init((SurfaceTracking::Surface)copter.g2.surftrak_mode.get());
 #endif
 
-    // allocate the motors class
+    rtt_dbg_setup_stage = 104;
     allocate_motors();
 
     // initialise rc channels including setting mode
@@ -90,6 +91,7 @@ void Copter::init_ardupilot()
     gps.set_log_gps_bit(MASK_LOG_GPS);
     gps.init();
 
+    rtt_dbg_setup_stage = 105;
     AP::compass().set_log_bit(MASK_LOG_COMPASS);
     AP::compass().init();
 
@@ -132,8 +134,7 @@ void Copter::init_ardupilot()
     USERHOOK_INIT
 #endif
 
-    // read Baro pressure at ground
-    //-----------------------------
+    rtt_dbg_setup_stage = 106;
     barometer.set_log_baro_bit(MASK_LOG_IMU);
     barometer.calibrate();
 

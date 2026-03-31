@@ -16,7 +16,7 @@ env.Append(CPPPATH = [
     os.path.join(cwd, 'packages', 'stm32f7_cmsis_driver-latest', 'Include'),
     os.path.join(cwd, 'packages', 'stm32f7_hal_driver-latest', 'Inc'),
 ])
-env.Append(CPPDEFINES = ['STM32F767xx', 'USE_HAL_DRIVER'])
+env.Append(CPPDEFINES = ['STM32F767xx', 'USE_HAL_DRIVER', 'USE_FULL_LL_DRIVER'])
 
 # Ensure hwdef.h is available at build/rtt_cuav_v5/ for both BSP code and ap_config.h
 _ap_root = os.environ.get('AP_ROOT', os.path.abspath(os.path.join(cwd, '..', '..', '..', '..', '..')))
@@ -24,13 +24,23 @@ _hwdef_dir = os.path.join(_ap_root, 'build', 'rtt_cuav_v5')
 os.makedirs(_hwdef_dir, exist_ok=True)
 _bsp_hwdef = os.path.join(cwd, 'hwdef.h')
 _dst_hwdef = os.path.join(_hwdef_dir, 'hwdef.h')
-if os.path.isfile(_bsp_hwdef) and not os.path.isfile(_dst_hwdef):
+if os.path.isfile(_bsp_hwdef):
     import shutil as _sh
     _sh.copy2(_bsp_hwdef, _dst_hwdef)
 env.Append(CPPPATH = [_hwdef_dir])
 
+# Module test build: TEST_NAME=<name> => skip ArduPilot and applications, build test firmware
+TEST_NAME = os.environ.get('TEST_NAME', '')
+
+if TEST_NAME:
+    env.Append(CPPDEFINES = ['FLASH_ORIGIN=0x08000000U'])
+    old_lflags = env.get('LINKFLAGS', '')
+    if isinstance(old_lflags, list):
+        old_lflags = ' '.join(str(v) for v in old_lflags)
+    env['LINKFLAGS'] = old_lflags.replace('link.lds', 'link_test.lds')
+
 # Full ArduPilot build: ARDUPILOT_FULL=1 => skip applications, add ArduPilot sources and link once
-ARDUPILOT_FULL = os.environ.get('ARDUPILOT_FULL', '0') == '1'
+ARDUPILOT_FULL = os.environ.get('ARDUPILOT_FULL', '0') == '1' and not TEST_NAME
 
 if ARDUPILOT_FULL:
     AP_ROOT = os.environ.get('AP_ROOT', '')
@@ -40,10 +50,9 @@ if ARDUPILOT_FULL:
     env.Append(LIBS=['stdc++', 'supc++', 'gcc'])
     env.Append(LINKFLAGS=' -Wl,--allow-multiple-definition')
     config_py = os.path.join(cwd, 'scons_ardupilot_config.py')
-    if not os.path.isfile(config_py):
-        script = os.path.join(AP_ROOT, 'Tools', 'scripts', 'scons_ardupilot_sources.py')
-        if os.path.isfile(script):
-            subprocess.check_call([sys.executable, script, AP_ROOT, '--board', 'rtt_cuav_v5', '--bsp-dir', cwd, '--output', cwd])
+    script = os.path.join(AP_ROOT, 'Tools', 'scripts', 'scons_ardupilot_sources.py')
+    if os.path.isfile(script):
+        subprocess.check_call([sys.executable, script, AP_ROOT, '--board', 'rtt_cuav_v5', '--bsp-dir', cwd, '--output', cwd])
     if os.path.isfile(config_py):
         with open(config_py) as f:
             exec(f.read())
@@ -67,11 +76,22 @@ if ARDUPILOT_FULL:
         objs.extend(list(ap_objs))
 
 for d in dirlist:
-    if ARDUPILOT_FULL and d == 'applications':
+    if (ARDUPILOT_FULL or TEST_NAME) and d == 'applications':
+        continue
+    if TEST_NAME and d == 'tests':
         continue
     path = os.path.join(cwd, d)
     if os.path.isfile(os.path.join(path, 'SConscript')):
         objs = objs + SConscript(os.path.join(path, 'SConscript'))
+
+if TEST_NAME:
+    test_dir = os.path.join(cwd, 'tests', 'test_' + TEST_NAME)
+    test_sconscript = os.path.join(test_dir, 'SConscript')
+    if os.path.isfile(test_sconscript):
+        objs = objs + SConscript(test_sconscript)
+    else:
+        print('ERROR: Test not found: %s (expected %s)' % (TEST_NAME, test_sconscript))
+        Exit(1)
 
 def _flatten_objs(lst):
     out = []

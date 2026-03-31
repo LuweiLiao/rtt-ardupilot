@@ -33,8 +33,12 @@ public:
         uint32_t period_usec, AP_HAL::Device::PeriodicCb cb) override;
     bool adjust_periodic_callback(
         AP_HAL::Device::PeriodicHandle h, uint32_t period_usec) override;
+    void set_address(uint8_t address) override { _address = address; }
     void set_split_transfers(bool set) override { _split = set; }
     void set_retries(uint8_t retries) override { _retries = retries; }
+
+    static void clear_all_buses(void);
+    static void clear_bus(uint8_t busidx);
 
 private:
     struct rt_i2c_bus_device *_bus;
@@ -44,7 +48,7 @@ private:
     uint32_t _timeout_ms;
     bool _split;
     Semaphore _sem;
-    DeviceBus _bus_dev{0};
+    DeviceBus *_bus_dev;
 };
 
 } // namespace RTT

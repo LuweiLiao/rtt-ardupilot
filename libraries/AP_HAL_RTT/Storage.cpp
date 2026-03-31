@@ -213,4 +213,14 @@ bool Storage::_flash_erase_ok(void)
     return !hal.util->get_soft_armed();
 }
 
+bool Storage::get_storage_ptr(void *&ptr, size_t &size)
+{
+    if (_initialisedType == StorageBackend::None) {
+        _storage_open();
+    }
+    ptr = _buffer;
+    size = RTT_STORAGE_SIZE;
+    return true;
+}
+
 } // namespace RTT

@@ -26,6 +26,7 @@ SPIDevice::SPIDevice(RTT_SPIDesc &desc)
     : AP_HAL::SPIDevice()
     , _desc(desc)
     , _dev(nullptr)
+    , _bus(DeviceBus::get_bus(desc.bus, 0))
 {
     set_device_bus(desc.bus);
     _dev = (struct rt_spi_device *)rt_device_find(desc.rtt_devname);
@@ -147,10 +148,16 @@ AP_HAL::Semaphore *SPIDevice::get_semaphore()
 AP_HAL::Device::PeriodicHandle SPIDevice::register_periodic_callback(
     uint32_t period_usec, AP_HAL::Device::PeriodicCb cb)
 {
-    return _bus.register_periodic_callback(period_usec, cb, this);
+    if (_bus == nullptr) {
+        return nullptr;
+    }
+    return _bus->register_periodic_callback(period_usec, cb, this);
 }
 
 bool SPIDevice::adjust_periodic_callback(AP_HAL::Device::PeriodicHandle h, uint32_t period_usec)
 {
-    return _bus.adjust_timer(h, period_usec);
+    if (_bus == nullptr) {
+        return false;
+    }
+    return _bus->adjust_timer(h, period_usec);
 }

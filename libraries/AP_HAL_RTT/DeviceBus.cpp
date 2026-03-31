@@ -1,40 +1,80 @@
 /*
- * AP_HAL_RTT — DeviceBus periodic callback implementation
+ * AP_HAL_RTT — DeviceBus: per-bus callback thread (ChibiOS-aligned)
  *
- * Uses rt_thread_delay(ticks) with 100 µs granularity (RT_TICK_PER_SECOND=10000)
- * instead of rt_thread_mdelay() for sub-ms sensor sampling precision.
- *
- * adjust_timer() atomically updates the period read by the worker thread.
+ * Single thread per physical bus iterates a linked list of callbacks,
+ * dispatching each when micros64() >= next_usec.  Sleep is computed as
+ * the time until the earliest pending callback, clamped to [100 µs, 50 ms].
+ * This mirrors ChibiOS Device.cpp::bus_thread().
  */
 
 #include "DeviceBus.h"
+#include <AP_HAL/AP_HAL.h>
 #include <rtthread.h>
 #include <string.h>
+
+extern const AP_HAL::HAL &hal;
 
 namespace RTT
 {
 
+DeviceBus *DeviceBus::_buses[MAX_BUSES] = {};
+
 DeviceBus::DeviceBus(uint8_t thread_priority)
-    : next(nullptr), _thread_priority(thread_priority)
+    : _thread_priority(thread_priority)
 {
 }
 
-struct periodic_cb_context {
-    AP_HAL::Device::PeriodicCb cb;
-    volatile uint32_t period_usec;
-    rt_thread_t thread;
-};
-
-static uint8_t _cb_thread_count = 0;
-
-static void _periodic_thread_entry(void *arg)
+DeviceBus *DeviceBus::get_bus(uint8_t bus_num, uint8_t thread_priority)
 {
-    auto *ctx = (periodic_cb_context *)arg;
-    while (true) {
-        ctx->cb();
+    if (bus_num >= MAX_BUSES) {
+        return nullptr;
+    }
+    if (_buses[bus_num] == nullptr) {
+        _buses[bus_num] = new DeviceBus(thread_priority);
+    }
+    return _buses[bus_num];
+}
 
-        uint32_t us = ctx->period_usec;
-        rt_tick_t ticks = (rt_tick_t)((uint32_t)us * RT_TICK_PER_SECOND / 1000000U);
+void DeviceBus::_bus_thread_entry(void *arg)
+{
+    DeviceBus *binfo = (DeviceBus *)arg;
+
+    while (true) {
+        uint64_t now = AP_HAL::micros64();
+        callback_info *callback;
+
+        for (callback = binfo->_callbacks; callback; callback = callback->next) {
+            if (now >= callback->next_usec) {
+                while (now >= callback->next_usec) {
+                    callback->next_usec += callback->period_usec;
+                }
+                binfo->semaphore.take_blocking();
+                callback->cb();
+                binfo->semaphore.give();
+            }
+        }
+
+        uint64_t next_needed = 0;
+        now = AP_HAL::micros64();
+
+        for (callback = binfo->_callbacks; callback; callback = callback->next) {
+            if (next_needed == 0 || callback->next_usec < next_needed) {
+                next_needed = callback->next_usec;
+                if (next_needed < now) {
+                    next_needed = now;
+                }
+            }
+        }
+
+        uint32_t delay_us = 50000;
+        if (next_needed >= now && next_needed - now < delay_us) {
+            delay_us = next_needed - now;
+        }
+        if (delay_us < 100) {
+            delay_us = 100;
+        }
+
+        rt_tick_t ticks = (rt_tick_t)((uint32_t)delay_us * RT_TICK_PER_SECOND / 1000000U);
         if (ticks == 0) {
             ticks = 1;
         }
@@ -45,33 +85,54 @@ static void _periodic_thread_entry(void *arg)
 AP_HAL::Device::PeriodicHandle DeviceBus::register_periodic_callback(
     uint32_t period_usec, AP_HAL::Device::PeriodicCb cb, AP_HAL::Device *hal_device)
 {
-    (void)hal_device;
+    if (!_thread_started) {
+        _thread_started = true;
 
-    auto *ctx = new periodic_cb_context{cb, period_usec, nullptr};
-    if (ctx == nullptr) {
+        char name[RT_NAME_MAX];
+        if (hal_device != nullptr) {
+            switch (hal_device->bus_type()) {
+            case AP_HAL::Device::BUS_TYPE_SPI:
+                rt_snprintf(name, sizeof(name), "SPI%u", (unsigned)hal_device->bus_num());
+                break;
+            case AP_HAL::Device::BUS_TYPE_I2C:
+                rt_snprintf(name, sizeof(name), "I2C%u", (unsigned)hal_device->bus_num());
+                break;
+            default:
+                rt_snprintf(name, sizeof(name), "DEV%u", (unsigned)hal_device->bus_num());
+                break;
+            }
+        } else {
+            static uint8_t anon_cnt = 0;
+            rt_snprintf(name, sizeof(name), "dcb%u", (unsigned)anon_cnt++);
+        }
+
+        uint8_t prio = _thread_priority;
+        if (prio == 0 || prio >= RT_THREAD_PRIORITY_MAX) {
+            /* Must be higher priority than boosted main (MAX/4=8) so that
+             * bus callbacks preempt wait_for_sample() DWT loops.
+             * Use MAX/6 ≈ 5 — below timer (MAX/8=4), above boosted main. */
+            prio = RT_THREAD_PRIORITY_MAX / 6;
+        }
+
+        _thread = rt_thread_create(name, _bus_thread_entry,
+                                   this, 8192, prio, 20);
+        if (_thread == nullptr) {
+            return nullptr;
+        }
+        rt_thread_startup(_thread);
+    }
+
+    auto *ci = new callback_info;
+    if (ci == nullptr) {
         return nullptr;
     }
+    ci->cb = cb;
+    ci->period_usec = period_usec;
+    ci->next_usec = AP_HAL::micros64() + period_usec;
+    ci->next = _callbacks;
+    _callbacks = ci;
 
-    char name[RT_NAME_MAX];
-    rt_snprintf(name, sizeof(name), "dcb%u", (unsigned)_cb_thread_count++);
-
-    uint8_t prio = _thread_priority;
-    if (prio == 0 || prio >= RT_THREAD_PRIORITY_MAX) {
-        prio = RT_THREAD_PRIORITY_MAX / 3;
-    }
-
-    /* 8 KB stack: the dcb thread runs the full SPI call chain
-     * (spixfer → rt_malloc_align → spi_lld_xfer → completion_wait)
-     * plus sensor data processing; 4 KB proved too small and caused
-     * stack overflow (BFSR.STKERR) after ~20 s of operation. */
-    ctx->thread = rt_thread_create(name, _periodic_thread_entry,
-                                   ctx, 8192, prio, 20);
-    if (ctx->thread) {
-        rt_thread_startup(ctx->thread);
-        return (AP_HAL::Device::PeriodicHandle)ctx;
-    }
-    delete ctx;
-    return nullptr;
+    return (AP_HAL::Device::PeriodicHandle)ci;
 }
 
 bool DeviceBus::adjust_timer(AP_HAL::Device::PeriodicHandle h, uint32_t period_usec)
@@ -79,8 +140,9 @@ bool DeviceBus::adjust_timer(AP_HAL::Device::PeriodicHandle h, uint32_t period_u
     if (h == nullptr) {
         return false;
     }
-    auto *ctx = (periodic_cb_context *)h;
-    ctx->period_usec = period_usec;
+    auto *ci = (callback_info *)h;
+    ci->period_usec = period_usec;
+    ci->next_usec = AP_HAL::micros64() + period_usec;
     return true;
 }
 

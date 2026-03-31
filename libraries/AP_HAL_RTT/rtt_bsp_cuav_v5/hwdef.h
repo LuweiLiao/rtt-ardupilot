@@ -24,19 +24,6 @@
 #define SEEK_END 2
 #endif
 
-/* GNU libc extensions missing in newlib bare-metal; polyfills in rtt_libc_compat.c */
-#include <stdarg.h>
-#include <stddef.h>
-#ifdef __cplusplus
-extern "C" {
-#endif
-int asprintf(char **strp, const char *fmt, ...) __attribute__((format(printf,2,3)));
-int vasprintf(char **strp, const char *fmt, va_list ap);
-void *memmem(const void *haystack, size_t haystacklen, const void *needle, size_t needlelen);
-#ifdef __cplusplus
-}
-#endif
-
 /* Sensor probe macros */
 #define PROBE_IMU_SPI(driver, devname, args ...) ADD_BACKEND(AP_InertialSensor_ ## driver::probe(*this,hal.spi->get_device(devname),##args))
 #define PROBE_IMU_SPI2(driver, devname1, devname2, args ...) ADD_BACKEND(AP_InertialSensor_ ## driver::probe(*this,hal.spi->get_device(devname1),hal.spi->get_device(devname2),##args))
@@ -114,10 +101,12 @@ void *memmem(const void *haystack, size_t haystacklen, const void *needle, size_
 #define HAL_WITH_EKF_DOUBLE 0
 #define HAL_LOGGING_FILESYSTEM_ENABLED 1
 #define HAL_LOGGING_MAVLINK_ENABLED 0
+#define AP_SCRIPTING_ENABLED 1
+#define SCRIPTING_DIRECTORY "/APM/scripts_rtt"
 #define AP_FILESYSTEM_POSIX_ENABLED 1
 #define AP_FILESYSTEM_POSIX_HAVE_UTIME 0
-#define AP_FILESYSTEM_POSIX_HAVE_STATFS 0
-#define HAL_BOARD_LOG_DIRECTORY "/sd/APM/LOGS"
-#define HAL_BOARD_TERRAIN_DIRECTORY "/sd/APM/TERRAIN"
-#define HAL_BOARD_STORAGE_DIRECTORY "/sd/APM/STORAGE"
+#define AP_FILESYSTEM_POSIX_HAVE_STATFS 1
+#define HAL_BOARD_LOG_DIRECTORY "/APM/LOGS"
+#define HAL_BOARD_TERRAIN_DIRECTORY "/APM/TERRAIN"
+#define HAL_BOARD_STORAGE_DIRECTORY "/APM/STORAGE"
 

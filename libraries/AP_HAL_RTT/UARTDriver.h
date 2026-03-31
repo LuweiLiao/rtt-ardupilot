@@ -29,8 +29,19 @@ public:
     bool tx_pending() override;
     uint32_t txspace() override;
     uint32_t get_baud_rate() const override { return _baudrate; }
-    /* GCS_Param::queued_param_send() uses this; default 5760 is for legacy radio links */
     uint32_t bw_in_bytes_per_second() const override;
+    uint32_t get_usb_baud() const override;
+    uint8_t get_usb_parity() const override;
+
+    void disable_rxtx(void) const override;
+    bool set_options(uint16_t options) override;
+    uint16_t get_options(void) const override;
+    bool set_unbuffered_writes(bool on) override;
+    void configure_parity(uint8_t v) override;
+    void set_stop_bits(int n) override;
+    bool set_RTS_pin(bool high) override;
+    bool set_CTS_pin(bool high) override;
+    uint64_t receive_time_constraint_us(uint16_t nbytes) override;
 
     bool wait_timeout(uint16_t n, uint32_t timeout_ms) override;
 
@@ -41,6 +52,8 @@ public:
 
 #if HAL_UART_STATS_ENABLED
     void uart_info(ExpandingString &str, StatsTracker &stats, const uint32_t dt_ms) override;
+    uint32_t get_total_tx_bytes() const override { return _tx_stats_bytes; }
+    uint32_t get_total_rx_bytes() const override { return _rx_stats_bytes; }
 #endif
 
 protected:
@@ -62,6 +75,9 @@ private:
     bool _is_usb{false};
     uint8_t _usb_write_fail_count{0};
     enum flow_control _flow_control = FLOW_CONTROL_DISABLE;
+    uint16_t _last_options = 0;
+    uint32_t _tx_stats_bytes = 0;
+    uint32_t _rx_stats_bytes = 0;
 
     bool _check_usb_connected() const;
 

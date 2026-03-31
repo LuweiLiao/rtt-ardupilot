@@ -14,6 +14,7 @@
 
 #include "RCOutput.h"
 #include <AP_HAL/AP_HAL.h>
+#include <AP_Common/ExpandingString.h>
 #include <rtthread.h>
 
 #if defined(RT_USING_PWM)
@@ -187,6 +188,53 @@ void RCOutput::set_safety_pwm(uint32_t chmask, uint16_t period_us)
 {
     (void)chmask;
     (void)period_us;
+}
+
+void RCOutput::set_default_rate(uint16_t rate_hz)
+{
+    _default_rate_hz = rate_hz;
+    for (uint8_t i = 0; i < RTT_RCOUT_MAX_CHANNELS; i++) {
+        if (_freq_hz[i] == 50 || _freq_hz[i] == 0) {
+            _freq_hz[i] = rate_hz;
+        }
+    }
+}
+
+void RCOutput::set_output_mode(uint32_t mask, enum output_mode mode)
+{
+    (void)mask;
+    _output_mode = mode;
+}
+
+AP_HAL::RCOutput::output_mode RCOutput::get_output_mode(uint32_t &mask)
+{
+    mask = _enabled_mask;
+    return _output_mode;
+}
+
+void RCOutput::timer_tick(void)
+{
+    if (!_initialized) {
+        return;
+    }
+    for (uint8_t i = 0; i < _num_channels; i++) {
+        if (_enabled_mask & (1U << i)) {
+            _write_hw(i, _period_us[i]);
+        }
+    }
+}
+
+void RCOutput::timer_info(ExpandingString &str)
+{
+    str.printf("RCOutput: %u channels, default_rate=%u, mode=%u\n",
+               (unsigned)_num_channels, (unsigned)_default_rate_hz,
+               (unsigned)_output_mode);
+    for (uint8_t i = 0; i < _num_channels; i++) {
+        str.printf("  CH%u: %u us @ %u Hz %s\n",
+                   (unsigned)i, (unsigned)_period_us[i],
+                   (unsigned)_freq_hz[i],
+                   (_enabled_mask & (1U << i)) ? "EN" : "DIS");
+    }
 }
 
 } // namespace RTT

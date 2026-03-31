@@ -2212,8 +2212,19 @@ void GCS_MAVLINK::send_raw_imu()
 #if AP_INERTIALSENSOR_ENABLED
     const AP_InertialSensor &ins = AP::ins();
 
-    const Vector3f &accel = ins.get_accel(0);
-    const Vector3f &gyro = ins.get_gyro(0);
+    // RAW_IMU historically used instance 0, but on some boards the AHRS primary
+    // IMU is not instance 0; always stream the primary IMU so GCS/tests see
+    // consistent accel/gyro with ATTITUDE/EKF.
+    uint8_t imu_idx = 0;
+#if AP_AHRS_ENABLED
+    imu_idx = AP::ahrs().get_primary_accel_index();
+#endif
+    if (imu_idx >= ins.get_accel_count()) {
+        imu_idx = 0;
+    }
+
+    const Vector3f &accel = ins.get_accel(imu_idx);
+    const Vector3f &gyro = ins.get_gyro(imu_idx);
     Vector3f mag;
 #if AP_COMPASS_ENABLED
     const Compass &compass = AP::compass();
@@ -2235,7 +2246,7 @@ void GCS_MAVLINK::send_raw_imu()
         mag.y,
         mag.z,
         0,  // we use SCALED_IMU and SCALED_IMU2 for other IMUs
-        int16_t(ins.get_temperature(0)*100));
+        int16_t(ins.get_temperature(imu_idx)*100));
 #endif
 }
 
@@ -6997,6 +7008,28 @@ void GCS_MAVLINK::initialise_message_intervals_from_config_files()
 void GCS_MAVLINK::initialise_message_intervals_from_streamrates()
 {
     // this is O(n^2), but it's once at boot and across a 10-entry list...
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && APM_BUILD_COPTER_OR_HELI
+    bool all_stream_rates_zero = true;
+    for (uint8_t i = 0; i < NUM_STREAMS; i++) {
+        if (streamRates[i].get() > 0) {
+            all_stream_rates_zero = false;
+            break;
+        }
+    }
+    if (all_stream_rates_zero) {
+        // Copter traditionally defaults these to 0 and waits for a GCS request.
+        // On RTT bring-up this makes fresh or migrated parameter sets look
+        // almost silent on simple ground-station links, so seed conservative
+        // in-memory defaults without overwriting stored params.
+        streamRates[STREAM_RAW_SENSORS].set(4);
+        streamRates[STREAM_EXTENDED_STATUS].set(2);
+        streamRates[STREAM_RC_CHANNELS].set(2);
+        streamRates[STREAM_POSITION].set(2);
+        streamRates[STREAM_EXTRA1].set(10);
+        streamRates[STREAM_EXTRA2].set(4);
+        streamRates[STREAM_EXTRA3].set(2);
+    }
+#endif
     for (uint8_t i=0; all_stream_entries[i].ap_message_ids != nullptr; i++) {
         initialise_message_intervals_for_stream(all_stream_entries[i].stream_id);
     }

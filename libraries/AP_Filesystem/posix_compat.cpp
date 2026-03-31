@@ -34,6 +34,29 @@
 
 #define modecmp(str, pat) (strcmp(str, pat) == 0 ? 1: 0)
 
+static char *apfs_vasprintf(const char *fmt, va_list va)
+{
+    va_list va_copy_args;
+    va_copy(va_copy_args, va);
+    const int needed = vsnprintf(nullptr, 0, fmt, va_copy_args);
+    va_end(va_copy_args);
+    if (needed < 0) {
+        return nullptr;
+    }
+    char *buf = static_cast<char *>(malloc(static_cast<size_t>(needed) + 1U));
+    if (buf == nullptr) {
+        return nullptr;
+    }
+    va_copy(va_copy_args, va);
+    const int written = vsnprintf(buf, static_cast<size_t>(needed) + 1U, fmt, va_copy_args);
+    va_end(va_copy_args);
+    if (written < 0) {
+        free(buf);
+        return nullptr;
+    }
+    return buf;
+}
+
 /*
   map a fopen() file mode to a open() mode
  */
@@ -88,11 +111,12 @@ int apfs_fprintf(APFS_FILE *stream, const char *fmt, ...)
     CHECK_STREAM(stream, -1);
     va_list va;
     char* buf = NULL;
-    int16_t len;
+    int len = -1;
     va_start(va, fmt);
-    len = vasprintf(&buf, fmt, va);
+    buf = apfs_vasprintf(fmt, va);
     va_end(va);
-    if (len > 0) {
+    if (buf != nullptr) {
+        len = strlen(buf);
         len = AP::FS().write(stream->fd, buf, len);
         free(buf);
     }
@@ -188,8 +212,13 @@ int apfs_fclose(APFS_FILE *stream)
 
 APFS_FILE *apfs_tmpfile(void)
 {
-    char *fname = NULL;
-    if (asprintf(&fname, "tmp.%03u", unsigned(get_random16()) % 1000) <= 0) {
+    char fname_buf[16];
+    const int written = snprintf(fname_buf, sizeof(fname_buf), "tmp.%03u", unsigned(get_random16()) % 1000);
+    if (written <= 0 || static_cast<size_t>(written) >= sizeof(fname_buf)) {
+        return NULL;
+    }
+    char *fname = strdup(fname_buf);
+    if (fname == nullptr) {
         return NULL;
     }
     APFS_FILE *ret = apfs_fopen(fname, "w");

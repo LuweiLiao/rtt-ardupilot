@@ -219,7 +219,7 @@ void UARTDriver::_drain_writebuf_to_dev()
      * 硬件 UART: rt_device_write 可能阻塞等 DMA 完成，因此每次最多写一个
      * _tx_bounce 大小的块，防止长时间占用 timer 线程.
      */
-    const uint8_t max_chunks = 4;
+    const uint8_t max_chunks = _is_usb ? 8 : 4;
     for (uint8_t chunk = 0; chunk < max_chunks; chunk++) {
         uint32_t n = _writebuf.peekbytes(_tx_bounce, sizeof(_tx_bounce));
         if (n == 0) {
@@ -353,7 +353,7 @@ void UARTDriver::_timer_tick(void)
 
     if (_is_usb && _writebuf.available() > 0) {
         _usb_write_fail_count++;
-        if (_usb_write_fail_count > 20) {
+        if (_usb_write_fail_count > 100) {
             _writebuf.clear();
             _usb_write_fail_count = 0;
         }
@@ -370,8 +370,85 @@ void UARTDriver::set_flow_control(enum flow_control flow)
 #if HAL_UART_STATS_ENABLED
 void UARTDriver::uart_info(ExpandingString &str, StatsTracker &stats, const uint32_t dt_ms)
 {
-    (void)stats;
-    (void)dt_ms;
-    str.printf("RTT_UART%u baud=%lu\n", (unsigned)_port_num, (unsigned long)_baudrate);
+    const uint32_t tx_bytes = stats.tx.update(_tx_stats_bytes);
+    const uint32_t rx_bytes = stats.rx.update(_rx_stats_bytes);
+
+    if (_is_usb) {
+        str.printf("CDC%u  ", (unsigned)_port_num);
+    } else {
+        str.printf("UART%u ", (unsigned)_port_num);
+    }
+
+    str.printf("TX =%8u RX =%8u TXBD=%6u RXBD=%6u FlowCtrl=%u\n",
+               (unsigned)tx_bytes,
+               (unsigned)rx_bytes,
+               dt_ms ? (unsigned)((tx_bytes * 10000) / dt_ms) : 0u,
+               dt_ms ? (unsigned)((rx_bytes * 10000) / dt_ms) : 0u,
+               (unsigned)_flow_control);
 }
 #endif
+
+uint32_t UARTDriver::get_usb_baud() const
+{
+    if (_is_usb) {
+        return 921600;
+    }
+    return 0;
+}
+
+uint8_t UARTDriver::get_usb_parity() const
+{
+    return 0;
+}
+
+void UARTDriver::disable_rxtx(void) const
+{
+}
+
+bool UARTDriver::set_options(uint16_t options)
+{
+    _last_options = options;
+    return true;
+}
+
+uint16_t UARTDriver::get_options(void) const
+{
+    return _last_options;
+}
+
+bool UARTDriver::set_unbuffered_writes(bool on)
+{
+    (void)on;
+    return false;
+}
+
+void UARTDriver::configure_parity(uint8_t v)
+{
+    (void)v;
+}
+
+void UARTDriver::set_stop_bits(int n)
+{
+    (void)n;
+}
+
+bool UARTDriver::set_RTS_pin(bool high)
+{
+    (void)high;
+    return false;
+}
+
+bool UARTDriver::set_CTS_pin(bool high)
+{
+    (void)high;
+    return false;
+}
+
+uint64_t UARTDriver::receive_time_constraint_us(uint16_t nbytes)
+{
+    uint64_t last_receive_us = AP_HAL::micros64();
+    if (_baudrate > 0) {
+        last_receive_us += ((uint64_t)nbytes * 1000000ULL * 10) / _baudrate;
+    }
+    return last_receive_us;
+}

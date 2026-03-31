@@ -29,25 +29,17 @@
  *   0x20000000 – 0x2001FFFF  DTCM  128 KB  (CPU-only, DMA cannot access)
  *   0x20020000 – 0x2007FFFF  SRAM1 384 KB  (DMA-accessible)
  *
- * BSS/data lives in DTCM.  The RT-Thread heap must start in SRAM1 so
- * that rt_malloc'd buffers (DMA transfers, thread stacks) are always
- * DMA-accessible.  ~18 KB at the tail of DTCM is unused but avoids
- * silent DMA failures and HardFaults caused by DMA-to-DTCM writes.
+ * BSS/data starts in DTCM but may spill into SRAM1 when the firmware
+ * is large.  The heap MUST start after _ebss so it never overlaps BSS.
+ * We also enforce a minimum of SRAM1 start to keep heap DMA-accessible.
  */
-#define STM32F7_SRAM1_START  ((void *)0x20020000UL)
+#define STM32F7_SRAM1_START  0x20020000UL
 
-#if defined(__ARMCC_VERSION)
-extern int Image$$RW_IRAM1$$ZI$$Limit;
-#define HEAP_BEGIN      STM32F7_SRAM1_START
-#elif __ICCARM__
-#pragma section="CSTACK"
-#define HEAP_BEGIN      STM32F7_SRAM1_START
-#else
-extern int __bss_end;
-#define HEAP_BEGIN      STM32F7_SRAM1_START
-#endif
-
-#define HEAP_END        STM32_SRAM_END
+extern int _end;  /* after .bss AND .sram1_bss in linker script */
+#define _HEAP_AFTER_ALL  ((rt_ubase_t)&_end)
+#define HEAP_BEGIN       ((void *)((_HEAP_AFTER_ALL > STM32F7_SRAM1_START) \
+                                    ? _HEAP_AFTER_ALL : STM32F7_SRAM1_START))
+#define HEAP_END         STM32_SRAM_END
 
 void SystemClock_Config(void);
 
@@ -67,5 +59,22 @@ void SystemClock_Config(void);
 #define SPI1_TX_DMA_INSTANCE      DMA2_Stream5
 #define SPI1_TX_DMA_CHANNEL       DMA_CHANNEL_3
 #define SPI1_TX_DMA_IRQ           DMA2_Stream5_IRQn
+
+/*
+ * SPI4 uses its default DMA2 streams freed by the SPI1 remap above.
+ * Pre-define here (like SPI1) so dma_config.h #elif chains are bypassed
+ * consistently and all symbols are available in both drv_spi.c and LLD.
+ */
+#define SPI4_DMA_RX_IRQHandler    DMA2_Stream0_IRQHandler
+#define SPI4_RX_DMA_RCC           RCC_AHB1ENR_DMA2EN
+#define SPI4_RX_DMA_INSTANCE      DMA2_Stream0
+#define SPI4_RX_DMA_CHANNEL       DMA_CHANNEL_4
+#define SPI4_RX_DMA_IRQ           DMA2_Stream0_IRQn
+
+#define SPI4_DMA_TX_IRQHandler    DMA2_Stream1_IRQHandler
+#define SPI4_TX_DMA_RCC           RCC_AHB1ENR_DMA2EN
+#define SPI4_TX_DMA_INSTANCE      DMA2_Stream1
+#define SPI4_TX_DMA_CHANNEL       DMA_CHANNEL_4
+#define SPI4_TX_DMA_IRQ           DMA2_Stream1_IRQn
 
 #endif

@@ -23,6 +23,11 @@ AddOption('--v',
           type='string',
           default='ArduCopter',
           help='Vehicle (e.g. ArduCopter), for future use')
+AddOption('--test',
+          dest='test_name',
+          type='string',
+          default='',
+          help='Build a standalone module test instead of ArduPilot (e.g. l0_boot, l2_spi)')
 AddOption('--upload',
           dest='upload',
           action='store_true',
@@ -84,12 +89,15 @@ def _rtt_detect_exec_path():
     return None
 
 
-def _run_rtt_build(ap_root, target, bsp_deploy_abspath, scons_args):
+def _run_rtt_build(ap_root, target, bsp_deploy_abspath, scons_args, test_name=''):
     """Run scons (or scons -c) in bsp_deploy_abspath with ARDUPILOT_FULL=1, RTT_ROOT, RTT_EXEC_PATH."""
     rtt_root = os.path.join(ap_root, 'modules', 'rt-thread')
     env = os.environ.copy()
     env['AP_ROOT'] = ap_root
-    env['ARDUPILOT_FULL'] = '1'
+    if test_name:
+        env['TEST_NAME'] = test_name
+    else:
+        env['ARDUPILOT_FULL'] = '1'
     env['RTT_ROOT'] = rtt_root
     rtt_exec = _rtt_detect_exec_path()
     if rtt_exec:
@@ -129,16 +137,17 @@ if canonical_target:
         print('rtt_bsp_deploy.py not found: %s' % deploy_script, file=sys.stderr)
         Exit(1)
     # 2) Build scons args: pass through command line but drop --target, --upload, --port (skip argv[0])
+    test_name = GetOption('test_name') or ''
     scons_args = []
     i = 1
     while i < len(sys.argv):
         a = sys.argv[i]
-        if a in ('--target', '--upload', '--port', '--v'):
+        if a in ('--target', '--upload', '--port', '--v', '--test'):
             i += 1
             if i < len(sys.argv) and not sys.argv[i].startswith('-'):
                 i += 1
             continue
-        if a.startswith('--target=') or a.startswith('--upload=') or a.startswith('--port=') or a.startswith('--v='):
+        if a.startswith('--target=') or a.startswith('--upload=') or a.startswith('--port=') or a.startswith('--v=') or a.startswith('--test='):
             i += 1
             continue
         scons_args.append(a)
@@ -171,7 +180,7 @@ if canonical_target:
     if is_clean and not os.path.isdir(bsp_deploy_abspath):
         shutil.rmtree(os.path.join(ap_root, 'build', 'rtt_%s' % canonical_target), ignore_errors=True)
         Exit(0)
-    ret = _run_rtt_build(ap_root, canonical_target, bsp_deploy_abspath, scons_args)
+    ret = _run_rtt_build(ap_root, canonical_target, bsp_deploy_abspath, scons_args, test_name=test_name)
     if ret != 0:
         Exit(ret)
     # 4) If build (not clean), optionally copy rtthread.bin to build/rtt_<target>/

@@ -70,11 +70,11 @@
 #define RT_THREAD_PRIORITY_32
 #define RT_THREAD_PRIORITY_MAX 32
 /*
- * 10 kHz tick matches ChibiOS CH_CFG_ST_FREQUENCY (10000), giving
- * 100 µs scheduling granularity.  rt_thread_mdelay(ms) converts ms
- * to ticks internally, so all mdelay-based waits remain correct.
- * Scheduler::delay_microseconds() now uses rt_thread_delay(ticks)
- * for sub-millisecond precision, critical for 400 Hz main loop.
+ * 10 kHz tick — 100 µs scheduling granularity (aligned with ChibiOS).
+ * At 10 kHz, delay_microseconds(100) → ticks=1 → rt_thread_delay(1),
+ * which gives the CPU to lower-priority threads (logger, IO, storage)
+ * during wait_for_sample() instead of DWT busy-looping.
+ * ISR overhead: ~1.5% at 216 MHz — negligible for a flight controller.
  */
 #define RT_TICK_PER_SECOND 10000
 #define RT_USING_OVERFLOW_CHECK
@@ -159,12 +159,12 @@
 #define RT_USING_DFS_ELMFAT
 #define RT_DFS_ELM_CODE_PAGE 437
 #define RT_DFS_ELM_WORD_ACCESS
-#define RT_DFS_ELM_USE_LFN_3
-#define RT_DFS_ELM_USE_LFN 3
+#define RT_DFS_ELM_USE_LFN_2
+#define RT_DFS_ELM_USE_LFN 2
 #define RT_DFS_ELM_LFN_UNICODE_0
 #define RT_DFS_ELM_LFN_UNICODE 0
 #define RT_DFS_ELM_MAX_LFN 255
-#define RT_DFS_ELM_DRIVES 2
+#define RT_DFS_ELM_DRIVES 1
 #define RT_DFS_ELM_MAX_SECTOR_SIZE 4096
 #define RT_DFS_ELM_REENTRANT
 #define RT_DFS_ELM_MUTEX_TIMEOUT 3000
@@ -179,14 +179,16 @@
 #define RT_SERIAL_USING_DMA
 #define RT_SERIAL_RB_BUFSZ 64
 #define RT_USING_PIN
+/* Software I2C for IST8310 compass on I2C3 (PH7=SCL, PH8=SDA).
+ * Previously disabled because bit-bang blocked Baro calibration; now safe
+ * because DeviceBus runs callbacks in a per-bus thread, not inline. */
 #define RT_USING_I2C
-/* Software (bit-bang) I2C for IST8310 compass on I2C3 (PH7=SCL, PH8=SDA) */
-/* PH7 = port 7 * 16 + 7 = 119, PH8 = 7 * 16 + 8 = 120 */
 #define RT_USING_I2C_BITOPS
 #define BSP_USING_I2C3
 #define BSP_I2C3_SCL_PIN 119
 #define BSP_I2C3_SDA_PIN 120
 #define RT_USING_SDIO
+#define RT_MMCSD_STACK_SIZE 2048
 #define RT_USING_BLK
 #define RT_USING_SPI
 #define BSP_USING_SPI
@@ -223,10 +225,13 @@
 
 #define BSP_SPI1_RX_USING_DMA
 #define BSP_SPI1_TX_USING_DMA
-#define BSP_SPI2_RX_USING_DMA
-#define BSP_SPI2_TX_USING_DMA
-#define BSP_SPI4_RX_USING_DMA
-#define BSP_SPI4_TX_USING_DMA
+/* SPI2 DMA also disabled for same reason as SPI4. */
+// #define BSP_SPI2_RX_USING_DMA
+// #define BSP_SPI2_TX_USING_DMA
+/* SPI4 DMA disabled — DMA completion IRQ not firing, causes baro hang.
+ * Polling mode is sufficient for MS5611 @20MHz. */
+// #define BSP_SPI4_RX_USING_DMA
+// #define BSP_SPI4_TX_USING_DMA
 
 /* end of Device Drivers */
 

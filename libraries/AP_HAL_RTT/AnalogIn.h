@@ -46,6 +46,7 @@ public:
     float board_voltage() override;
     float servorail_voltage() override;
     uint16_t power_status_flags() override;
+    uint16_t accumulated_power_status_flags(void) const override { return _accumulated_power_flags; }
     void _timer_tick();
 
 private:
@@ -53,6 +54,7 @@ private:
     float _board_voltage = 5.0f;
     float _servorail_voltage = 0.0f;
     uint16_t _power_flags = 0;
+    uint16_t _accumulated_power_flags = 0;
     bool _initialized = false;
 };
 

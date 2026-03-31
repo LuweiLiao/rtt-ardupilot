@@ -36,11 +36,15 @@
 #define CONFIG_USBDEV_EP_NUM 6
 #endif
 
-/* DWC2 Configuration for STM32F7 OTG_FS */
+/* DWC2 Configuration for STM32F7 OTG_FS (total FIFO 320 words)
+ * TX1 doubled to allow two 64-byte packets queued for CDC IN endpoint */
 #define CONFIG_USB_DWC2_TX0_FIFO_SIZE (64 / 4)
-#define CONFIG_USB_DWC2_TX1_FIFO_SIZE (64 / 4)
+#define CONFIG_USB_DWC2_TX1_FIFO_SIZE (128 / 4)
 #define CONFIG_USB_DWC2_TX2_FIFO_SIZE (64 / 4)
 #define CONFIG_USB_DWC2_TX3_FIFO_SIZE (64 / 4)
+
+#define CONFIG_USBDEV_SERIAL_TX_BUFSIZE 4096
+#define CONFIG_USBDEV_SERIAL_RX_BUFSIZE 4096
 
 /* USB Host (required by usbh_core.h included from glue) */
 #ifndef CONFIG_USBHOST_DEV_NAMELEN

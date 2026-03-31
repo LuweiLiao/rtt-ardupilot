@@ -22,6 +22,15 @@
 #include "I2CDeviceManager.h"
 #include <AP_HAL/OpticalFlow.h>
 #include "Flash.h"
+#if defined(RT_USING_FINSH) && defined(MSH_USING_BUILT_IN_COMMANDS)
+#include <finsh.h>
+#endif
+
+#ifndef DEFAULT_SERIAL0_BAUD
+#define SERIAL0_BAUD 115200
+#else
+#define SERIAL0_BAUD DEFAULT_SERIAL0_BAUD
+#endif
 #if AP_SIM_ENABLED && CONFIG_HAL_BOARD != HAL_BOARD_SITL
 #include <AP_HAL/SIMState.h>
 #endif
@@ -107,6 +116,45 @@ volatile uint32_t rtt_dbg_main_loop_iterations = 0;
 volatile uint32_t rtt_dbg_loop_time_us = 0;
 volatile uint32_t rtt_dbg_loop_time_max_us = 0;
 volatile uint32_t rtt_dbg_loop_time_min_us = 0xFFFFFFFF;
+volatile uint32_t rtt_dbg_work_time_us = 0;
+volatile uint32_t rtt_dbg_work_time_max_us = 0;
+volatile uint32_t rtt_dbg_overrun_count = 0;
+volatile uint32_t rtt_dbg_fast_loop_count = 0;
+volatile uint32_t rtt_dbg_boost_calls_per_loop = 0;
+volatile uint32_t rtt_dbg_boost_total_us_per_loop = 0;
+volatile uint32_t rtt_dbg_wait_sample_us = 0;
+volatile uint32_t rtt_dbg_run_tasks_us = 0;
+volatile uint32_t rtt_dbg_extra_loop = 0;
+extern "C" volatile uint32_t rtt_cpu_idle_pct;
+
+#if defined(RT_USING_FINSH) && defined(MSH_USING_BUILT_IN_COMMANDS)
+static void ap_rate(void)
+{
+    const uint32_t idle = rtt_cpu_idle_pct;
+    const uint32_t loop_us = rtt_dbg_loop_time_us;
+    const uint32_t work_us = rtt_dbg_work_time_us;
+    const uint32_t loop_hz = (loop_us > 0) ? (1000000U / loop_us) : 0;
+    const uint32_t clamped_idle = (idle > 100U) ? 100U : idle;
+
+    rt_kprintf("cpu_idle=%lu%% load=%lu%% loop_us=%lu loop_hz=%lu\n",
+               (unsigned long)idle,
+               (unsigned long)(100U - clamped_idle),
+               (unsigned long)loop_us,
+               (unsigned long)loop_hz);
+    rt_kprintf("loop_max=%lu loop_min=%lu work_us=%lu work_max=%lu\n",
+               (unsigned long)rtt_dbg_loop_time_max_us,
+               (unsigned long)rtt_dbg_loop_time_min_us,
+               (unsigned long)work_us,
+               (unsigned long)rtt_dbg_work_time_max_us);
+    rt_kprintf("overrun=%lu fast_loop=%lu iterations=%lu boost_calls=%lu boost_us=%lu\n",
+               (unsigned long)rtt_dbg_overrun_count,
+               (unsigned long)rtt_dbg_fast_loop_count,
+               (unsigned long)rtt_dbg_main_loop_iterations,
+               (unsigned long)rtt_dbg_boost_calls_per_loop,
+               (unsigned long)rtt_dbg_boost_total_us_per_loop);
+}
+MSH_CMD_EXPORT(ap_rate, show ArduPilot CPU and loop timing stats);
+#endif
 
 struct main_loop_arg {
     RTT::Scheduler* sched;
@@ -126,31 +174,45 @@ static void _main_loop_entry(void* arg)
 
     uint32_t last_loop_us = AP_HAL::micros();
     for (;;) {
+        rtt_dbg_boost_calls_per_loop = 0;
+        rtt_dbg_boost_total_us_per_loop = 0;
+        uint32_t pre_loop_us = AP_HAL::micros();
         a->callbacks->loop();
+        uint32_t post_loop_us = AP_HAL::micros();
+        uint32_t work = post_loop_us - pre_loop_us;
+        rtt_dbg_work_time_us = work;
+        if (work > rtt_dbg_work_time_max_us) rtt_dbg_work_time_max_us = work;
+        if (work > 2500) rtt_dbg_overrun_count++;
         if (!schedulerInstance.check_called_boost()) {
             hal.scheduler->delay_microseconds(50);
         }
+        schedulerInstance.watchdog_pat();
         uint32_t now_us = AP_HAL::micros();
         uint32_t dt = now_us - last_loop_us;
         last_loop_us = now_us;
         rtt_dbg_loop_time_us = dt;
         if (dt > rtt_dbg_loop_time_max_us) rtt_dbg_loop_time_max_us = dt;
         if (dt < rtt_dbg_loop_time_min_us && dt > 0) rtt_dbg_loop_time_min_us = dt;
+        if (dt < 1500) rtt_dbg_fast_loop_count++;
         rtt_dbg_main_loop_iterations++;
     }
 }
 
 void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
 {
-    rtt_dbg_hal_run_called = 0xAAAAAAAA;  /* Magic: entered run() */
+    rtt_dbg_hal_run_called = 0xAAAAAAAA;
 
     (void)argc;
     (void)argv;
 
     ((RTT::Scheduler*)scheduler)->set_callbacks(callbacks);
+
     scheduler->init();
 
-    rtt_dbg_hal_run_called = 0xBBBBBBBB;  /* Magic: before main_loop_entry */
+    hal.serial(0)->begin(SERIAL0_BAUD);
+    hal.analogin->init();
+
+    rtt_dbg_hal_run_called = 0xBBBBBBBB;
 
     main_loop_arg arg;
     arg.sched = (RTT::Scheduler*)scheduler;

@@ -17,6 +17,10 @@ public:
                                      uint32_t bus_clock = 400000,
                                      bool use_smbus = false,
                                      uint32_t timeout_ms = 4) override;
+
+    uint32_t get_bus_mask(void) const override { return 0x04; }
+    uint32_t get_bus_mask_external(void) const override { return 0x00; }
+    uint32_t get_bus_mask_internal(void) const override { return 0x04; }
 };
 
 } // namespace RTT

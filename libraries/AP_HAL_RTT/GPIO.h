@@ -44,16 +44,28 @@ public:
                              AP_HAL::Proc fn,
                              INTERRUPT_TRIGGER_TYPE mode) override;
 
+    bool    valid_pin(uint8_t pin) const override;
+    bool    pin_to_servo_channel(uint8_t pin, uint8_t &servo_ch) const override;
+    bool    wait_pin(uint8_t pin, INTERRUPT_TRIGGER_TYPE mode, uint32_t timeout_us) override;
+    void    timer_tick(void) override;
+    bool    arming_checks(size_t buflen, char *buffer) const override;
+
+    bool    get_mode(uint8_t pin, uint32_t &mode) override;
+    void    set_mode(uint8_t pin, uint32_t mode) override;
+
 private:
     struct IRQState {
         uint8_t pin;
         irq_handler_fn_t isr_fn;
         AP_HAL::Proc     simple_fn;
         bool in_use;
+        uint32_t isr_count;
+        uint32_t last_isr_count;
     };
     static IRQState _irq_state[RTT_GPIO_MAX_IRQ];
     static void _irq_trampoline(void *args);
     IRQState* _find_or_alloc_irq(uint8_t pin);
+    bool _isr_flood_detected = false;
 };
 
 } // namespace RTT

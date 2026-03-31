@@ -45,7 +45,7 @@ FileData *AP_Filesystem_Backend::load_file(const char *filename)
         delete fd;
         return nullptr;
     }
-    if (read(d, data, st.st_size) != st.st_size) {
+    if ((size_t)read(d, data, st.st_size) != (size_t)st.st_size) {
         close(d);
         free(data);
         delete fd;

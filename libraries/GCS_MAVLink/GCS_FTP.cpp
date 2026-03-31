@@ -15,6 +15,24 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <AP_HAL/AP_HAL_Boards.h>
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wshadow"
+#endif
+#include "../../modules/rt-thread/components/libc/compilers/common/extension/sys/stat.h"
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+#ifndef _SYS_STAT_H
+#define _SYS_STAT_H
+#endif
+#ifndef _STAT_H_
+#define _STAT_H_
+#endif
+#endif
+
 #include "GCS_config.h"
 
 #if AP_MAVLINK_FTP_ENABLED
@@ -30,6 +48,12 @@
 extern const AP_HAL::HAL& hal;
 
 struct GCS_MAVLINK::ftp_state GCS_MAVLINK::ftp;
+
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+volatile uint32_t ftp_dbg_state = 0;
+volatile uint32_t ftp_dbg_opcode = 0;
+volatile uint32_t ftp_dbg_stat_count = 0;
+#endif
 
 // timeout for session inactivity
 #define FTP_SESSION_TIMEOUT 3000
@@ -54,7 +78,7 @@ bool GCS_MAVLINK::ftp_init(void) {
     }
 
     if (!hal.scheduler->thread_create(FUNCTOR_BIND_MEMBER(&GCS_MAVLINK::ftp_worker, void),
-                                      "FTP", 2560, AP_HAL::Scheduler::PRIORITY_IO, 0)) {
+                                      "FTP", 16384, AP_HAL::Scheduler::PRIORITY_IO, 0)) {
         goto failed;
     }
 
@@ -183,13 +207,25 @@ void GCS_MAVLINK::ftp_worker(void) {
     pending_ftp reply = {};
     reply.session = -1; // flag the reply as invalid for any reuse
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    extern volatile uint32_t ftp_dbg_state;
+    extern volatile uint32_t ftp_dbg_opcode;
+    ftp_dbg_state = 1;
+#endif
+
     while (true) {
         bool skip_push_reply = false;
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        ftp_dbg_state = 10;
+#endif
         while (ftp.requests == nullptr || !ftp.requests->pop(request)) {
-            // nothing to handle, delay ourselves a bit then check again. Ideally we'd use conditional waits here
             hal.scheduler->delay(2);
         }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        ftp_dbg_state = 20;
+        ftp_dbg_opcode = static_cast<uint32_t>(request.opcode);
+#endif
 
         // if it's a rerequest and we still have the last response then send it
         if ((request.sysid == reply.sysid) && (request.compid == reply.compid) &&
@@ -238,13 +274,15 @@ void GCS_MAVLINK::ftp_worker(void) {
                 ftp.current_session = -1;
             }
             // dispatch the command as needed
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            ftp_dbg_state = 30 + static_cast<uint32_t>(request.opcode);
+#endif
             switch (request.opcode) {
                 case FTP_OP::None:
                     reply.opcode = FTP_OP::Ack;
                     break;
                 case FTP_OP::TerminateSession:
                 case FTP_OP::ResetSessions:
-                    // we already handled this, just listed for completeness
                     if (ftp.fd != -1) {
                         AP::FS().close(ftp.fd);
                         ftp.fd = -1;
@@ -279,20 +317,62 @@ void GCS_MAVLINK::ftp_worker(void) {
 
                         request.data[sizeof(request.data) - 1] = 0; // ensure the path is null terminated
 
-                        // get the file size
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                        ftp_dbg_state = 340;
+#endif
+                        size_t file_size = 0;
+
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                        const bool rtt_use_open_first = (((const char *)request.data)[0] != '@');
+                        ftp_dbg_state = 342;
+                        if (rtt_use_open_first) {
+                            ftp.fd = AP::FS().open((char *)request.data, O_RDONLY);
+                        } else {
+                            struct stat st;
+                            if (AP::FS().stat((char *)request.data, &st)) {
+                                ftp_dbg_state = 341;
+                                ftp_error(reply, FTP_ERROR::FailErrno);
+                                break;
+                            }
+                            ftp_dbg_state = 342;
+                            file_size = st.st_size;
+                            ftp.fd = AP::FS().open((char *)request.data, O_RDONLY);
+                        }
+#else
+                        // get the file size before opening
                         struct stat st;
                         if (AP::FS().stat((char *)request.data, &st)) {
                             ftp_error(reply, FTP_ERROR::FailErrno);
                             break;
                         }
-                        const size_t file_size = st.st_size;
+                        file_size = st.st_size;
 
                         // actually open the file
                         ftp.fd = AP::FS().open((char *)request.data, O_RDONLY);
+#endif
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                        ftp_dbg_state = 343;
+                        extern volatile uint32_t ftp_dbg_stat_count;
+                        if (ftp.fd == -1) {
+                            ftp_dbg_stat_count = (uint32_t)errno;
+                        }
+#endif
                         if (ftp.fd == -1) {
                             ftp_error(reply, FTP_ERROR::FailErrno);
                             break;
                         }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                        if (rtt_use_open_first) {
+                            const int32_t end_pos = AP::FS().lseek(ftp.fd, 0, SEEK_END);
+                            if (end_pos < 0 || AP::FS().lseek(ftp.fd, 0, SEEK_SET) < 0) {
+                                AP::FS().close(ftp.fd);
+                                ftp.fd = -1;
+                                ftp_error(reply, FTP_ERROR::FailErrno);
+                                break;
+                            }
+                            file_size = (size_t)end_pos;
+                        }
+#endif
                         ftp.mode = FTP_FILE_MODE::Read;
                         ftp.current_session = request.session;
 
@@ -504,8 +584,10 @@ void GCS_MAVLINK::ftp_worker(void) {
                             auto *port = mavlink_comm_port[request.chan];
                             if (port != nullptr && port->get_flow_control() != AP_HAL::UARTDriver::FLOW_CONTROL_ENABLE) {
                                 const uint32_t bw = port->bw_in_bytes_per_second();
-                                const uint16_t pkt_size = PAYLOAD_SIZE(request.chan, FILE_TRANSFER_PROTOCOL) - (sizeof(reply.data) - max_read);
-                                burst_delay_ms = 3000 * pkt_size / bw;
+                                if (bw > 0) {
+                                    const uint16_t pkt_size = PAYLOAD_SIZE(request.chan, FILE_TRANSFER_PROTOCOL) - (sizeof(reply.data) - max_read);
+                                    burst_delay_ms = 3000 * pkt_size / bw;
+                                }
                             }
                         }
 
@@ -587,9 +669,15 @@ void GCS_MAVLINK::ftp_worker(void) {
         }
 
         if (!skip_push_reply) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            ftp_dbg_state = 90;
+#endif
             ftp_push_replies(reply);
         }
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        ftp_dbg_state = 100;
+#endif
         continue;
     }
 }
@@ -621,12 +709,28 @@ int GCS_MAVLINK::gen_dir_entry(char *dest, size_t space, const char *path, const
         const uint8_t max_name_len = 255U;
 #endif
         const size_t full_path_len = strlen(path) + strnlen(entry->d_name, max_name_len);
-        char full_path[full_path_len + 2];
-        hal.util->snprintf(full_path, sizeof(full_path), "%s/%s", path, entry->d_name);
-        struct stat st;
-        if (AP::FS().stat(full_path, &st)) {
+        if (full_path_len > 240) {
             return -1;
         }
+        char full_path[256];
+        hal.util->snprintf(full_path, sizeof(full_path), "%s/%s", path, entry->d_name);
+        struct stat st;
+        memset(&st, 0, sizeof(st));
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        extern volatile uint32_t ftp_dbg_state;
+        extern volatile uint32_t ftp_dbg_stat_count;
+        ftp_dbg_state = 300;
+        ftp_dbg_stat_count++;
+#endif
+        if (AP::FS().stat(full_path, &st)) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            ftp_dbg_state = 301;
+#endif
+            return -1;
+        }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        ftp_dbg_state = 310;
+#endif
 
 #if !AP_FILESYSTEM_HAVE_DIRENT_DTYPE
         if (S_ISDIR(st.st_mode)) {
@@ -641,28 +745,41 @@ int GCS_MAVLINK::gen_dir_entry(char *dest, size_t space, const char *path, const
 
 // list the contents of a directory, skip the offset number of entries before providing data
 void GCS_MAVLINK::ftp_list_dir(struct pending_ftp &request, struct pending_ftp &response) {
-    response.offset = request.offset; // this should be set for any failure condition for debugging
+    response.offset = request.offset;
 
-    // sanity check that our the request looks well formed
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    extern volatile uint32_t ftp_dbg_state;
+    ftp_dbg_state = 200;
+#endif
+
     if (!ftp_check_name_len(request)) {
         ftp_error(response, FTP_ERROR::InvalidDataSize);
         return;
     }
 
-    request.data[sizeof(request.data) - 1] = 0; // ensure the path is null terminated
+    request.data[sizeof(request.data) - 1] = 0;
 
-    // Strip trailing /
     const size_t dir_len = strlen((char *)request.data);
     if ((dir_len > 1) && (request.data[dir_len - 1] == '/')) {
         request.data[dir_len - 1] = 0;
     }
 
-    // open the dir
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    ftp_dbg_state = 210;
+#endif
+
     auto *dir = AP::FS().opendir((char *)request.data);
     if (dir == nullptr) {
         ftp_error(response, FTP_ERROR::FailErrno);
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        ftp_dbg_state = 211;
+#endif
         return;
     }
+
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    ftp_dbg_state = 220;
+#endif
 
     // burn the entries we don't care about
     while (request.offset > 0) {
@@ -683,26 +800,36 @@ void GCS_MAVLINK::ftp_list_dir(struct pending_ftp &request, struct pending_ftp &
         request.offset--;
     }
 
-    // start packing in entries that fit
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    ftp_dbg_state = 230;
+#endif
+
     uint8_t index = 0;
     struct dirent *entry;
     while ((entry = AP::FS().readdir(dir))) {
-        // figure out if we can fit the file
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        ftp_dbg_state = 240;
+#endif
         const int required_space = gen_dir_entry((char *)(response.data + index), sizeof(response.data) - index, (char *)request.data, entry);
 
-        // couldn't ever send this so drop it
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        ftp_dbg_state = 250;
+#endif
+
         if (required_space < 0) {
             continue;
         }
 
-        // can't fit it in this one, leave it for the next list to send
         if ((required_space + index) >= (int)sizeof(request.data)) {
             break;
         }
 
-        // step the index forward and keep going
         index += required_space + 1;
     }
+
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    ftp_dbg_state = 260;
+#endif
 
     if (index == 0) {
         ftp_error(response, FTP_ERROR::EndOfFile);

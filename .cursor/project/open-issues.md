@@ -1,5 +1,29 @@
 # Open Issues
 
+## Issue: `RAW_IMU` 加速度字段仍为 0，和 AHRS/Baro/Compass 成功状态不一致
+- 级别：高
+- 现象：`test_h5_sensors.py` 与 `run_all.py` 都稳定复现 `RAW_IMU.xacc/yacc/zacc = 0`，但同一轮测试中 `Compass`、`SCALED_PRESSURE`、`ATTITUDE`、`EKF_STATUS_REPORT` 均正常
+- 当前判断：`GCS_MAVLINK::send_raw_imu()` 长期固定使用 `ins.get_accel(0)`；若 AHRS 主 IMU 不是实例 0，则 `RAW_IMU` 与 `ATTITUDE`/EKF 不一致，加速度可长期为 0
+- 已做修复：`GCS_Common.cpp` 中改为使用 `AP::ahrs().get_primary_accel_index()`（并做越界回退到 0），温度同步用同一实例
+- 下一步：刷固件后重跑 `test_h5_sensors.py` 确认 `RAW_IMU` 加速度非零
+
+## Issue: `REQUEST_DATA_STREAM` 频率不稳定/不可预测（USB CDC + reboot 场景尤甚）；建议以 `SET_MESSAGE_INTERVAL` 为准
+- 级别：中
+- 现象：
+  - `tests/test_set_message_interval.py` 已复测稳定：ACK=ACCEPTED，`ATTITUDE/RAW_IMU/SYS_STATUS` 可达 ~10Hz（更符合 ChibiOS 语义与主流 GCS 推荐用法）
+  - `tests/test_mavlink_rates.py` 在包含 reboot 的场景下，USB CDC 会出现枚举/连接抖动，导致“统计窗口内读不到包/读包速率波动”，从而把 `REQUEST_DATA_STREAM` 结果测得很低或波动；去掉 reboot 后也可见 `REQUEST_DATA_STREAM` 为 best-effort（可能覆盖/改变当前流率，且不一定严格达到请求值）
+- 当前判断：`SET_MESSAGE_INTERVAL` 生效路径本身并未回归；`REQUEST_DATA_STREAM` 属 legacy/best-effort，且在 USB CDC + 自动 reboot 测试链里更容易被主机侧抖动放大。
+- 下一步：
+  - 频率对齐与自动化回归以 `SET_MESSAGE_INTERVAL` 为主；
+  - 若必须覆盖 `REQUEST_DATA_STREAM`，建议只请求必要 stream（避免 ALL flooding）并延长统计窗口，同时避免在同一脚本里强制 reboot。
+
+## Issue: 大日志 `LOG_REQUEST_DATA` 下载未闭环，小日志可完整下载
+- 级别：中
+- 现象：`tests/test_log_download.py` 可列出日志并开始下载，但对当前最新大日志（约 37MB）会在 `35053290 / 37040128` 处提前结束；同一轮手工探针下载较小日志（log 14，约 1.6MB）则可 100% 完成
+- 当前判断：基础 `LOG_REQUEST_LIST/LOG_REQUEST_DATA` 协议链已通，长传时 USB CDC 侧易出现间歇停顿，需客户端从当前 offset 重发 `LOG_REQUEST_DATA`
+- 已做修复：`tests/test_log_download.py` 增加 stall 检测、从 `len(data)` 续传、整体超时放宽
+- 下一步：实机重跑大日志下载；若仍失败再区分固件侧提前结束与纯链路问题
+
 ## Issue: SPI LLD 仅覆盖 SPI1，SPI2/SPI4 仍走 HAL 路径
 - 级别：低
 - 现象：SPI1 (IMU) 已使用 LLD，但 SPI4 (Baro) 等仍走 HAL DMA 路径
@@ -16,7 +40,8 @@
 - 级别：中
 - 现象：`list thread` 显示 `mmcsd_detect` 栈使用 90%（1KB 栈）
 - 当前判断：接近栈溢出边界，RT-Thread SD 卡检测线程默认栈偏小
-- 下一步：考虑在 rtconfig.h 中增大 MMCSD 线程栈，或监测是否实际溢出
+- **已修复**：2026-03-31 将 `RT_MMCSD_STACK_SIZE` 从 2048 增大到 4096（`rtconfig.h`）
+- 下一步：插卡验证实际栈使用率
 
 ## Issue: RCOutput 缺 DShot / 安全开关 / IOMCU
 - 级别：高
@@ -55,12 +80,11 @@
 - 当前判断：与 `HAL_WITH_EKF_DOUBLE` 和堆裕量相关
 - 下一步：统计 RAM 占用来源
 
-## Issue: CH343 USB-TTL 在 WSL2 无驱动
+## Issue: CH343 USB-TTL 在 WSL2 无驱动 [仅 WSL2 环境]
 - 级别：低（不影响调试）
 - 现象：CH343（VID:PID 1A86:55D3）attach 到 WSL2 后不出现 `/dev/ttyUSB*`
-- 当前判断：WSL2 内核 ch341.ko 只匹配 1A86:7523（CH340/CH341），不匹配 CH343 的 55D3
-- 解决方案：从 Windows 端直接用 COM33 连接 UART7 即可
-- 下一步：无需修复，已有 Windows 端替代方案
+- 当前状态：物理 Ubuntu 24.04（kernel 6.17）原生支持 CH343，映射为 `/dev/ttyACM0`
+- 解决方案：物理机直接可用；WSL2 需从 Windows 端读
 
 ---
 
@@ -104,3 +128,12 @@
 
 ### ~~Issue: 干净 clone 无法编译~~ [已关闭 2026-03-28]
 - **结论**：修复 .gitmodules URL、自动下载 packages、自动生成 ap_config.h、newlib polyfill。已在 /tmp 干净 clone 验证通过。
+
+### ~~Issue: `AP_Scripting` 编入后延时 HardFault~~ [已关闭 2026-03-30]
+- **结论**：实际是两层问题叠加，不是 Lua 运行时本身。第一层是 RTT `log_io` 默认 2KB 栈下溢，踩坏内建 `thread_timer` 后在 `rt_timer_check()->blx 0` 崩溃，已通过 RTT 上把 `HAL_LOGGING_STACK_SIZE` 提到 4KB 修复。第二层是 RTT POSIX `stat()` ABI mismatch：C++ 侧 `struct stat` 仍为 60B，而 DFS/ELM-FAT C 侧按 88B 写入，`log_io` 在线程里走 `AP::FS().stat() -> f_stat()/get_fileinfo()` 时持续踩坏栈，表现成后续 `UNALIGNED/FORCED HardFault` 和看似随机的坏异常帧。给 `AP_Filesystem_Posix::stat()` 增加 RTT 专用 C wrapper 后，固件已稳定跨过约 40s 和约 80s 观测窗，`rtt_dbg_hardfault_*` 保持为 0。
+
+### ~~Issue: RTT 本地 POSIX `struct stat` 的 C/C++ ABI 不一致~~ [已关闭 2026-03-30]
+- **结论**：仅靠在 C++ 头文件侧尝试包含 RT-Thread `sys/stat.h` 并未真正统一 ABI，GDB 仍显示 `sizeof(struct stat) == 60`。最终采用 RTT 专用 C 编译单元 `ap_rtt_posix_stat()`：在 C 侧用 RT-Thread 原生 `struct stat` 调 `stat()`，再由 `AP_Filesystem_Posix::stat()` 把 `mode/size/atime/mtime/ctime/blksize/blocks` 拷回 C++。这样本地 `stat()` 不再把 DFS 的 88B 结果写进 C++ 的 60B 栈对象。
+
+### ~~Issue: 地面站看到 RTT 版 Copter 消息频率很低~~ [已关闭 2026-03-30]
+- **结论**：根因不是 CPU、主循环或 USB CDC 吞吐，而是 RTT/Copter 在现有参数集下 `streamRates[]` 仍全为 0，导致默认消息流率几乎静默。基线观测时 `rtt_cpu_idle_pct=99`、主循环周期约 2.3ms，但默认 `ATTITUDE/RAW_IMU/SYS_STATUS` 只有约 `0.07/0.33/0.33 Hz`；显式发送 `MAV_CMD_SET_MESSAGE_INTERVAL` 后三者立刻升到约 `10Hz`，证明链路能力足够。最终修复分两层：1) 在 `HAL_RTT_Class.cpp` 新增 UART7 `ap_rate` 命令用于直接观测 CPU/loop；2) 在 `GCS_Common.cpp::initialise_message_intervals_from_streamrates()` 中对 RTT/Copter 增加运行时 fallback：若 `streamRates[]` 整组为 0，则仅在内存中填入保守默认值再初始化 message intervals。修复后，不发送 `SET_MESSAGE_INTERVAL` 时默认 `ATTITUDE/RAW_IMU/SYS_STATUS` 已提升到约 `5.86/4.07/2.00 Hz`。

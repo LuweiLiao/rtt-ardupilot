@@ -46,7 +46,7 @@ private:
     RTT_SPIDesc &_desc;
     struct rt_spi_device *_dev;
     Semaphore _sem;
-    DeviceBus _bus{0};
+    DeviceBus *_bus;
     bool _cs_held = false;
 };
 

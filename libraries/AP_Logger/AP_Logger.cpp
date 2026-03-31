@@ -40,7 +40,11 @@ extern const AP_HAL::HAL& hal;
 #endif
 
 #ifndef HAL_LOGGING_STACK_SIZE
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#define HAL_LOGGING_STACK_SIZE 4096
+#else
 #define HAL_LOGGING_STACK_SIZE 1580
+#endif
 #endif
 
 #ifndef HAL_LOGGING_MAV_BUFSIZE
@@ -1452,7 +1456,6 @@ void AP_Logger::io_thread(void)
             hal.util->log_stack_info();
         }
 
-        // check for saving a crash dump file every 5s
         if (!done_crash_dump_save &&
             now - last_crash_check_us > 5000000U) {
             last_crash_check_us = now;

@@ -43,6 +43,12 @@ public:
     void set_safety_pwm(uint32_t chmask, uint16_t period_us);
     uint32_t get_num_channels() const { return _num_channels; }
 
+    void set_default_rate(uint16_t rate_hz) override;
+    void set_output_mode(uint32_t mask, enum output_mode mode) override;
+    enum output_mode get_output_mode(uint32_t &mask) override;
+    void timer_tick(void) override;
+    void timer_info(ExpandingString &str) override;
+
 private:
     uint16_t _period_us[RTT_RCOUT_MAX_CHANNELS];
     uint16_t _pending_us[RTT_RCOUT_MAX_CHANNELS];
@@ -50,6 +56,8 @@ private:
     uint16_t _freq_hz[RTT_RCOUT_MAX_CHANNELS];
     uint32_t _enabled_mask = 0;
     uint8_t _num_channels = 0;
+    uint16_t _default_rate_hz = 50;
+    enum output_mode _output_mode = MODE_PWM_NORMAL;
     bool _corked = false;
     bool _initialized = false;
 

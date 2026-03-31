@@ -40,6 +40,27 @@ uint32_t lua_scripts::loaded_checksum;
 uint32_t lua_scripts::running_checksum;
 HAL_Semaphore lua_scripts::crc_sem;
 
+/*
+ * Protect the top-level scripting panic setjmp/longjmp path the same way as
+ * luaD_rawrunprotected(). Without this, a Lua panic can clobber callee-saved
+ * VFP registers on Cortex-M hard-float builds and surface later as INVSTATE
+ * during unrelated RT-Thread context switches.
+ */
+#pragma GCC push_options
+#pragma GCC optimize ("O0")
+int lua_scripts::panic_setjmp_protected(void)
+{
+#if defined(__VFP_FP__) && !defined(__SOFTFP__)
+    __asm__ volatile("vpush {s16-s31}");
+#endif
+    const int ret = setjmp(panic_jmp);
+#if defined(__VFP_FP__) && !defined(__SOFTFP__)
+    __asm__ volatile("vpop {s16-s31}");
+#endif
+    return ret;
+}
+#pragma GCC pop_options
+
 // return string error message for error object at top of stack
 static const char *get_error_object_message(lua_State *L) {
     const char *m = lua_tostring(L, -1);
@@ -480,7 +501,7 @@ void lua_scripts::run(void) {
     }
 
     // panic should be hooked first
-    if (setjmp(panic_jmp)) {
+    if (panic_setjmp_protected()) {
         if (!succeeded_initial_load) {
             return;
         }

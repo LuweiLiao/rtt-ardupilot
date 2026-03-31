@@ -83,6 +83,7 @@ private:
     // lua panic handler, will jump back to the start of run
     static int atpanic(lua_State *L);
     static jmp_buf panic_jmp;
+    static int panic_setjmp_protected(void);
 
     lua_State *lua_state;
 

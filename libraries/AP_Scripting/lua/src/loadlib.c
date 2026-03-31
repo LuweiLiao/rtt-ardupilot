@@ -574,6 +574,7 @@ static int searcher_preload (lua_State *L) {
 
 static void findloader (lua_State *L, const char *name) {
   luaL_Buffer msg;  /* to build error message */
+  int i __attribute__((unused));
   luaL_buffinit(L, &msg);
   lua_pushstring(L, name);
 #if defined(ARDUPILOT_BUILD)

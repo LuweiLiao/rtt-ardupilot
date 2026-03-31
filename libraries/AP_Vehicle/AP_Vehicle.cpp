@@ -299,19 +299,22 @@ AP_Vehicle& vehicle = *AP_Vehicle::get_singleton();
 extern AP_Vehicle& vehicle;
 #endif
 
+volatile uint32_t rtt_dbg_setup_stage = 0;
+
 /*
   setup is called when the sketch starts
  */
 void AP_Vehicle::setup()
 {
-    // load the default values of variables listed in var_info[]
+    rtt_dbg_setup_stage = 1;
     AP_Param::setup_sketch_defaults();
 
+    rtt_dbg_setup_stage = 2;
 #if AP_SERIALMANAGER_ENABLED
-    // initialise serial port
     serial_manager.init_console();
 #endif
 
+    rtt_dbg_setup_stage = 3;
     DEV_PRINTF("\n\nInit %s"
                         "\n\nFree RAM: %u\n",
                         AP::fwversion().fw_string,
@@ -321,9 +324,11 @@ void AP_Vehicle::setup()
     check_firmware_print();
 #endif
 
+    rtt_dbg_setup_stage = 4;
     // validate the static parameter table, then load persistent
     // values from storage:
     AP_Param::check_var_info();
+    rtt_dbg_setup_stage = 5;
     load_parameters();
 
 #if CONFIG_HAL_BOARD == HAL_BOARD_CHIBIOS
@@ -347,28 +352,27 @@ void AP_Vehicle::setup()
     G_Dt = scheduler.get_loop_period_s();
 #endif
 
+    rtt_dbg_setup_stage = 6;
     // this is here for Plane; its failsafe_check method requires the
     // RC channels to be set as early as possible for maximum
     // survivability.
     set_control_channels();
 
+    rtt_dbg_setup_stage = 7;
 #if HAL_GCS_ENABLED
-    // initialise serial manager as early as sensible to get
-    // diagnostic output during boot process.  We have to initialise
-    // the GCS singleton first as it sets the global mavlink system ID
-    // which may get used very early on.
     gcs().init();
 #endif
 
+    rtt_dbg_setup_stage = 8;
 #if AP_SERIALMANAGER_ENABLED
 #if HAL_WITH_IO_MCU
     if (BoardConfig.io_enabled()) {
         serial_manager.set_protocol_and_baud(HAL_UART_IOMCU_IDX, AP_SerialManager::SerialProtocol_IOMCU, 0);
     }
 #endif
-    // initialise serial ports
     serial_manager.init();
 #endif
+    rtt_dbg_setup_stage = 9;
 #if HAL_GCS_ENABLED
     gcs().setup_console();
 #endif
@@ -377,7 +381,9 @@ void AP_Vehicle::setup()
 #if AP_SCRIPTING_SERIALDEVICE_ENABLED
     // must be done now so ports are registered and drivers get set up properly
     // (in particular mavlink which checks during init_ardupilot())
-    scripting.init_serialdevice_ports();
+    if (false) {
+        scripting.init_serialdevice_ports();
+    }
 #endif
 #endif
 
@@ -410,12 +416,15 @@ void AP_Vehicle::setup()
     stats.init();
 #endif
 
+    rtt_dbg_setup_stage = 10;
     BoardConfig.init();
 
+    rtt_dbg_setup_stage = 11;
 #if HAL_CANMANAGER_ENABLED
     can_mgr.init();
 #endif
 
+    rtt_dbg_setup_stage = 12;
 #if HAL_LOGGING_ENABLED
     logger.init(get_log_bitmask(), get_log_structures(), get_num_log_structures());
 #endif
@@ -425,6 +434,7 @@ void AP_Vehicle::setup()
     AP::gripper().init();
 #endif
 
+    rtt_dbg_setup_stage = 13;
     // init_ardupilot is where the vehicle does most of its initialisation.
     init_ardupilot();
 
@@ -1087,7 +1097,9 @@ void AP_Vehicle::one_Hz_update(void)
     }
 
 #if AP_SCRIPTING_ENABLED
-    scripting.update();
+    if (false) {
+        scripting.update();
+    }
 #endif
 
 #if HAL_LOGGING_ENABLED && HAL_UART_STATS_ENABLED

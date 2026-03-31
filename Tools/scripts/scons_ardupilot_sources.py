@@ -79,6 +79,18 @@ def _glob_library_sources(ap_root, lib_name):
     return collected
 
 
+def _glob_subdir_sources(ap_root, rel_dir):
+    abs_dir = os.path.join(ap_root, rel_dir)
+    if not os.path.isdir(abs_dir):
+        return []
+    collected = []
+    for ext in SOURCE_EXTS:
+        for p in glob.glob(os.path.join(abs_dir, ext)):
+            if os.path.isfile(p):
+                collected.append(os.path.relpath(p, ap_root))
+    return collected
+
+
 def _collect_sources(ap_root, bsp_dir, rtt_root):
     ap_root = os.path.abspath(ap_root)
     bsp_dir = os.path.abspath(bsp_dir)
@@ -118,14 +130,16 @@ def _collect_sources(ap_root, bsp_dir, rtt_root):
                     if not rel.startswith('libraries/AP_HAL_RTT/rtt_bsp_'):
                         sources.append(rel)
 
+    # SCons full-build for RTT can enable scripting from hwdef.h, so include
+    # both AP_Scripting wrappers and bundled Lua runtime sources.
+    sources.extend(_glob_library_sources(ap_root, 'AP_Scripting'))
+    sources.extend(_glob_subdir_sources(ap_root, os.path.join('libraries', 'AP_Scripting', 'lua', 'src')))
+    generated_lua_bindings = os.path.join(ap_root, 'build', 'rtt_cuav_v5', 'libraries', 'AP_Scripting', 'lua_generated_bindings.cpp')
+    if os.path.isfile(generated_lua_bindings):
+        sources.append(generated_lua_bindings)
+
     # BSP HAL, HAL_Drivers, system_stm32h7xx: not added here; RTT BSP already builds
     # board/ and packages/ via its SConscript, so we avoid duplicate symbols.
-
-    # Exclude files incompatible with bare-metal newlib (no vasprintf/asprintf)
-    exclude_suffixes = [
-        'AP_Filesystem/posix_compat.cpp',
-    ]
-    sources = [s for s in sources if not any(s.endswith(e) for e in exclude_suffixes)]
 
     return sources
 
@@ -183,6 +197,7 @@ def _collect_defines_h7():
         'CONFIG_HAL_BOARD=HAL_BOARD_RTT',
         'USE_HAL_DRIVER=1',
         'STM32H743xx=1',
+        'ARM_MATH_CM7=1',
         'USE_FLASH_ECC=0',
         'USE_SDIO_TRANSCEIVER=0',
         'USE_MULTI_CORE_SHARED_CODE=0',
@@ -190,6 +205,7 @@ def _collect_defines_h7():
         'LSI_VALUE=32000',
         'HAL_WITH_RAMTRON=1',
         'HAL_STORAGE_SIZE=32768',
+        'LUA_32BITS=1',
         'BSP_USBD_SPEED_HSINFS=0',
         'BSP_USBD_PHY_UTMI=0',
         '__AP_LINE__=__LINE__',
@@ -206,7 +222,9 @@ def _collect_defines_f7():
         'CONFIG_HAL_BOARD=HAL_BOARD_RTT',
         'USE_HAL_DRIVER=1',
         'STM32F767xx=1',
+        'ARM_MATH_CM7=1',
         'HAL_STORAGE_SIZE=16384',
+        'LUA_32BITS=1',
         '__AP_LINE__=__LINE__',
         'APM_BUILD_DIRECTORY=APM_BUILD_ArduCopter',
         'AP_BUILD_TARGET_NAME="arducopter"',

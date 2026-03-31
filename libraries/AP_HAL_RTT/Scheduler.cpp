@@ -2,36 +2,37 @@
  * AP_HAL_RTT Scheduler — mirrors ChibiOS HAL thread architecture.
  *
  * Threads created by init():
- *   ap_timer  : 1kHz — UART _timer_tick on all ports, then _run_timers()
- *   ap_io     : 1kHz — _run_io() (registered IO callbacks)
- *   storage   : 1kHz — hal.storage->_timer_tick()
+ *   ap_monitor : 10Hz — watchdog, stuck detection, GPIO timer_tick
+ *   ap_timer   : 1kHz — _run_timers() + AnalogIn + failsafe
+ *   ap_rcout   : 1kHz — RCOutput timer_tick (PWM/DShot push cycle)
+ *   ap_rcin    : 1kHz — RCInput _timer_tick (RC protocol processing)
+ *   ap_uart    : 1kHz — UART _timer_tick() (isolated from timer callbacks)
+ *   ap_io      : 1kHz — _run_io() (registered IO callbacks)
+ *   storage    : 1kHz — hal.storage->_timer_tick()
  *
  * GCS communication is driven entirely by the main thread through the
  * standard ArduPilot delay-callback mechanism:
  *   main thread delay() → call_delay_cb() → scheduler_delay_callback()
  *     → gcs().update_receive/send() + HEARTBEAT
- *
- * delay_microseconds() uses a hybrid strategy:
- *   < 100 µs  → DWT CYCCNT busy-wait  (precise, short, no timeslice issue)
- *   >= 100 µs → rt_thread_delay()     (yields CPU, required for round-robin)
  */
 
 #include "AP_HAL_RTT/Scheduler.h"
 #include "AP_HAL_RTT/UARTDriver.h"
 #include "AP_HAL_RTT/AnalogIn.h"
+#include "AP_HAL_RTT/RCOutput.h"
+#include "AP_HAL_RTT/RCInput.h"
+#include "AP_HAL_RTT/GPIO.h"
 #include <AP_HAL/AP_HAL.h>
+#include <AP_Math/AP_Math.h>
+#include <AP_InternalError/AP_InternalError.h>
+#include <AP_Filesystem/AP_Filesystem.h>
+#include <AP_Logger/AP_Logger.h>
 #include <rtthread.h>
 
-#include <AP_RCProtocol/AP_RCProtocol_config.h>
-#if AP_RCPROTOCOL_ENABLED
-#include <AP_RCProtocol/AP_RCProtocol.h>
-#endif
 
 using namespace RTT;
 
 extern const AP_HAL::HAL& hal;
-
-bool Scheduler::_system_initialized = false;
 
 /* DWT registers for sub-tick busy-wait */
 #define DWT_CTRL_REG   (*(volatile uint32_t *)0xE0001000)
@@ -86,6 +87,48 @@ void Scheduler::_timer_thread_entry(void *arg)
 }
 
 /* ----------------------------------------------------------------
+ *  RCOutput thread — equivalent to ChibiOS _rcout_thread
+ *  1 kHz: pushes PWM/DShot output
+ * ---------------------------------------------------------------- */
+void Scheduler::_rcout_thread_entry(void *arg)
+{
+    Scheduler *sched = (Scheduler *)arg;
+
+    while (!sched->_hal_initialized) {
+        rt_thread_mdelay(1);
+    }
+
+    while (!sched->_initialized) {
+        rt_thread_mdelay(1);
+    }
+
+    while (true) {
+        /* PWM-only mode: 50Hz is sufficient since servos are 50Hz.
+         * DShot would use event-driven timing like ChibiOS. */
+        sched->delay_microseconds(20000);
+        ((RCOutput *)hal.rcout)->timer_tick();
+    }
+}
+
+/* ----------------------------------------------------------------
+ *  RCInput thread — equivalent to ChibiOS _rcin_thread
+ *  1 kHz: processes incoming RC frames
+ * ---------------------------------------------------------------- */
+void Scheduler::_rcin_thread_entry(void *arg)
+{
+    Scheduler *sched = (Scheduler *)arg;
+
+    while (!sched->_hal_initialized) {
+        rt_thread_mdelay(20);
+    }
+
+    while (true) {
+        sched->delay_microseconds(1000);
+        ((RCInput *)hal.rcin)->_timer_tick();
+    }
+}
+
+/* ----------------------------------------------------------------
  *  UART thread — separated from timer to avoid USB CDC blocking
  *  the timer callbacks (ChibiOS uses per-port threads)
  * ---------------------------------------------------------------- */
@@ -110,7 +153,7 @@ void Scheduler::_uart_thread_entry(void *arg)
 
 /* ----------------------------------------------------------------
  *  IO thread — equivalent to ChibiOS _io_thread
- *  1 kHz: registered IO callbacks (param_io_timer, etc.)
+ *  1 kHz: registered IO callbacks + SD retry + stack check
  * ---------------------------------------------------------------- */
 void Scheduler::_io_thread_entry(void *arg)
 {
@@ -120,9 +163,31 @@ void Scheduler::_io_thread_entry(void *arg)
         rt_thread_mdelay(1);
     }
 
+#if HAL_LOGGING_ENABLED
+    uint32_t last_sd_start_ms = AP_HAL::millis();
+#endif
+    uint32_t last_stack_check_ms = 0;
+
     while (true) {
         rt_thread_mdelay(1);
+
         sched->_run_io();
+
+        uint32_t now = AP_HAL::millis();
+
+#if HAL_LOGGING_ENABLED
+        if (!hal.util->get_soft_armed()) {
+            if (now - last_sd_start_ms > 3000) {
+                last_sd_start_ms = now;
+                AP::FS().retry_mount();
+            }
+        }
+#endif
+
+        if (now - last_stack_check_ms > 5000) {
+            last_stack_check_ms = now;
+            sched->_check_stack_free();
+        }
     }
 }
 
@@ -146,6 +211,36 @@ void Scheduler::_storage_thread_entry(void *arg)
 }
 
 /* ----------------------------------------------------------------
+ *  Monitor thread — equivalent to ChibiOS _monitor_thread
+ *  10 Hz: watchdog, stuck thread detection, stack checks,
+ *         GPIO timer_tick
+ * ---------------------------------------------------------------- */
+void Scheduler::_monitor_thread_entry(void *arg)
+{
+    Scheduler *sched = (Scheduler *)arg;
+
+    while (!sched->_initialized) {
+        rt_thread_mdelay(100);
+    }
+
+    while (true) {
+        rt_thread_mdelay(100);
+
+        uint32_t now = AP_HAL::millis();
+        uint32_t loop_delay = now - sched->last_watchdog_pat_ms;
+
+        if (loop_delay >= 500 && !sched->in_expected_delay()) {
+            AP::internalerror().error(AP_InternalError::error_t::main_loop_stuck,
+                                     hal.util->persistent_data.semaphore_line);
+        }
+
+#ifndef IOMCU_FW
+        hal.gpio->timer_tick();
+#endif
+    }
+}
+
+/* ----------------------------------------------------------------
  *  thread_create — equivalent to ChibiOS thread_create
  *  Used by AP_Scheduler and other subsystems to spawn worker threads.
  * ---------------------------------------------------------------- */
@@ -154,6 +249,39 @@ void Scheduler::_thread_create_trampoline(void *arg)
     auto *proc = (AP_HAL::MemberProc *)arg;
     (*proc)();
     free(proc);
+}
+
+uint8_t Scheduler::calculate_thread_priority(priority_base base, int8_t priority) const
+{
+    uint8_t prio = APM_RTT_IO_PRIORITY;
+    static const struct {
+        priority_base base;
+        uint8_t p;
+    } map[] = {
+        { PRIORITY_BOOST,     APM_RTT_MAIN_BOOST },
+        { PRIORITY_MAIN,      APM_RTT_MAIN_PRIORITY },
+        { PRIORITY_SPI,       APM_RTT_SPI_PRIORITY },
+        { PRIORITY_I2C,       APM_RTT_I2C_PRIORITY },
+        { PRIORITY_CAN,       APM_RTT_I2C_PRIORITY },
+        { PRIORITY_TIMER,     APM_RTT_TIMER_PRIORITY },
+        { PRIORITY_RCOUT,     APM_RTT_RCOUT_PRIORITY },
+        { PRIORITY_RCIN,      APM_RTT_RCIN_PRIORITY },
+        { PRIORITY_LED,       APM_RTT_LED_PRIORITY },
+        { PRIORITY_IO,        APM_RTT_IO_PRIORITY },
+        { PRIORITY_UART,      APM_RTT_UART_PRIORITY },
+        { PRIORITY_STORAGE,   APM_RTT_STORAGE_PRIORITY },
+        { PRIORITY_SCRIPTING, APM_RTT_SCRIPTING_PRIORITY },
+        { PRIORITY_NET,       APM_RTT_UART_PRIORITY },
+    };
+    for (uint8_t i = 0; i < sizeof(map)/sizeof(map[0]); i++) {
+        if (map[i].base == base) {
+            /* RT-Thread: lower number = higher priority; positive offset = higher priority */
+            int16_t p = (int16_t)map[i].p - priority;
+            prio = (uint8_t)constrain_int16(p, 1, RT_THREAD_PRIORITY_MAX - 2);
+            break;
+        }
+    }
+    return prio;
 }
 
 bool Scheduler::thread_create(AP_HAL::MemberProc proc, const char* name,
@@ -165,33 +293,7 @@ bool Scheduler::thread_create(AP_HAL::MemberProc proc, const char* name,
     }
     *tproc = proc;
 
-    uint8_t rtt_prio;
-    switch (base) {
-    case PRIORITY_BOOST:
-    case PRIORITY_TIMER:
-        rtt_prio = RT_THREAD_PRIORITY_MAX / 4;
-        break;
-    case PRIORITY_IO:
-        rtt_prio = RT_THREAD_PRIORITY_MAX / 2;
-        break;
-    case PRIORITY_STORAGE:
-        rtt_prio = RT_THREAD_PRIORITY_MAX / 2 + 2;
-        break;
-    case PRIORITY_SCRIPTING:
-    case PRIORITY_NET:
-    default:
-        rtt_prio = RT_THREAD_PRIORITY_MAX / 2 + 4;
-        break;
-    }
-    int8_t adj = priority;
-    if (adj > 0 && rtt_prio > (uint8_t)adj) {
-        rtt_prio -= adj;
-    } else if (adj < 0 && rtt_prio < (uint8_t)(RT_THREAD_PRIORITY_MAX + adj)) {
-        rtt_prio -= adj;
-    }
-    if (rtt_prio >= RT_THREAD_PRIORITY_MAX) {
-        rtt_prio = RT_THREAD_PRIORITY_MAX - 1;
-    }
+    const uint8_t rtt_prio = calculate_thread_priority(base, priority);
 
     if (stack_size < 2048) {
         stack_size = 2048;
@@ -208,52 +310,55 @@ bool Scheduler::thread_create(AP_HAL::MemberProc proc, const char* name,
 }
 
 /* ----------------------------------------------------------------
- *  init — create all HAL threads
+ *  init — create all HAL threads (mirrors ChibiOS Scheduler::init)
+ *
+ *  Thread creation order and priorities match ChibiOS:
+ *    monitor > timer = rcout > rcin > (main boost) > (main normal)
+ *            > uart = led > io > storage > scripting
  * ---------------------------------------------------------------- */
 void Scheduler::init()
 {
-    /* Timer thread must preempt the boosted main thread (priority RT_THREAD_PRIORITY_MAX/4=8).
-     * Use RT_THREAD_PRIORITY_MAX/8=4 to mirror ChibiOS: timer_thread > boosted_main > normal_main.
-     * This ensures 1kHz UART drain is never starved by priority-boosted IMU wait loops. */
+    _monitor_thread_ctx = rt_thread_create("ap_mon",
+                                           _monitor_thread_entry,
+                                           this, 2048,
+                                           APM_RTT_MONITOR_PRIORITY, 20);
+    if (_monitor_thread_ctx) rt_thread_startup(_monitor_thread_ctx);
+
     _timer_thread_ctx = rt_thread_create("ap_timer",
                                          _timer_thread_entry,
-                                         this,
-                                         8192,
-                                         RT_THREAD_PRIORITY_MAX / 8,
-                                         20);
-    if (_timer_thread_ctx) {
-        rt_thread_startup(_timer_thread_ctx);
-    }
+                                         this, 8192,
+                                         APM_RTT_TIMER_PRIORITY, 20);
+    if (_timer_thread_ctx) rt_thread_startup(_timer_thread_ctx);
+
+    _rcout_thread_ctx = rt_thread_create("ap_rcout",
+                                         _rcout_thread_entry,
+                                         this, 2048,
+                                         APM_RTT_RCOUT_PRIORITY, 20);
+    if (_rcout_thread_ctx) rt_thread_startup(_rcout_thread_ctx);
+
+    _rcin_thread_ctx = rt_thread_create("ap_rcin",
+                                        _rcin_thread_entry,
+                                        this, 2048,
+                                        APM_RTT_RCIN_PRIORITY, 20);
+    if (_rcin_thread_ctx) rt_thread_startup(_rcin_thread_ctx);
 
     _uart_thread_ctx = rt_thread_create("ap_uart",
-                                       _uart_thread_entry,
-                                       this,
-                                       4096,
-                                       RT_THREAD_PRIORITY_MAX / 4 + 2,
-                                       20);
-    if (_uart_thread_ctx) {
-        rt_thread_startup(_uart_thread_ctx);
-    }
+                                        _uart_thread_entry,
+                                        this, 4096,
+                                        APM_RTT_UART_PRIORITY, 20);
+    if (_uart_thread_ctx) rt_thread_startup(_uart_thread_ctx);
 
     _io_thread_ctx = rt_thread_create("ap_io",
                                       _io_thread_entry,
-                                      this,
-                                      8192,
-                                      RT_THREAD_PRIORITY_MAX / 2,
-                                      20);
-    if (_io_thread_ctx) {
-        rt_thread_startup(_io_thread_ctx);
-    }
+                                      this, 8192,
+                                      APM_RTT_IO_PRIORITY, 20);
+    if (_io_thread_ctx) rt_thread_startup(_io_thread_ctx);
 
     _storage_thread_ctx = rt_thread_create("storage",
-                                          _storage_thread_entry,
-                                          this,
-                                          2048,
-                                          RT_THREAD_PRIORITY_MAX / 2 + 2,
-                                          20);
-    if (_storage_thread_ctx != nullptr) {
-        rt_thread_startup(_storage_thread_ctx);
-    }
+                                           _storage_thread_entry,
+                                           this, 2048,
+                                           APM_RTT_STORAGE_PRIORITY, 20);
+    if (_storage_thread_ctx) rt_thread_startup(_storage_thread_ctx);
 
     _hal_initialized = true;
 }
@@ -265,8 +370,8 @@ void Scheduler::init()
  *  thread, which triggers scheduler_delay_callback() → GCS comms.
  *
  *  delay_microseconds():
- *    < 100 µs : DWT busy-wait (precise, no timeslice concern)
- *    >= 100 µs: rt_thread_delay() (yields CPU for round-robin)
+ *    < 1 ms  : DWT busy-wait + yield (precise, lets bus threads run)
+ *    >= 1 ms : rt_thread_delay() (yields CPU for round-robin)
  * ---------------------------------------------------------------- */
 void Scheduler::delay(uint16_t ms)
 {
@@ -290,18 +395,22 @@ void Scheduler::delay_microseconds(uint16_t us)
         return;
     }
 
-    const uint32_t tick_period_us = 1000000U / RT_TICK_PER_SECOND;
+    rt_tick_t ticks = (rt_tick_t)((uint32_t)us * RT_TICK_PER_SECOND / 1000000U);
 
-    if (us < tick_period_us) {
-        _delay_microseconds_dwt(us);
+    if (ticks > 0) {
+        rt_thread_delay(ticks);
         return;
     }
 
-    rt_tick_t ticks = (rt_tick_t)((uint32_t)us * RT_TICK_PER_SECOND / 1000000U);
-    if (ticks == 0) {
-        ticks = 1;
+    /* Sub-tick delay (< 100 µs at 10 kHz).
+     * >= 50 µs: sleep 1 tick — releases CPU to ALL priority levels
+     *           (yield only helps same/higher priority).
+     * <  50 µs: DWT spin for precise hardware timing (SPI CS setup etc). */
+    if (us >= 50) {
+        rt_thread_delay(1);
+    } else {
+        _delay_microseconds_dwt(us);
     }
-    rt_thread_delay(ticks);
 }
 
 /* ----------------------------------------------------------------
@@ -315,7 +424,7 @@ void Scheduler::delay_microseconds_boost(uint16_t us)
     if (!_priority_boosted && in_main_thread()) {
         rt_thread_t self = rt_thread_self();
         if (self) {
-            rt_uint8_t boost_prio = (rt_uint8_t)(RT_THREAD_PRIORITY_MAX / 4);
+            rt_uint8_t boost_prio = (rt_uint8_t)APM_RTT_MAIN_BOOST;
             rt_thread_control(self, RT_THREAD_CTRL_CHANGE_PRIORITY, &boost_prio);
         }
         _priority_boosted = true;
@@ -339,7 +448,7 @@ void Scheduler::boost_end(void)
         _priority_boosted = false;
         rt_thread_t self = rt_thread_self();
         if (self) {
-            rt_uint8_t normal_prio = (rt_uint8_t)(RT_THREAD_PRIORITY_MAX / 3);
+            rt_uint8_t normal_prio = (rt_uint8_t)APM_RTT_MAIN_PRIORITY;
             rt_thread_control(self, RT_THREAD_CTRL_CHANGE_PRIORITY, &normal_prio);
         }
     }
@@ -389,12 +498,19 @@ void Scheduler::register_timer_failsafe(AP_HAL::Proc failsafe, uint32_t period_u
 /* ---------------------------------------------------------------- */
 void Scheduler::reboot(bool hold_in_bootloader)
 {
-    (void)hold_in_bootloader;
-    rt_thread_mdelay(100);
-    rt_hw_cpu_reset();
-    for (;;) {
-        rt_thread_mdelay(1000);
+    hal.rcout->force_safety_on();
+
+#if HAL_LOGGING_ENABLED
+    if (AP_Logger::get_singleton()) {
+        AP::logger().StopLogging();
     }
+    AP::FS().unmount();
+#endif
+
+    (void)hold_in_bootloader;
+
+    rt_hw_interrupt_disable();
+    rt_hw_cpu_reset();
 }
 
 bool Scheduler::in_main_thread() const
@@ -404,15 +520,10 @@ bool Scheduler::in_main_thread() const
 
 void Scheduler::set_system_initialized()
 {
-    if (_system_initialized) {
+    if (_initialized) {
         AP_HAL::panic("PANIC: Scheduler::set_system_initialized called more than once");
     }
-    _system_initialized = true;
-}
-
-bool Scheduler::is_system_initialized()
-{
-    return _system_initialized;
+    _initialized = true;
 }
 
 /* ----------------------------------------------------------------
@@ -462,10 +573,6 @@ void Scheduler::_run_io()
         }
     }
 
-#if AP_RCPROTOCOL_ENABLED
-    AP::RC().update();
-#endif
-
     _in_io_proc = false;
 }
 
@@ -510,17 +617,73 @@ void Scheduler::expect_delay_ms(uint32_t ms)
 
 bool Scheduler::in_expected_delay() const
 {
-    if (!_system_initialized) {
+    if (!_initialized) {
         return true;
     }
-    if (_expect_delay_length == 0) {
-        return false;
+    if (_expect_delay_start != 0) {
+        uint32_t now = AP_HAL::millis();
+        if (now - _expect_delay_start <= _expect_delay_length) {
+            return true;
+        }
     }
-    uint32_t now = AP_HAL::millis();
-    return (now - _expect_delay_start) < _expect_delay_length;
+    return false;
+}
+
+/* ----------------------------------------------------------------
+ *  disable_interrupts_save / restore_interrupts
+ *  Mirrors ChibiOS chSysGetStatusAndLockX / chSysRestoreStatusX.
+ *  On Cortex-M this saves PRIMASK and disables IRQs.
+ * ---------------------------------------------------------------- */
+void *Scheduler::disable_interrupts_save(void)
+{
+    rt_base_t level = rt_hw_interrupt_disable();
+    return (void *)(uintptr_t)level;
+}
+
+void Scheduler::restore_interrupts(void *state)
+{
+    rt_hw_interrupt_enable((rt_base_t)(uintptr_t)state);
 }
 
 void Scheduler::watchdog_pat(void)
 {
-    /* RT-Thread independent watchdog pat — implement when IWDG is enabled */
+    last_watchdog_pat_ms = AP_HAL::millis();
+}
+
+/*
+ * _check_stack_free — mirrors ChibiOS check_stack_free
+ * Iterates RT-Thread threads and reports stack_overflow if < 64 bytes free.
+ */
+void Scheduler::_check_stack_free(void)
+{
+#ifdef RT_USING_OVERFLOW_CHECK
+    const uint32_t min_stack = 64;
+
+    struct rt_object_information *info =
+        rt_object_get_information(RT_Object_Class_Thread);
+    if (info == RT_NULL) return;
+
+    rt_enter_critical();
+    for (struct rt_list_node *node = info->object_list.next;
+         node != &(info->object_list);
+         node = node->next) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-align"
+        rt_thread_t thread = rt_list_entry(node, struct rt_thread, parent.list);
+#pragma GCC diagnostic pop
+
+        uint8_t *sp = (uint8_t *)thread->stack_addr;
+        uint32_t free = 0;
+        while (free < thread->stack_size && sp[free] == '#') {
+            free++;
+        }
+        if (free < min_stack) {
+#if AP_INTERNALERROR_ENABLED
+            uint8_t prio = RT_SCHED_PRIV(thread).current_priority;
+            AP::internalerror().error(AP_InternalError::error_t::stack_overflow, prio);
+#endif
+        }
+    }
+    rt_exit_critical();
+#endif
 }

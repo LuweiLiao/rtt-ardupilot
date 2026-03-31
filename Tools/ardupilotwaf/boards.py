@@ -1556,6 +1556,11 @@ class rtt(Board):
             'AP_HAL_RTT',
         ]
 
+        env.CXXFLAGS = [f for f in env.CXXFLAGS if f not in ('-O3', '-O2')]
+        env.CXXFLAGS += ['-Os']
+        env.CFLAGS = [f for f in env.CFLAGS if f not in ('-O3', '-O2')]
+        env.CFLAGS += ['-Os']
+
         cfg.load('rtt')
 
     def pre_build(self, bld):

@@ -1,12 +1,10 @@
 /*
- * AP_HAL_RTT — STM32 Flash driver
- * Uses STM32 HAL directly (no ChibiOS dependencies).
+ * AP_HAL_RTT — STM32 Flash driver (direct register access, no HAL).
  *
- * STM32F767 (2MB) flash layout:
+ * STM32F767 (2MB) single-bank flash layout:
  *   Pages 0-3:  32KB each
  *   Page 4:     128KB
  *   Pages 5-11: 256KB each
- *   Total: 4*32 + 128 + 7*256 = 2048KB
  */
 
 #include "Flash.h"
@@ -14,7 +12,7 @@
 #include <string.h>
 
 #ifdef STM32F767xx
-#include <stm32f7xx_hal.h>
+#include <stm32f7xx.h>
 #endif
 
 using namespace RTT;
@@ -40,6 +38,38 @@ static const uint32_t flash_memmap[STM32_FLASH_NPAGES] = {
 #else
 #error "BOARD_FLASH_SIZE not supported"
 #endif
+
+#ifdef STM32F767xx
+
+static inline int _wait_bsy(uint32_t timeout_loops)
+{
+    while (FLASH->SR & FLASH_SR_BSY) {
+        if (--timeout_loops == 0) return -1;
+    }
+    return 0;
+}
+
+static inline void _clear_errors(void)
+{
+    FLASH->SR = FLASH_SR_EOP | FLASH_SR_OPERR | FLASH_SR_WRPERR |
+                FLASH_SR_PGAERR | FLASH_SR_PGPERR | FLASH_SR_ERSERR;
+}
+
+static inline int _flash_unlock(void)
+{
+    if (FLASH->CR & FLASH_CR_LOCK) {
+        FLASH->KEYR = FLASH_KEY1;
+        FLASH->KEYR = FLASH_KEY2;
+    }
+    return (FLASH->CR & FLASH_CR_LOCK) ? -1 : 0;
+}
+
+static inline void _flash_lock(void)
+{
+    FLASH->CR |= FLASH_CR_LOCK;
+}
+
+#endif /* STM32F767xx */
 
 uint32_t Flash::getpageaddr(uint32_t page)
 {
@@ -75,32 +105,43 @@ bool Flash::erasepage(uint32_t page)
     _sem.take_blocking();
 
 #ifdef STM32F767xx
-    HAL_FLASH_Unlock();
+    _flash_unlock();
+    if (_wait_bsy(0xFFFFFFU)) {
+        if (!_keep_unlocked) _flash_lock();
+        _sem.give();
+        return false;
+    }
+    _clear_errors();
 
-    __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_EOP | FLASH_FLAG_OPERR |
-                           FLASH_FLAG_WRPERR | FLASH_FLAG_PGAERR |
-                           FLASH_FLAG_PGPERR | FLASH_FLAG_ERSERR);
+    /* PSIZE=10 (32-bit parallelism, VDD >= 2.7V) */
+    uint32_t cr = FLASH_CR_SER |
+                  ((uint32_t)page << FLASH_CR_SNB_Pos) |
+                  FLASH_CR_PSIZE_1;
+    FLASH->CR = cr;
 
-    FLASH_EraseInitTypeDef erase;
-    erase.TypeErase = FLASH_TYPEERASE_SECTORS;
-    erase.Sector = page;
-    erase.NbSectors = 1;
-    erase.VoltageRange = FLASH_VOLTAGE_RANGE_3;
-
-    uint32_t error = 0;
     rt_base_t level = rt_hw_interrupt_disable();
-    HAL_StatusTypeDef status = HAL_FLASHEx_Erase(&erase, &error);
+    FLASH->CR = cr | FLASH_CR_STRT;
+    if (_wait_bsy(0xFFFFFFFFU)) {
+        rt_hw_interrupt_enable(level);
+        FLASH->CR &= ~(FLASH_CR_SER | FLASH_CR_SNB_Msk);
+        if (!_keep_unlocked) _flash_lock();
+        _sem.give();
+        return false;
+    }
     rt_hw_interrupt_enable(level);
 
+    FLASH->CR &= ~(FLASH_CR_SER | FLASH_CR_SNB_Msk);
+    bool ok = !(FLASH->SR & (FLASH_SR_OPERR | FLASH_SR_WRPERR | FLASH_SR_ERSERR));
+
     if (!_keep_unlocked) {
-        HAL_FLASH_Lock();
+        _flash_lock();
     }
 #else
-    HAL_StatusTypeDef status = HAL_ERROR;
+    bool ok = false;
 #endif
 
     _sem.give();
-    return status == HAL_OK;
+    return ok;
 }
 
 bool Flash::write(uint32_t addr, const void *buf, uint32_t count)
@@ -112,51 +153,57 @@ bool Flash::write(uint32_t addr, const void *buf, uint32_t count)
     _sem.take_blocking();
 
 #ifdef STM32F767xx
-    HAL_FLASH_Unlock();
-
-    __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_EOP | FLASH_FLAG_OPERR |
-                           FLASH_FLAG_WRPERR | FLASH_FLAG_PGAERR |
-                           FLASH_FLAG_PGPERR | FLASH_FLAG_ERSERR);
+    _flash_unlock();
+    _clear_errors();
 
     const uint8_t *b = (const uint8_t *)buf;
-    HAL_StatusTypeDef status = HAL_OK;
+    bool ok = true;
 
     rt_base_t level = rt_hw_interrupt_disable();
 
-    while (count > 0 && status == HAL_OK) {
+    while (count > 0 && ok) {
+        if (_wait_bsy(0xFFFFFFU)) { ok = false; break; }
+
         if ((addr & 3) == 0 && count >= 4) {
+            FLASH->CR = FLASH_CR_PG | FLASH_CR_PSIZE_1;
             uint32_t val;
             memcpy(&val, b, 4);
-            status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, addr, val);
-            addr += 4;
-            b += 4;
-            count -= 4;
+            *(volatile uint32_t *)addr = val;
+            __DSB();
+            if (_wait_bsy(0xFFFFFFU)) { ok = false; break; }
+            FLASH->CR &= ~FLASH_CR_PG;
+            if (*(volatile uint32_t *)addr != val) { ok = false; break; }
+            addr += 4; b += 4; count -= 4;
         } else if ((addr & 1) == 0 && count >= 2) {
+            FLASH->CR = FLASH_CR_PG | FLASH_CR_PSIZE_0;
             uint16_t val;
             memcpy(&val, b, 2);
-            status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, addr, val);
-            addr += 2;
-            b += 2;
-            count -= 2;
+            *(volatile uint16_t *)addr = val;
+            __DSB();
+            if (_wait_bsy(0xFFFFFFU)) { ok = false; break; }
+            FLASH->CR &= ~FLASH_CR_PG;
+            addr += 2; b += 2; count -= 2;
         } else {
-            status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_BYTE, addr, *b);
-            addr++;
-            b++;
-            count--;
+            FLASH->CR = FLASH_CR_PG;
+            *(volatile uint8_t *)addr = *b;
+            __DSB();
+            if (_wait_bsy(0xFFFFFFU)) { ok = false; break; }
+            FLASH->CR &= ~FLASH_CR_PG;
+            addr++; b++; count--;
         }
     }
 
     rt_hw_interrupt_enable(level);
 
     if (!_keep_unlocked) {
-        HAL_FLASH_Lock();
+        _flash_lock();
     }
 #else
-    HAL_StatusTypeDef status = HAL_ERROR;
+    bool ok = false;
 #endif
 
     _sem.give();
-    return status == HAL_OK;
+    return ok;
 }
 
 void Flash::keep_unlocked(bool set)

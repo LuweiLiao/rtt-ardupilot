@@ -20,6 +20,7 @@
 extern int rt_hw_pin_init(void);
 extern int rt_hw_usart_init(void);
 extern void __libc_init_array(void);
+extern void rt_hw_systick_init(void);
 
 #if defined(BSP_USING_SPI) && defined(HAL_RTT_SPI_ATTACH_LIST)
 struct spi_attach_entry {
@@ -44,47 +45,80 @@ static void _spi_device_init(void)
 
 static void _mpu_config(void)
 {
-    HAL_MPU_Disable();
-
-    MPU_Region_InitTypeDef mpu;
+    __DMB();
+    MPU->CTRL = 0;
 
     /*
-     * Region 0: SRAM1+SRAM2 (0x20020000, 384KB)
-     * Normal memory, Write-Through, No Write-Allocate, Shareable
-     * DMA reads from RAM directly; CPU reads through D-Cache.
-     * Write-through ensures invalidate never discards dirty data.
+     * Region 0: All SRAM (DTCM + SRAM1 + SRAM2), base 0x20000000, 1MB
+     * Normal, Write-Through No Write-Allocate, NON-Shareable, Full Access.
+     * S=0 forces local exclusive monitor for ldrex/strex, avoiding
+     * STM32F7 AXI bus global-monitor PRECISERR on SRAM exclusive access.
      */
-    mpu.Enable           = MPU_REGION_ENABLE;
-    mpu.Number           = MPU_REGION_NUMBER0;
-    mpu.BaseAddress      = 0x20020000;
-    mpu.Size             = MPU_REGION_SIZE_512KB;
-    mpu.SubRegionDisable = 0x00;
-    mpu.TypeExtField     = MPU_TEX_LEVEL0;
-    mpu.AccessPermission = MPU_REGION_FULL_ACCESS;
-    mpu.DisableExec      = MPU_INSTRUCTION_ACCESS_ENABLE;
-    mpu.IsShareable      = MPU_ACCESS_SHAREABLE;
-    mpu.IsCacheable      = MPU_ACCESS_CACHEABLE;
-    mpu.IsBufferable     = MPU_ACCESS_NOT_BUFFERABLE;
-    HAL_MPU_ConfigRegion(&mpu);
+    MPU->RNR  = 0;
+    MPU->RBAR = 0x20000000U;
+    MPU->RASR = (0U  << 28) |  /* XN=0 */
+                (3U  << 24) |  /* AP=011 full access */
+                (0U  << 19) |  /* TEX=000 */
+                (0U  << 18) |  /* S=0 non-shareable */
+                (1U  << 17) |  /* C=1 cacheable */
+                (0U  << 16) |  /* B=0 not bufferable */
+                (0U  <<  8) |  /* SRD=0 */
+                (19U <<  1) |  /* SIZE=19 → 1MB */
+                (1U  <<  0);   /* ENABLE */
 
     /*
      * Region 1: Peripheral space (0x40000000, 512MB)
-     * Device memory, non-cacheable, non-bufferable
+     * Device, non-cacheable, Shareable, Full Access, XN
      */
-    mpu.Enable           = MPU_REGION_ENABLE;
-    mpu.Number           = MPU_REGION_NUMBER1;
-    mpu.BaseAddress      = 0x40000000;
-    mpu.Size             = MPU_REGION_SIZE_512MB;
-    mpu.SubRegionDisable = 0x00;
-    mpu.TypeExtField     = MPU_TEX_LEVEL0;
-    mpu.AccessPermission = MPU_REGION_FULL_ACCESS;
-    mpu.DisableExec      = MPU_INSTRUCTION_ACCESS_DISABLE;
-    mpu.IsShareable      = MPU_ACCESS_SHAREABLE;
-    mpu.IsCacheable      = MPU_ACCESS_NOT_CACHEABLE;
-    mpu.IsBufferable     = MPU_ACCESS_BUFFERABLE;
-    HAL_MPU_ConfigRegion(&mpu);
+    MPU->RNR  = 1;
+    MPU->RBAR = 0x40000000U;
+    MPU->RASR = (1U  << 28) |  /* XN=1 no exec */
+                (3U  << 24) |  /* AP=011 full access */
+                (0U  << 19) |  /* TEX=000 */
+                (1U  << 18) |  /* S=1 shareable */
+                (0U  << 17) |  /* C=0 not cacheable */
+                (1U  << 16) |  /* B=1 bufferable */
+                (0U  <<  8) |  /* SRD=0 */
+                (28U <<  1) |  /* SIZE=28 → 512MB */
+                (1U  <<  0);   /* ENABLE */
 
-    HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
+    /*
+     * Region 2: SDIO DMA buffer (cache_buf in .sram1_bss) — non-cacheable.
+     * 16KB at 0x20020000, but only sub-regions 3-5 enabled (0x20021800–0x20022FFF)
+     * via SRD mask. Higher region number overrides Region 0 for this range.
+     */
+    MPU->RNR  = 2;
+    MPU->RBAR = 0x20020000U;
+    MPU->RASR = (0U  << 28) |  /* XN=0 */
+                (3U  << 24) |  /* AP=011 full access */
+                (1U  << 19) |  /* TEX=001 normal non-cacheable */
+                (0U  << 18) |  /* S=0 */
+                (0U  << 17) |  /* C=0 */
+                (0U  << 16) |  /* B=0 */
+                (0xC7U << 8) | /* SRD=11000111: disable sub 0,1,2,6,7; enable 3,4,5 */
+                (13U <<  1) |  /* SIZE=13 → 16KB */
+                (1U  <<  0);   /* ENABLE */
+
+    MPU->CTRL = MPU_CTRL_PRIVDEFENA_Msk | MPU_CTRL_ENABLE_Msk;
+    __DSB();
+    __ISB();
+}
+
+static void _fpu_context_init(void)
+{
+#if defined (__VFP_FP__) && !defined(__SOFTFP__)
+    /*
+     * Lua scripting mixes hard-float code with frequent RT-Thread context
+     * switches. Disable lazy stacking so exception entry always materializes
+     * the low FPU frame on the owning thread stack instead of deferring via
+     * FPCAR/LSPACT, which has been triggering INVSTATE during mixed FPU/non-FPU
+     * thread switches on CUAV V5 bring-up.
+     */
+    FPU->FPCCR |= FPU_FPCCR_ASPEN_Msk;
+    FPU->FPCCR &= ~FPU_FPCCR_LSPEN_Msk;
+    __DSB();
+    __ISB();
+#endif
 }
 
 /*
@@ -125,15 +159,23 @@ void rt_hw_board_init(void)
 #endif
 
     _mpu_config();
+    _fpu_context_init();
     SCB_EnableICache();
     SCB_EnableDCache();
 
-    if (HAL_Init() != HAL_OK) {
-        while (1) { }
-    }
+    /* Minimal HAL_Init() equivalent — direct register operations */
+    FLASH->ACR |= FLASH_ACR_ARTEN | FLASH_ACR_PRFTEN;
+    NVIC_SetPriorityGrouping(3U);  /* PRIGROUP=3 → 4-bit preemption (same as HAL NVIC_PRIORITYGROUP_4) */
+
     SystemClock_Config();
+    rt_hw_systick_init();
     rt_hw_pin_init();
     rt_hw_usart_init();
+
+    /* VDD_3V3_SENSORS_EN = PE3, drive HIGH to power sensors */
+    rt_pin_mode(GET_PIN(E, 3), PIN_MODE_OUTPUT);
+    rt_pin_write(GET_PIN(E, 3), PIN_HIGH);
+
 #ifdef RT_USING_HEAP
     rt_system_heap_init(HEAP_BEGIN, HEAP_END);
 #endif
@@ -176,37 +218,108 @@ INIT_COMPONENT_EXPORT(rtt_run_cpp_ctors);
 
 #define SD_POWER_PIN    GET_PIN(G, 7)   /* PG7 = VDD_3V3_SD_CARD_EN */
 
+volatile int rtt_sd_mount_stage = 0;
+volatile int rtt_sd_mount_result = -99;
+
 static int sd_card_mount(void)
 {
+    rtt_sd_mount_stage = 1;
     rt_pin_mode(SD_POWER_PIN, PIN_MODE_OUTPUT);
     rt_pin_write(SD_POWER_PIN, PIN_HIGH);
-    rt_thread_mdelay(100);
+    rt_thread_mdelay(200);
 
+    rtt_sd_mount_stage = 2;
     rt_device_t sd_dev = RT_NULL;
-    for (int retry = 0; retry < 10; retry++) {
+    for (int retry = 0; retry < 30; retry++) {
         sd_dev = rt_device_find("sd0");
         if (sd_dev != RT_NULL) break;
-        rt_thread_mdelay(100);
+        rt_thread_mdelay(200);
     }
 
     if (sd_dev == RT_NULL) {
-        rt_kprintf("[sd] sd0 device not found\n");
+        rtt_sd_mount_stage = -1;
+        rt_kprintf("[sd] sd0 device not found after 6s\n");
+        rtt_sd_mount_result = -1;
         return -1;
     }
 
-    if (dfs_mount("sd0", "/sd", "elm", 0, 0) == 0) {
-        rt_kprintf("[sd] mounted /sd ok\n");
+    rtt_sd_mount_stage = 3;
+    rt_thread_mdelay(500);
+
+    rtt_sd_mount_stage = 4;
+    int ret = dfs_mount("sd0", "/", "elm", 0, 0);
+    if (ret == 0) {
+        rtt_sd_mount_stage = 5;
+        rt_kprintf("[sd] mounted / ok\n");
     } else {
-        rt_kprintf("[sd] mount /sd failed\n");
+        rtt_sd_mount_stage = -4;
+        rt_kprintf("[sd] mount / failed (ret=%d errno=%d)\n", ret, rt_get_errno());
+        rtt_sd_mount_result = -4;
         return -1;
     }
 
-    mkdir("/sd/APM", 0777);
-    mkdir("/sd/APM/LOGS", 0777);
-    mkdir("/sd/APM/TERRAIN", 0777);
-    mkdir("/sd/APM/STORAGE", 0777);
+    mkdir("/APM", 0777);
+    mkdir("/APM/LOGS", 0777);
+    mkdir("/APM/TERRAIN", 0777);
+    mkdir("/APM/STORAGE", 0777);
 
+    rtt_sd_mount_stage = 10;
+    rtt_sd_mount_result = 0;
+    rt_kprintf("[sd] APM dirs created\n");
     return 0;
 }
 INIT_ENV_EXPORT(sd_card_mount);
 #endif
+
+/* ----------------------------------------------------------------
+ *  True CPU idle measurement via DWT cycle counter + idle hook.
+ *  rtt_cpu_idle_pct is updated every second; read via GDB or MAVLink.
+ * ---------------------------------------------------------------- */
+volatile uint32_t rtt_cpu_idle_pct = 0;
+volatile uint32_t rtt_cpu_idle_cycles = 0;
+
+static volatile uint32_t _idle_cycles_acc = 0;
+static volatile uint32_t _idle_last_cyc = 0;
+static volatile uint32_t _measure_start_cyc = 0;
+
+static void _idle_hook(void)
+{
+    uint32_t now = DWT->CYCCNT;
+    if (_idle_last_cyc != 0) {
+        _idle_cycles_acc += (now - _idle_last_cyc);
+    }
+    _idle_last_cyc = now;
+}
+
+static void _cpu_measure_thread(void *arg)
+{
+    (void)arg;
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+
+    while (1) {
+        _idle_cycles_acc = 0;
+        _idle_last_cyc = 0;
+        _measure_start_cyc = DWT->CYCCNT;
+        rt_thread_mdelay(1000);
+        uint32_t total = DWT->CYCCNT - _measure_start_cyc;
+        uint32_t idle = _idle_cycles_acc;
+        _idle_last_cyc = 0;
+        rtt_cpu_idle_cycles = idle;
+        if (total > 0) {
+            rtt_cpu_idle_pct = (uint32_t)((uint64_t)idle * 100 / total);
+        }
+    }
+}
+
+static int _cpu_idle_monitor_init(void)
+{
+    rt_thread_idle_sethook(_idle_hook);
+    rt_thread_t th = rt_thread_create("cpumon", _cpu_measure_thread,
+                                      RT_NULL, 1024,
+                                      RT_THREAD_PRIORITY_MAX - 1, 20);
+    if (th) rt_thread_startup(th);
+    return 0;
+}
+INIT_APP_EXPORT(_cpu_idle_monitor_init);
+

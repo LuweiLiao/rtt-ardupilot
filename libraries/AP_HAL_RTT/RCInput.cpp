@@ -1,15 +1,13 @@
 /*
- * ArduPilot + RT-Thread HAL - RCInput
- * Delegates to AP_RCProtocol; UART bytes fed via AP::RC().update() (from Scheduler).
- * SerialManager binds RC UART (e.g. telem2) to AP::RC().add_uart().
+ * AP_HAL_RTT — RCInput (aligned with ChibiOS)
+ * Delegates to AP_RCProtocol; UART bytes fed via _timer_tick().
+ * SerialManager binds RC UART to AP::RC().add_uart().
  */
 
 #include "RCInput.h"
 #include <AP_HAL/AP_HAL.h>
-#include <AP_Common/AP_Common.h>
 
 #include <AP_RCProtocol/AP_RCProtocol_config.h>
-
 #if AP_RCPROTOCOL_ENABLED
 #include <AP_RCProtocol/AP_RCProtocol.h>
 #endif
@@ -22,6 +20,7 @@ void RCInput::init()
 #if AP_RCPROTOCOL_ENABLED
     AP::RC().init();
 #endif
+    _init = true;
 }
 
 bool RCInput::new_input()
@@ -61,6 +60,25 @@ uint8_t RCInput::read(uint16_t* periods, uint8_t len)
     (void)periods;
     (void)len;
     return 0;
+#endif
+}
+
+void RCInput::pulse_input_enable(bool enable)
+{
+    (void)enable;
+}
+
+void RCInput::_timer_tick(void)
+{
+    if (!_init) {
+        return;
+    }
+#if AP_RCPROTOCOL_ENABLED
+    AP_RCProtocol &rcprot = AP::RC();
+    rcprot.update();
+
+    _rssi = rcprot.get_RSSI();
+    _rx_link_quality = rcprot.get_rx_link_quality();
 #endif
 }
 

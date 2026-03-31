@@ -45,6 +45,7 @@ public:
     void write_block(uint16_t dst, const void* src, size_t n) override;
     void _timer_tick(void) override;
     bool erase() override;
+    bool get_storage_ptr(void *&ptr, size_t &size) override;
 
 private:
     enum class StorageBackend : uint8_t {

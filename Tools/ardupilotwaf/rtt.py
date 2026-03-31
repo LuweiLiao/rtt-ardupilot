@@ -109,9 +109,9 @@ def configure(cfg):
     if env.get_flat('CC') and 'arm-none-eabi' in env.get_flat('CC'):
         mcu = _rtt_mcu_family(env)
         if mcu in ('h7', 'f7'):
-            cpu_flags = ['-mcpu=cortex-m7', '-mthumb', '-mfpu=fpv5-d16', '-mfloat-abi=hard']
+            cpu_flags = ['-mcpu=cortex-m7', '-mthumb', '-mfpu=fpv5-d16', '-mfloat-abi=hard', '-DARM_MATH_CM7']
         else:
-            cpu_flags = ['-mcpu=cortex-m4', '-mthumb', '-mfpu=fpv4-sp-d16', '-mfloat-abi=hard']
+            cpu_flags = ['-mcpu=cortex-m4', '-mthumb', '-mfpu=fpv4-sp-d16', '-mfloat-abi=hard', '-DARM_MATH_CM4']
         env.append_value('CFLAGS', cpu_flags)
         env.append_value('CXXFLAGS', cpu_flags)
         env.append_value('LINKFLAGS', cpu_flags)
@@ -502,13 +502,13 @@ def _ensure_librtthread_a(env):
             rtt_exec = os.path.dirname(cc)
     if rtt_exec:
         env_add['RTT_EXEC_PATH'] = rtt_exec
-    # 1) scons in BSP (RTT uses scons; run from BSP dir with RTT_ROOT set)
+    # 1) scons in BSP (RTT uses scons; run from BSP dir with RTT_ROOT set).
+    #    scons may fail at the link stage (missing HAL symbols when LL-only),
+    #    but compilation of .o files still succeeds — continue to archive step.
     try:
-        ret = subprocess.call(['scons'], env=env_add, cwd=bsp_dir)
-        if ret != 0:
-            return None, False
+        subprocess.call(['scons'], env=env_add, cwd=bsp_dir)
     except OSError:
-        return None, False
+        pass
 
     # 2) collect *.o and create librtthread.a.
     #    Scons uses VariantDir for kernel/ and libraries/HAL_Drivers/ → those objects land in build/.
@@ -522,6 +522,22 @@ def _ensure_librtthread_a(env):
     # board/ defines SystemClock_Config and other hardware-init symbols.
     # packages/stm32f7_hal_driver*/Src and packages/stm32f7_cmsis_driver*/Source are compiled in-place by scons.
     extra_scan_dirs = [os.path.join(bsp_dir, d) for d in ('board',)]
+    extra_objs = []
+    # startup_rtt_override.o and drivers_ll/*.o live in AP_HAL_RTT BSP board/ (not in the deploy BSP)
+    ap_hal_root = getattr(env, 'AP_HAL_ROOT', '')
+    if ap_hal_root:
+        for bsp_sub in os.listdir(ap_hal_root):
+            bsp_board = os.path.join(ap_hal_root, bsp_sub, 'board')
+            if not os.path.isdir(bsp_board):
+                continue
+            override = os.path.join(bsp_board, 'startup_rtt_override.o')
+            if os.path.isfile(override):
+                extra_objs.append(override)
+            drivers_ll = os.path.join(bsp_board, 'drivers_ll')
+            if os.path.isdir(drivers_ll):
+                for f in os.listdir(drivers_ll):
+                    if f.endswith('.o'):
+                        extra_objs.append(os.path.join(drivers_ll, f))
 
     def _should_exclude(path, rel_to_bsp):
         rel = rel_to_bsp.replace(os.sep, '/')
@@ -555,6 +571,10 @@ def _ensure_librtthread_a(env):
     _add_dir(build_dir)
     for d in extra_scan_dirs:
         _add_dir(d)
+    for o in extra_objs:
+        if o not in objs_set:
+            objs_set.add(o)
+            objs.append(o)
 
     # include CMSIS startup (Reset_Handler) if built under packages (scons may output there)
     mcu = _rtt_mcu_family(env)
@@ -889,5 +909,14 @@ def build(bld):
         env.append_value('LINKFLAGS', '-Wl,--whole-archive')
         env.append_value('LINKFLAGS', lib_path)
         env.append_value('LINKFLAGS', '-Wl,--no-whole-archive')
+        # HAL_Drivers compiled in-place by scons; link selectively (not whole-archive)
+        hal_drv_dir = os.path.join(os.path.dirname(bsp_dir), 'libraries', 'HAL_Drivers', 'drivers')
+        for drv_name in ('drv_spi.o', 'drv_sdio.o', 'drv_soft_i2c.o'):
+            drv_path = os.path.join(hal_drv_dir, drv_name)
+            if os.path.isfile(drv_path):
+                env.append_value('LINKFLAGS', os.path.abspath(drv_path))
+        drv_flash = os.path.join(hal_drv_dir, 'drv_flash', 'drv_flash_f7.o')
+        if os.path.isfile(drv_flash):
+            env.append_value('LINKFLAGS', os.path.abspath(drv_flash))
         # Force strong OTG_FS_IRQHandler from BSP usb_irq.o; startup .s has weak->Default_Handler
         env.append_value('LINKFLAGS', '-Wl,-u,OTG_FS_IRQHandler')

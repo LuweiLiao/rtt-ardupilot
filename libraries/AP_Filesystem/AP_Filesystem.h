@@ -57,6 +57,28 @@ struct dirent {
 };
 #endif // HAL_BOARD_RTT && !POSIX_ENABLED
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && AP_FILESYSTEM_POSIX_ENABLED
+/*
+ * Force ArduPilot C++ units to use the RT-Thread DFS stat layout instead of
+ * the toolchain newlib one. Otherwise AP-side `struct stat` can mismatch the
+ * C DFS implementation and corrupt adjacent stack data when `stat()` fills it.
+ */
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wshadow"
+#endif
+#include "../../modules/rt-thread/components/libc/compilers/common/extension/sys/stat.h"
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+#ifndef _SYS_STAT_H
+#define _SYS_STAT_H
+#endif
+#ifndef _STAT_H_
+#define _STAT_H_
+#endif
+#endif
+
 #include <fcntl.h>
 #include <errno.h>
 #include <unistd.h>

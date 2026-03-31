@@ -147,6 +147,7 @@ void AnalogIn::_timer_tick()
         flags |= MAV_POWER_STATUS_USB_CONNECTED;
     }
     _power_flags = flags;
+    _accumulated_power_flags |= flags;
 #endif
 }
 

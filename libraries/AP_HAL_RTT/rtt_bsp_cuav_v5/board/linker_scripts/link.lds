@@ -10,7 +10,7 @@ MEMORY
     RAM (rw) : ORIGIN = 0x20000000, LENGTH =  512k /* 512K sram */
 }
 ENTRY(Reset_Handler)
-_system_stack_size = 0x1000;
+_system_stack_size = 0x4000;
 
 SECTIONS
 {
@@ -134,6 +134,17 @@ SECTIONS
         *(.bss.init)
     } > RAM
     __bss_end = .;
+
+    /* DMA-safe BSS: force into SRAM1 (>= 0x20020000) even if .bss is in DTCM */
+    .sram1_bss (NOLOAD) :
+    {
+        . = ALIGN(32);
+        _sram1_bss_start = .;
+        *(.sram1_bss)
+        *(.sram1_bss.*)
+        . = ALIGN(32);
+        _sram1_bss_end = .;
+    } > RAM
 
     _end = .;
 

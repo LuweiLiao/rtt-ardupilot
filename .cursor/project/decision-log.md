@@ -1,5 +1,10 @@
 # Decision Log
 
+## 2026-03-30: `RAW_IMU` 使用 AHRS 主 IMU 索引，而非硬编码实例 0
+- 原因：多 IMU 飞机上主传感器可能不是 `instance 0`，固定发 0 会导致 GCS/测试看到加速度长期为 0，而 `ATTITUDE`/EKF 仍正常
+- 决定：`send_raw_imu()` 使用 `AP::ahrs().get_primary_accel_index()`，越界则回退 `0`
+- 放弃方案：为通过测试在脚本侧改判 `SCALED_IMU2`，掩盖与 MAVLink 语义不一致
+
 ## 2026-03-23: 将项目记忆拆成多文件，而非继续堆到单一 trace
 - 原因：长对话和单一 `agent-trace` 容易造成上下文膨胀，也容易把"中途现象"误当成"稳定事实"
 - 决定：把当前状态、未关闭问题、设计决策、命令速查、里程碑计划分别拆到 `project/` 下
@@ -93,3 +98,34 @@
 - 决定：(1) `.gitmodules` rt-thread URL 改为 pogo fork HTTPS；(2) `rtt_bsp_deploy.py` copytree 后自动调用 `pkgs_update_manual.sh`；(3) `SConscript` 自动创建 `ap_config.h` 并复制 `hwdef.h`
 - 效果：`git clone --recursive -b staging/pogo-rtt && cd pogo-apm && python3 -m SCons --target=cuav-v5 -j16` 一步完成
 - 放弃方案：维持手动步骤 — 换台电脑无法编译
+
+## 2026-03-28: boot_stub 替代陈旧 bootloader
+- 原因：0x08000000 处残留的旧固件向量表将 Reset_Handler 指向新固件的 HAL_Init 中间位置，导致启动时跳到错误代码
+- 决定：自制 36 字节最小 boot_stub（向量表+跳转），烧录到 sector 0；app 保持在 0x08008000
+- 放弃方案：直接把 app 链接到 0x08000000（失去 bootloader OTA 能力）
+
+## 2026-03-28: MPU SRAM 区域 Non-Shareable (S=0)
+- 原因：STM32F7 AXI 总线全局独占监视器对 SRAM 的 ldrex/strex 返回 PRECISERR
+- 决定：MPU Region 0 设 S=0，强制使用本地独占监视器
+- 依据：Cortex-M7 本地监视器对单核系统完全足够；ChibiOS 在 STM32F7 上也使用 Non-Shareable SRAM
+- 放弃方案：禁用 MPU（可行但损失 D-Cache 性能和 DMA 保护）
+
+## 2026-03-28: HEAP_BEGIN = max(_ebss, SRAM1_START) 替代硬编码
+- 原因：BSS 段 136KB 超过 DTCM 128KB 容量，溢出到 SRAM1；硬编码 HEAP_BEGIN=0x20020000 与 BSS 尾部重叠
+- 决定：HEAP_BEGIN 取 _ebss 和 SRAM1_START 的较大值
+- 放弃方案：把 BSS 限制在 DTCM 内（需减少全局变量，不现实）
+
+## 2026-03-28: HAL_Init() 替换为直接寄存器操作
+- 原因：HAL_Init 内部调用 HAL_InitTick 在 HSI 16MHz 下配置 SysTick，后续 SystemClock_Config 切换到 216MHz 但不重新配置 SysTick，导致 millis() 快 13.5x
+- 决定：移除 HAL_Init()，替换为 FLASH ART + NVIC priority grouping 直接寄存器操作；在 SystemClock_Config 后显式调用 rt_hw_systick_init()
+- 放弃方案：保留 HAL_Init 然后再调 rt_hw_systick_init（冗余且留 HAL 依赖）
+
+## 2026-03-30: RTT POSIX `stat()` 采用 C wrapper，而不是继续赌 C++ 头文件对齐
+- 原因：尽管 `AP_Filesystem.h` 试图让 RTT 的 C++ 编译单元包含 RT-Thread `sys/stat.h`，但实测 `sizeof(struct stat)` 仍为 60，而 DFS/ELM-FAT 的 C 侧 `struct stat` 为 88。`log_io` 在线程里调用 `AP::FS().stat()` 时，会沿 `AP_Filesystem_Posix::stat() -> ::stat() -> f_stat()/get_fileinfo()` 把 88B 结果写进 C++ 的 60B 栈对象，最终表现为 `UNALIGNED/FORCED HardFault`、坏异常帧以及延时崩溃。
+- 决定：新增 RTT 专用 C 编译单元 `ap_rtt_posix_stat()`，由它使用 RT-Thread 原生 `struct stat` 调 `stat()`，再在 `AP_Filesystem_Posix::stat()` 中把通用字段拷回 C++ 侧 `struct stat`。这样所有 RTT 本地文件 `stat()` 调用点共享同一条安全路径，不再依赖脆弱的头文件 ABI 对齐技巧。
+- 放弃方案：继续依赖 C++ 侧 include/pragma 强行覆盖 `struct stat`；或者只在 `AP_Logger_File`/`GCS_FTP` 等单个调用点各自绕开 `stat()`
+
+## 2026-03-30: RTT Copter 的低频问题先补“运行时默认流率”，不强改持久化 `SR0_*`
+- 原因：首轮基线显示 CPU 空闲仍约 99%、主循环周期约 2.3ms，但默认 `ATTITUDE/RAW_IMU/SYS_STATUS` 只有约 `0.07/0.33/0.33 Hz`；而显式发送 `MAV_CMD_SET_MESSAGE_INTERVAL` 后三者立刻升到约 `10Hz`，说明瓶颈在默认消息流率/请求链而非底层链路。仅修改 `GCS_MAVLink_Parameters.cpp` 的编译默认值不足以覆盖板上已保存的旧 `SR0_* = 0` 参数。
+- 决定：保留 RTT/Copter 的非 0 编译默认流率给新参数集使用，同时在 `GCS_Common.cpp::initialise_message_intervals_from_streamrates()` 中增加 RTT/Copter 运行时 fallback：若启动时检测到 `streamRates[]` 整组仍为 0，则只在内存中填入保守默认值（`RAW_SENS=4`, `EXT_STAT=2`, `RC_CHAN=2`, `POSITION=2`, `EXTRA1=10`, `EXTRA2=4`, `EXTRA3=2`），再初始化 message intervals，不写回持久化参数。
+- 放弃方案：直接 `set_and_save()` 强制改写用户现有的 `SR0_*`；或者继续假设所有地面站都会主动发送 `REQUEST_DATA_STREAM/SET_MESSAGE_INTERVAL`

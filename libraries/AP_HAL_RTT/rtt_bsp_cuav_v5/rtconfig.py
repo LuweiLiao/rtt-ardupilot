@@ -42,7 +42,7 @@ if PLATFORM == 'gcc':
     OBJCPY = PREFIX + 'objcopy'
     STRIP = PREFIX + 'strip'
 
-    DEVICE = ' -mcpu=' + CPU + ' -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard -ffunction-sections -fdata-sections'
+    DEVICE = ' -mcpu=' + CPU + ' -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard -DARM_MATH_CM7 -ffunction-sections -fdata-sections'
     CFLAGS = DEVICE + ' -g -Wall'
     AFLAGS = ' -c' + DEVICE + ' -x assembler-with-cpp -Wa,-mimplicit-it=thumb '
     LFLAGS = DEVICE + ' -Wl,--gc-sections,-Map=rtthread.map,-cref,-u,Reset_Handler -T board/linker_scripts/link.lds'
@@ -56,12 +56,11 @@ if PLATFORM == 'gcc':
     else:
         CFLAGS += ' -O2 -Os'
 
-    CXXFLAGS = CFLAGS 
+    CXXFLAGS = CFLAGS + ' -Woverloaded-virtual -fno-exceptions -fno-rtti'
 
     POST_ACTION = OBJCPY + ' -O binary $TARGET rtthread.bin\n' + SIZE + ' $TARGET \n'
 
-    # module setting 
-    CXXFLAGS = ' -Woverloaded-virtual -fno-exceptions -fno-rtti '
+    # module setting
     M_CFLAGS = CFLAGS + ' -mlong-calls -fPIC '
     M_CXXFLAGS = CXXFLAGS + ' -mlong-calls -fPIC'
     M_LFLAGS = DEVICE + CXXFLAGS + ' -Wl,--gc-sections,-z,max-page-size=0x4' +\

@@ -13,9 +13,15 @@
 #define USB_OTG_GRSTCTL_CSRST  (1U << 0)
 #define USB_OTG_GRSTCTL_AHBIDL (1U << 31)
 
-/* Hardware microsecond delay - works before scheduler starts */
+/* Hardware microsecond delay - works before scheduler starts.
+ * Explicitly enables DWT CYCCNT in case it was not initialized yet
+ * (INIT_COMPONENT_EXPORT runs before HAL init). */
 static void rtt_hw_us_delay(uint32_t us)
 {
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    *(volatile uint32_t *)0xE0001FB0 = 0xC5ACCE55;   /* DWT_LAR unlock (Cortex-M7) */
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+
     uint32_t start = DWT->CYCCNT;
     uint32_t cycles = us * (SystemCoreClock / 1000000U);
     while ((DWT->CYCCNT - start) < cycles) {

@@ -332,6 +332,10 @@ uint16_t AP_Scheduler::time_available_usec(void) const
  */
 float AP_Scheduler::load_average()
 {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    extern volatile uint32_t rtt_cpu_idle_pct;
+    return constrain_float(1.0f - rtt_cpu_idle_pct / 100.0f, 0.0f, 1.0f);
+#else
     // return 1 if filtered main loop rate is 5% below the configured rate
     if (get_filtered_loop_rate_hz() < get_loop_rate_hz() * 0.95) {
         return 1.0;
@@ -342,6 +346,7 @@ float AP_Scheduler::load_average()
     const uint32_t loop_us = get_loop_period_us();
     const uint32_t used_time = loop_us - (_spare_micros/_spare_ticks);
     return constrain_float(used_time / (float)loop_us, 0, 1);
+#endif
 }
 
 void AP_Scheduler::loop()

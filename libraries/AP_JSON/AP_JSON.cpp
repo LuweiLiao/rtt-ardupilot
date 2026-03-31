@@ -62,7 +62,7 @@ AP_JSON::value *AP_JSON::load_json(const char *filename)
         ::printf("failed to allocate json %s\n", filename);
         return nullptr;
     }
-    if (AP::FS().read(fd, buf, st.st_size) != st.st_size) {
+    if ((size_t)AP::FS().read(fd, buf, st.st_size) != (size_t)st.st_size) {
         ::printf("failed to read json %s\n", filename);
         delete[] buf;
         AP::FS().close(fd);
