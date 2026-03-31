@@ -67,6 +67,7 @@ static RTT::Storage storageDriver;
 static RTT::GPIO gpioDriver;
 static RTT::RCInput rcinDriver;
 static RTT::RCOutput rcoutDriver;
+RTT::RCOutput *rtt_rcout_instance = &rcoutDriver;
 static RTT::Scheduler schedulerInstance;
 static RTT::Util utilInstance;
 static RTT::OpticalFlowStub opticalFlowDriver;

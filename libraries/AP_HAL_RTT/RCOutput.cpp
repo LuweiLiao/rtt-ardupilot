@@ -177,17 +177,22 @@ void RCOutput::set_failsafe_pwm(uint32_t chmask, uint16_t period_us)
 
 bool RCOutput::force_safety_on()
 {
-    return false;
+    /* No IOMCU on RTT build; manage safety state locally.
+     * Matches ChibiOS behaviour without IOMCU. */
+    safety_state = AP_HAL::Util::SAFETY_DISARMED;
+    return true;
 }
 
 void RCOutput::force_safety_off()
 {
+    safety_state = AP_HAL::Util::SAFETY_ARMED;
 }
 
 void RCOutput::set_safety_pwm(uint32_t chmask, uint16_t period_us)
 {
     (void)chmask;
     (void)period_us;
+    /* No IOMCU — safety PWM is a no-op */
 }
 
 void RCOutput::set_default_rate(uint16_t rate_hz)

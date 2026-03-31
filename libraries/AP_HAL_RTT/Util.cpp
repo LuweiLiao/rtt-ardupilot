@@ -7,10 +7,13 @@
  */
 
 #include "AP_HAL_RTT/Util.h"
+#include "RCOutput.h"
 #include <AP_Common/ExpandingString.h>
 #include <rtthread.h>
 #include <stdio.h>
 #include <stm32f7xx.h>
+
+extern RTT::RCOutput *rtt_rcout_instance;
 
 using namespace RTT;
 
@@ -140,6 +143,13 @@ void Util::free_type(void *ptr, size_t size, AP_HAL::Util::Memory_Type mem_type)
  * --------------------------------------------------------------- */
 enum AP_HAL::Util::safety_state Util::safety_switch_state(void)
 {
+    // Match ChibiOS: read from RCOutput's safety_state
+    if (rtt_rcout_instance) {
+        if (!was_watchdog_reset()) {
+            persistent_data.safety_state = (AP_HAL::Util::safety_state)rtt_rcout_instance->safety_state;
+        }
+        return (AP_HAL::Util::safety_state)rtt_rcout_instance->safety_state;
+    }
     return AP_HAL::Util::SAFETY_ARMED;
 }
 

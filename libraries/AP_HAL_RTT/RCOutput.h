@@ -49,6 +49,9 @@ public:
     void timer_tick(void) override;
     void timer_info(ExpandingString &str) override;
 
+    // Safety switch state (read by Util::safety_switch_state)
+    uint8_t safety_state = 0;  // AP_HAL::Util::SAFETY_DISARMED
+
 private:
     uint16_t _period_us[RTT_RCOUT_MAX_CHANNELS];
     uint16_t _pending_us[RTT_RCOUT_MAX_CHANNELS];
