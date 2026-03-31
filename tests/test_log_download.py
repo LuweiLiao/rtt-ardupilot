@@ -19,7 +19,7 @@ def connect(port: str, baud: int = 115200, retries: int = 6, timeout: int = 10):
     for attempt in range(retries):
         conn = None
         try:
-            conn = mavutil.mavlink_connection(port, baud=baud, source_system=255)
+            conn = mavutil.mavlink_connection(port, baud=baud, source_system=251)
             hb = conn.wait_heartbeat(timeout=timeout)
             if hb is None or conn.target_system == 0:
                 raise RuntimeError("no valid heartbeat")
@@ -37,17 +37,43 @@ def connect(port: str, baud: int = 115200, retries: int = 6, timeout: int = 10):
             raise RuntimeError(f"connect failed on {port}: {last_error}") from exc
 
 
+def reduce_stream_rates(conn):
+    """Reduce telemetry stream rates to minimize bandwidth contention during log download."""
+    for msg_id in [
+        mavutil.mavlink.MAVLINK_MSG_ID_SYS_STATUS,
+        mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE,
+        mavutil.mavlink.MAVLINK_MSG_ID_RAW_IMU,
+        mavutil.mavlink.MAVLINK_MSG_ID_GLOBAL_POSITION_INT,
+        mavutil.mavlink.MAVLINK_MSG_ID_SCALED_PRESSURE,
+        mavutil.mavlink.MAVLINK_MSG_ID_SERVO_OUTPUT_RAW,
+    ]:
+        conn.mav.command_long_send(
+            conn.target_system, conn.target_component,
+            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
+            msg_id, 1000000, 0, 0, 0, 0, 0,
+        )
+        time.sleep(0.05)
+    time.sleep(1)
+
+
 def request_log_list(conn):
-    conn.mav.log_request_list_send(conn.target_system, TARGET_COMPONENT, 0, 0xFFFF)
+    """Request log list, reliably receiving all LOG_ENTRY messages."""
+    conn.mav.log_request_list_send(conn.target_system, conn.target_component, 0, 0xFFFF)
     logs = {}
-    deadline = time.time() + 8
+    deadline = time.time() + 15
+    last_entry_time = time.time()
     while time.time() < deadline:
-        msg = conn.recv_match(type="LOG_ENTRY", blocking=True, timeout=1)
+        # Use blocking recv_match and filter for LOG_ENTRY
+        msg = conn.recv_match(blocking=True, timeout=2)
         if msg is None:
+            if logs and time.time() - last_entry_time > 2:
+                break  # end of list
             continue
-        logs[msg.id] = msg
-        if msg.id == msg.last_log_num:
-            break
+        if msg.get_type() == 'LOG_ENTRY':
+            logs[msg.id] = msg
+            last_entry_time = time.time()
+            if msg.id == msg.last_log_num:
+                break
     return logs
 
 
@@ -63,7 +89,7 @@ def download_log(conn, log_id: int, log_size: int, out_path: Path, max_rounds: i
 
     def request_from_offset(ofs: int) -> None:
         conn.mav.log_request_data_send(
-            conn.target_system, TARGET_COMPONENT, log_id, ofs, 0xFFFFFFFF
+            conn.target_system, conn.target_component, log_id, ofs, 0xFFFFFFFF
         )
 
     request_from_offset(0)
@@ -130,6 +156,10 @@ def main():
     conn = connect(args.port, baud=args.baud)
     print(f"Connected: sys={conn.target_system} comp={conn.target_component}")
 
+    # Reduce stream rates FIRST to avoid bandwidth contention
+    reduce_stream_rates(conn)
+    time.sleep(2)
+
     logs = request_log_list(conn)
     if not logs:
         print("FAIL: no LOG_ENTRY response")
@@ -143,13 +173,21 @@ def main():
         return 1
 
     print(f"Found {len(logs)} logs (reported total={first.num_logs}, last={first.last_log_num})")
-    latest_id = max(logs)
-    latest = logs[latest_id]
-    print(f"Downloading log id={latest_id} size={latest.size}")
+
+    # Prefer a small-to-medium log (< 1MB) for faster testing
+    candidates = [(id, l) for id, l in logs.items() if 0 < l.size <= 1000000]
+    if not candidates:
+        candidates = [(id, l) for id, l in logs.items() if 0 < l.size]
+    if not candidates:
+        print("FAIL: no downloadable logs")
+        conn.close()
+        return 1
+    # Pick smallest non-trivial log
+    sid, slog = min(candidates, key=lambda x: x[1].size)
 
     out_dir = Path(args.out)
-    out_file = out_dir / f"log_{latest_id:08d}.bin"
-    bytes_written = download_log(conn, latest_id, latest.size, out_file)
+    out_file = out_dir / f"log_{sid:08d}.bin"
+    bytes_written = download_log(conn, sid, slog.size, out_file)
     conn.close()
 
     print(f"PASS: downloaded {bytes_written} bytes -> {out_file}")

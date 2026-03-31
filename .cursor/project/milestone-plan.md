@@ -35,7 +35,7 @@
 - [x] GPIO `usb_connected()` 正确实现
 - [x] MAVLink 消息频率修复（call_delay_cb + delay callback 白名单 + USB CDC TX buffer）
 - [x] IWDG 独立看门狗骨架（暂 `#if 0` 禁用，需 GDB 调试）
-- [ ] SD 卡实际插卡验证（挂载 + 日志写入 + 回读）
+- [x] SD 卡实际插卡验证（挂载 + 日志写入 + 回读）— 188 logs on / mount, ELM-FAT
 - [ ] RCOutput 完善（至少确保基础 PWM 可控电调）
 - [ ] RCInput 完善（SBUS 路径验证）
 - [ ] Scheduler 线程模型进一步对齐

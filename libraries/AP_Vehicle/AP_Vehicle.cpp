@@ -743,9 +743,6 @@ void AP_Vehicle::scheduler_delay_callback()
 
 #if HAL_LOGGING_ENABLED
     AP_Logger &logger = AP::logger();
-
-    // don't allow potentially expensive logging calls:
-    logger.EnableWrites(false);
 #endif
 
     const uint32_t tnow = AP_HAL::millis();
@@ -770,6 +767,11 @@ void AP_Vehicle::scheduler_delay_callback()
             GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Initialising ArduPilot");
         }
     }
+
+#if HAL_LOGGING_ENABLED
+    // don't allow potentially expensive logging calls:
+    logger.EnableWrites(false);
+#endif
 
 #if HAL_LOGGING_ENABLED
     logger.EnableWrites(true);

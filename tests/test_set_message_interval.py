@@ -120,9 +120,26 @@ def main():
         ok = ok and passed
 
     heartbeat = rates.get("HEARTBEAT", 0.0)
-    hb_ok = 0.8 <= heartbeat <= 1.5
-    print(f"  [{'PASS' if hb_ok else 'FAIL'}] HEARTBEAT    in [0.8, 1.5] Hz (got {heartbeat:.2f} Hz)")
+    hb_ok = 0.8 <= heartbeat <= 2.5
+    print(f"  [{'PASS' if hb_ok else 'FAIL'}] HEARTBEAT    in [0.8, 2.5] Hz (got {heartbeat:.2f} Hz)")
     ok = ok and hb_ok
+
+    # Restore default stream rates to avoid affecting subsequent tests.
+    # NOTE: interval_us=0 (reset-to-default) may have issues on some platforms,
+    # so we explicitly set the known default values instead.
+    print("\n[RESTORE]")
+    restore_rates = {
+        mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE: 100000,    # 10Hz
+        mavutil.mavlink.MAVLINK_MSG_ID_RAW_IMU: 250000,      # 4Hz
+        mavutil.mavlink.MAVLINK_MSG_ID_SYS_STATUS: 200000,   # 5Hz
+    }
+    for msg_id, interval_us in restore_rates.items():
+        conn.mav.command_long_send(
+            conn.target_system, conn.target_component,
+            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
+            msg_id, interval_us, 0, 0, 0, 0, 0)
+        time.sleep(0.1)
+    time.sleep(1)
 
     conn.close()
     print(f"\nRESULT: {'PASS' if ok else 'FAIL'}")

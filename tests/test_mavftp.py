@@ -5,6 +5,12 @@ import sys, time, os, struct
 from pymavlink import mavutil
 
 PORT = os.environ.get('MAVFTP_PORT', '/dev/ttyACM1')
+# Allow --port override
+if '--port' in sys.argv:
+    idx = sys.argv.index('--port')
+    PORT = sys.argv[idx + 1]
+    sys.argv.pop(idx)
+    sys.argv.pop(idx)
 TIMEOUT = 15
 
 FTP_OP_None         = 0

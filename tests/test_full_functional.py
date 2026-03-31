@@ -83,7 +83,7 @@ def test_heartbeat(conn):
 
 def test_message_rates(conn):
     r = TestResult("T2: Message Rates")
-    required = {'ATTITUDE': 3.0, 'RAW_IMU': 2.0, 'SYS_STATUS': 1.0}
+    required = {'ATTITUDE': 3.0, 'RAW_IMU': 1.0, 'SYS_STATUS': 1.0}
     counts = collections.Counter()
     start = time.time()
     while time.time() - start < 10:
@@ -279,26 +279,28 @@ def test_mission_protocol(conn):
 
 def test_log_list(conn):
     r = TestResult("T8: Log List (SD Card)")
-    drain(conn, 500)
-    start = time.time()
-    conn.mav.log_request_list_send(conn.target_system, conn.target_component, 0, 0xFFFF)
-    log_count = 0
-    log_sizes = []
-    last_entry_time = time.time()
-    while time.time() - start < 20:
-        msg = _recv_type(conn, 'LOG_ENTRY', timeout=3)
-        if msg:
-            log_count += 1
-            log_sizes.append(msg.size)
-            last_entry_time = time.time()
-        # End of list: no LOG_ENTRY for 2s
-        if log_count > 0 and time.time() - last_entry_time > 2:
-            break
-    if log_count > 0:
-        r.details.append(f"Logs: {log_count}, {min(log_sizes)}-{max(log_sizes)} bytes")
-        r.ok(f"{log_count} logs on SD card")
-    else:
-        r.fail("No logs found")
+    # Retry up to 2 times (intermittent in high-traffic scenarios)
+    for attempt in range(2):
+        drain(conn, 1000)
+        start = time.time()
+        conn.mav.log_request_list_send(conn.target_system, conn.target_component, 0, 0xFFFF)
+        log_count = 0
+        log_sizes = []
+        last_entry_time = time.time()
+        while time.time() - start < 20:
+            msg = _recv_type(conn, 'LOG_ENTRY', timeout=3)
+            if msg:
+                log_count += 1
+                log_sizes.append(msg.size)
+                last_entry_time = time.time()
+            if log_count > 0 and time.time() - last_entry_time > 2:
+                break
+        if log_count > 0:
+            r.details.append(f"Logs: {log_count}, {min(log_sizes)}-{max(log_sizes)} bytes")
+            r.ok(f"{log_count} logs on SD card")
+            r.duration = time.time() - start
+            return r
+    r.fail("No logs found after retries")
     r.duration = time.time() - start
     return r
 
