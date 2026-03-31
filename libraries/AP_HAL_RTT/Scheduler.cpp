@@ -29,6 +29,9 @@
 #include <AP_Logger/AP_Logger.h>
 #include <rtthread.h>
 
+#if !defined(IOMCU_FW)
+extern "C" void ap_rtt_iwdg_init(void);
+#endif
 
 using namespace RTT;
 
@@ -361,6 +364,8 @@ void Scheduler::init()
     if (_storage_thread_ctx) rt_thread_startup(_storage_thread_ctx);
 
     _hal_initialized = true;
+
+    /* IWDG will be started in set_system_initialized() after setup() completes */
 }
 
 /* ----------------------------------------------------------------
@@ -524,6 +529,14 @@ void Scheduler::set_system_initialized()
         AP_HAL::panic("PANIC: Scheduler::set_system_initialized called more than once");
     }
     _initialized = true;
+
+    /* Start IWDG now that the system is fully initialized and the main loop is running.
+     * The watchdog_pat() in the timer thread will keep it fed every ms.
+     * Temporarily disabled — prescaler/timeout tuning needed with GDB. */
+#if 0
+    ap_rtt_iwdg_init();
+    _iwdg_started = true;
+#endif
 }
 
 /* ----------------------------------------------------------------
@@ -648,6 +661,14 @@ void Scheduler::restore_interrupts(void *state)
 void Scheduler::watchdog_pat(void)
 {
     last_watchdog_pat_ms = AP_HAL::millis();
+
+    /* IWDG kick — only after IWDG has been started by set_system_initialized() */
+#if defined(HAL_BOARD_RTT) && !defined(IOMCU_FW)
+    if (_iwdg_started) {
+#define IWDG_KR_REG    (*(volatile uint32_t *)0x40003000)
+        IWDG_KR_REG = 0xAAAA;
+    }
+#endif
 }
 
 /*

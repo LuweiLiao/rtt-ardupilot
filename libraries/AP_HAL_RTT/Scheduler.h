@@ -95,6 +95,7 @@ private:
     uint32_t _expect_delay_length = 0;
     uint8_t  _expect_delay_nesting = 0;
     uint32_t last_watchdog_pat_ms = 0;
+    volatile bool _iwdg_started = false;
 
     void _run_timers();
     void _run_io();

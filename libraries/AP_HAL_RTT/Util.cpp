@@ -10,6 +10,7 @@
 #include <AP_Common/ExpandingString.h>
 #include <rtthread.h>
 #include <stdio.h>
+#include <stm32f7xx.h>
 
 using namespace RTT;
 
@@ -163,6 +164,11 @@ void Util::toneAlarm_set_buzzer_tone(float frequency, float volume, uint32_t dur
  * --------------------------------------------------------------- */
 bool Util::was_watchdog_reset() const
 {
+    /* RCC_CSR flags: bit 29 = IWDGRSTF, bit 28 = WWDGRSTF */
+    uint32_t csr = RCC->CSR;
+    if (csr & (RCC_CSR_IWDGRSTF | RCC_CSR_WWDGRSTF)) {
+        return true;
+    }
     return false;
 }
 

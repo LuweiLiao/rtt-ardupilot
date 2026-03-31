@@ -93,3 +93,36 @@ __attribute__((weak)) void MemManage_Handler(void)
 }
 
 } // extern "C"
+
+/* ----------------------------------------------------------------
+ *  IWDG initialization — STM32F767 Independent Watchdog
+ *  Uses LSI (~32 kHz). Prescaler /256, reload 1250 → ~10s timeout.
+ *  Once started, IWDG cannot be stopped until next reset.
+ *  Called from Scheduler::init() after threads are created.
+ * ---------------------------------------------------------------- */
+extern "C" void ap_rtt_iwdg_init(void)
+{
+#define IWDG_KR    (*(volatile uint32_t *)0x40003000)
+#define IWDG_PR    (*(volatile uint32_t *)0x40003004)
+#define IWDG_RLR   (*(volatile uint32_t *)0x40003008)
+#define IWDG_SR    (*(volatile uint32_t *)0x4000300C)
+
+    /* Enable LSI */
+    RCC->CSR |= RCC_CSR_LSION;
+    while (!(RCC->CSR & RCC_CSR_LSIRDY)) {}
+
+    /* Enable write access to IWDG_PR and IWDG_RLR */
+    IWDG_KR = 0x5555;
+
+    /* Prescaler: /256 (PR=6, bits 110) */
+    IWDG_PR = 6;
+
+    /* Reload value: 1250 → timeout = (256 * 1250) / 32000 ≈ 10s */
+    IWDG_RLR = 1250;
+
+    /* Wait for register update */
+    while (IWDG_SR & (IWDG_SR_PVU | IWDG_SR_RVU)) {}
+
+    /* Start the watchdog */
+    IWDG_KR = 0xCCCC;
+}
