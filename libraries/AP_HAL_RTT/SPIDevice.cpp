@@ -61,43 +61,70 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
 
     if (send_len > 0 && recv_len > 0) {
         /*
-         * ChibiOS-style merged transfer: combine send+recv into a single
-         * full-duplex SPI transaction. This halves the number of SPI events
-         * vs rt_spi_send_then_recv() which splits into two xfer() calls.
+         * Merged full-duplex SPI transfer: send command bytes then receive
+         * data in a single CS-held transaction.  Use SEPARATE send and recv
+         * buffers to avoid DMA aliasing issues on STM32F7 (some drivers
+         * overwrite the send buffer with received data when send_buf ==
+         * recv_buf, causing the command byte to be corrupted before it is
+         * shifted out).
          */
-        const uint32_t total = send_len + recv_len;
-        uint8_t _bounce[32];
-        uint8_t *buf;
+        uint8_t _bounce_tx[32];
+        uint8_t _bounce_rx[32];
+        uint8_t *txbuf;
+        uint8_t *rxbuf;
         bool heap = false;
 
-        if (total <= sizeof(_bounce)) {
-            buf = _bounce;
+        if (send_len <= sizeof(_bounce_tx) && recv_len <= sizeof(_bounce_rx)) {
+            txbuf = _bounce_tx;
+            rxbuf = _bounce_rx;
         } else {
-            buf = (uint8_t *)rt_malloc_align(total, 32);
-            if (buf == nullptr) {
+            txbuf = (uint8_t *)rt_malloc_align(send_len, 32);
+            rxbuf = (uint8_t *)rt_malloc_align(recv_len, 32);
+            if (txbuf == nullptr || rxbuf == nullptr) {
+                if (txbuf) rt_free_align(txbuf);
+                if (rxbuf) rt_free_align(rxbuf);
                 if (need_sem) _sem.give();
                 return false;
             }
             heap = true;
         }
 
-        memcpy(buf, send, send_len);
-        memset(&buf[send_len], 0, recv_len);
+        memcpy(txbuf, send, send_len);
+        memset(rxbuf, 0, recv_len);
 
-        struct rt_spi_message msg = {};
-        msg.send_buf   = buf;
-        msg.recv_buf   = buf;
-        msg.length     = total;
-        msg.cs_take    = 1;
-        msg.cs_release = 1;
-        msg.next       = RT_NULL;
+        /*
+         * Chain two SPI messages: first send_len bytes (TX only, clock
+         * out command), then recv_len bytes (RX, shift in response).
+         * Both share the same CS session (cs_take on first, cs_release
+         * on last).
+         */
+        struct rt_spi_message msg_tx = {};
+        msg_tx.send_buf   = txbuf;
+        msg_tx.recv_buf   = RT_NULL;
+        msg_tx.length     = send_len;
+        msg_tx.cs_take    = 1;
+        msg_tx.cs_release = 0;
+        msg_tx.next       = RT_NULL;
 
-        struct rt_spi_message *ret = rt_spi_transfer_message(_dev, &msg);
+        struct rt_spi_message msg_rx = {};
+        msg_rx.send_buf   = RT_NULL;
+        msg_rx.recv_buf   = rxbuf;
+        msg_rx.length     = recv_len;
+        msg_rx.cs_take    = 0;
+        msg_rx.cs_release = 1;
+        msg_rx.next       = RT_NULL;
+
+        msg_tx.next = &msg_rx;
+
+        struct rt_spi_message *ret = rt_spi_transfer_message(_dev, &msg_tx);
         if (ret == RT_NULL) {
-            memcpy(recv, &buf[send_len], recv_len);
+            memcpy(recv, rxbuf, recv_len);
             ok = true;
         }
-        if (heap) rt_free_align(buf);
+        if (heap) {
+            rt_free_align(txbuf);
+            rt_free_align(rxbuf);
+        }
     } else if (send_len > 0) {
         rt_size_t ret = rt_spi_send(_dev, send, send_len);
         ok = (ret == send_len);
@@ -121,20 +148,53 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
     if (_dev == nullptr) return false;
     if (!_sem.take(HAL_SEMAPHORE_BLOCK_FOREVER)) return false;
 
-    struct rt_spi_message msg;
-    msg.send_buf = send;
-    msg.recv_buf = recv;
-    msg.length = len;
-    msg.cs_take = 1;
-    msg.cs_release = 1;
-    msg.next = RT_NULL;
-
     bool ok = false;
     if (rt_spi_take_bus(_dev) == RT_EOK && rt_spi_take(_dev) == RT_EOK) {
+        /*
+         * Use separate TX/RX buffers when caller provides the same
+         * pointer for both (common in ArduPilot register read patterns).
+         * STM32F7 DMA may corrupt the send data if send_buf == recv_buf.
+         */
+        uint8_t _bounce[64];
+        uint8_t *txbuf = (uint8_t *)send;
+        uint8_t *rxbuf = recv;
+        bool heap = false;
+        if (send == recv) {
+            if (len <= sizeof(_bounce)) {
+                txbuf = _bounce;
+                rxbuf = _bounce;
+                memcpy(txbuf, send, len);
+            } else {
+                txbuf = (uint8_t *)rt_malloc_align(len, 32);
+                if (txbuf == nullptr) {
+                    rt_spi_release(_dev);
+                    rt_spi_release_bus(_dev);
+                    _sem.give();
+                    return false;
+                }
+                rxbuf = txbuf;
+                heap = true;
+                memcpy(txbuf, send, len);
+            }
+        }
+
+        struct rt_spi_message msg;
+        msg.send_buf = txbuf;
+        msg.recv_buf = rxbuf;
+        msg.length = len;
+        msg.cs_take = 1;
+        msg.cs_release = 1;
+        msg.next = RT_NULL;
+
         struct rt_spi_message *ret = rt_spi_transfer_message(_dev, &msg);
         rt_spi_release(_dev);
         rt_spi_release_bus(_dev);
         ok = (ret == RT_NULL);
+
+        if (send == recv && ok) {
+            memcpy(recv, rxbuf, len);
+        }
+        if (heap) rt_free_align(txbuf);
     }
     _sem.give();
     return ok;
