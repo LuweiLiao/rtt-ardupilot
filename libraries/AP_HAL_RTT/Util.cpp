@@ -40,7 +40,11 @@ static void _dwt_init(void)
 
 uint32_t Util::get_millis() const
 {
-    return (uint32_t)(rt_tick_get() * 1000U / RT_TICK_PER_SECOND);
+    // Use 64-bit intermediate to avoid uint32_t overflow when
+    // RT_TICK_PER_SECOND > 1000.  With 10kHz ticks the naive
+    // (tick * 1000) overflows after ~429 seconds.
+    const rt_tick_t tick = rt_tick_get();
+    return (uint32_t)((uint64_t)tick * 1000ULL / RT_TICK_PER_SECOND);
 }
 
 uint64_t Util::get_micros64() const
