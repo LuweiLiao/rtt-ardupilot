@@ -231,14 +231,14 @@ static int sd_card_mount(void)
     rtt_sd_mount_stage = 2;
     rt_device_t sd_dev = RT_NULL;
     for (int retry = 0; retry < 30; retry++) {
-        sd_dev = rt_device_find("sd0");
+        sd_dev = rt_device_find("sd");
         if (sd_dev != RT_NULL) break;
         rt_thread_mdelay(200);
     }
 
     if (sd_dev == RT_NULL) {
         rtt_sd_mount_stage = -1;
-        rt_kprintf("[sd] sd0 device not found after 6s\n");
+        rt_kprintf("[sd] sd device not found after 6s\n");
         rtt_sd_mount_result = -1;
         return -1;
     }
@@ -247,7 +247,7 @@ static int sd_card_mount(void)
     rt_thread_mdelay(500);
 
     rtt_sd_mount_stage = 4;
-    int ret = dfs_mount("sd0", "/", "elm", 0, 0);
+    int ret = dfs_mount("sd", "/", "elm", 0, 0);
     if (ret == 0) {
         rtt_sd_mount_stage = 5;
         rt_kprintf("[sd] mounted / ok\n");

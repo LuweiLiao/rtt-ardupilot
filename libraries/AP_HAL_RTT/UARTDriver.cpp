@@ -105,10 +105,11 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
         return;
     }
 
-    /* USB CDC 端口扩大缓冲，对齐 ChibiOS USB×2×MEM_CLASS_500 策略（2048 字节） */
+    /* USB CDC 端口扩大缓冲，8192 字节足以容纳多个 MAVLink LOG_DATA 包，
+     * 避免高速日志下载时 txspace 频繁归零导致 HAVE_PAYLOAD_SPACE 拒绝发送. */
     const bool is_usb = (std::strncmp(name, "usb", 3) == 0);
     if (is_usb) {
-        if (txSpace < 2048) { txSpace = 2048; }
+        if (txSpace < 8192) { txSpace = 8192; }
         if (rxSpace < 2048) { rxSpace = 2048; }
     }
 
@@ -364,7 +365,10 @@ void UARTDriver::_timer_tick(void)
             _usb_write_fail_count = 0;  /* buffer drained, reset counter */
         } else {
             _usb_write_fail_count++;
-            if (_usb_write_fail_count > 100) {
+            if (_usb_write_fail_count > 5000) {
+                /* 5 秒无进展才清空：大日志下载时 USB 端点会短暂饱和，
+                 * 100 ms 阈值过于激进，会导致已入队的 MAVLink 包丢失、
+                 * GCS 侧日志下载停滞在 ~95%. */
                 _writebuf.clear();
                 _usb_write_fail_count = 0;
                 _diag_clears++;

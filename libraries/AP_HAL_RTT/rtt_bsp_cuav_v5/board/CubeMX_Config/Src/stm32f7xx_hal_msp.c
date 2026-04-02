@@ -97,117 +97,7 @@ void HAL_MspInit(void)
   /* USER CODE END MspInit 1 */
 }
 
-/**
-* @brief ETH MSP Initialization
-* This function configures the hardware resources used in this example
-* @param heth: ETH handle pointer
-* @retval None
-*/
-void HAL_ETH_MspInit(ETH_HandleTypeDef* heth)
-{
-
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  if(heth->Instance==ETH)
-  {
-  /* USER CODE BEGIN ETH_MspInit 0 */
-
-  /* USER CODE END ETH_MspInit 0 */
-    /* Peripheral clock enable */
-    __HAL_RCC_ETH_CLK_ENABLE();
-
-    __HAL_RCC_GPIOC_CLK_ENABLE();
-    __HAL_RCC_GPIOA_CLK_ENABLE();
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    __HAL_RCC_GPIOG_CLK_ENABLE();
-    /**ETH GPIO Configuration
-    PC1     ------> ETH_MDC
-    PA1     ------> ETH_REF_CLK
-    PA2     ------> ETH_MDIO
-    PA7     ------> ETH_CRS_DV
-    PC4     ------> ETH_RXD0
-    PC5     ------> ETH_RXD1
-    PB13     ------> ETH_TXD1
-    PG11     ------> ETH_TX_EN
-    PG13     ------> ETH_TXD0
-    */
-    GPIO_InitStruct.Pin = RMII_MDC_Pin|RMII_RXD0_Pin|RMII_RXD1_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
-    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-
-    GPIO_InitStruct.Pin = RMII_REF_CLK_Pin|RMII_MDIO_Pin|RMII_CRS_DV_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
-    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-    GPIO_InitStruct.Pin = RMII_TXD1_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
-    HAL_GPIO_Init(RMII_TXD1_GPIO_Port, &GPIO_InitStruct);
-
-    GPIO_InitStruct.Pin = RMII_TX_EN_Pin|RMII_TXD0_Pin;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
-    HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
-
-  /* USER CODE BEGIN ETH_MspInit 1 */
-
-  /* USER CODE END ETH_MspInit 1 */
-  }
-
-}
-
-/**
-* @brief ETH MSP De-Initialization
-* This function freeze the hardware resources used in this example
-* @param heth: ETH handle pointer
-* @retval None
-*/
-
-void HAL_ETH_MspDeInit(ETH_HandleTypeDef* heth)
-{
-
-  if(heth->Instance==ETH)
-  {
-  /* USER CODE BEGIN ETH_MspDeInit 0 */
-
-  /* USER CODE END ETH_MspDeInit 0 */
-    /* Peripheral clock disable */
-    __HAL_RCC_ETH_CLK_DISABLE();
-
-    /**ETH GPIO Configuration
-    PC1     ------> ETH_MDC
-    PA1     ------> ETH_REF_CLK
-    PA2     ------> ETH_MDIO
-    PA7     ------> ETH_CRS_DV
-    PC4     ------> ETH_RXD0
-    PC5     ------> ETH_RXD1
-    PB13     ------> ETH_TXD1
-    PG11     ------> ETH_TX_EN
-    PG13     ------> ETH_TXD0
-    */
-    HAL_GPIO_DeInit(GPIOC, RMII_MDC_Pin|RMII_RXD0_Pin|RMII_RXD1_Pin);
-
-    HAL_GPIO_DeInit(GPIOA, RMII_REF_CLK_Pin|RMII_MDIO_Pin|RMII_CRS_DV_Pin);
-
-    HAL_GPIO_DeInit(RMII_TXD1_GPIO_Port, RMII_TXD1_Pin);
-
-    HAL_GPIO_DeInit(GPIOG, RMII_TX_EN_Pin|RMII_TXD0_Pin);
-
-  /* USER CODE BEGIN ETH_MspDeInit 1 */
-
-  /* USER CODE END ETH_MspDeInit 1 */
-  }
-
-}
+/* ETH MSP functions removed — HAL_ETH_MODULE disabled */
 
 /**
 * @brief UART MSP Initialization
@@ -393,46 +283,39 @@ void HAL_SD_MspInit(SD_HandleTypeDef *hsd)
 {
     GPIO_InitTypeDef GPIO_InitStruct = {0};
 
-    if (hsd->Instance == SDMMC1) {
-        __HAL_RCC_SDMMC1_CLK_ENABLE();
-        __HAL_RCC_GPIOC_CLK_ENABLE();
-        __HAL_RCC_GPIOD_CLK_ENABLE();
+    if (hsd->Instance == SDMMC2) {
+        __HAL_RCC_SDMMC2_CLK_ENABLE();
+        __HAL_RCC_GPIOG_CLK_ENABLE();
         __HAL_RCC_DMA2_CLK_ENABLE();
 
-        /* SDMMC1: PC8=D0, PC9=D1, PC10=D2, PC11=D3, PC12=CK (AF12) */
-        GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_10 |
-                              GPIO_PIN_11 | GPIO_PIN_12;
+        /* SDMMC2: PG0=D0, PG1=D1, PG2=D2, PG3=D3, PG4=CK, PG5=CMD (AF10) */
+        GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 |
+                              GPIO_PIN_3 | GPIO_PIN_4 | GPIO_PIN_5;
         GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
         GPIO_InitStruct.Pull = GPIO_PULLUP;
         GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-        GPIO_InitStruct.Alternate = GPIO_AF12_SDMMC1;
-        HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+        GPIO_InitStruct.Alternate = GPIO_AF10_SDMMC2;
+        HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
 
-        /* PD2 = CMD (AF12) */
-        GPIO_InitStruct.Pin = GPIO_PIN_2;
-        GPIO_InitStruct.Alternate = GPIO_AF12_SDMMC1;
-        HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
-
-        /* SDMMC1 DMA: RX = DMA2_Stream3/Ch4, TX = DMA2_Stream6/Ch4 */
-        HAL_NVIC_SetPriority(SDMMC1_IRQn, 2, 0);
-        HAL_NVIC_EnableIRQ(SDMMC1_IRQn);
-        HAL_NVIC_SetPriority(DMA2_Stream3_IRQn, 3, 0);
-        HAL_NVIC_EnableIRQ(DMA2_Stream3_IRQn);
-        HAL_NVIC_SetPriority(DMA2_Stream6_IRQn, 3, 0);
-        HAL_NVIC_EnableIRQ(DMA2_Stream6_IRQn);
+        /* SDMMC2 DMA: RX = DMA2_Stream0/Ch4, TX = DMA2_Stream5/Ch4 */
+        HAL_NVIC_SetPriority(SDMMC2_IRQn, 2, 0);
+        HAL_NVIC_EnableIRQ(SDMMC2_IRQn);
+        HAL_NVIC_SetPriority(DMA2_Stream0_IRQn, 3, 0);
+        HAL_NVIC_EnableIRQ(DMA2_Stream0_IRQn);
+        HAL_NVIC_SetPriority(DMA2_Stream5_IRQn, 3, 0);
+        HAL_NVIC_EnableIRQ(DMA2_Stream5_IRQn);
     }
 }
 
 void HAL_SD_MspDeInit(SD_HandleTypeDef *hsd)
 {
-    if (hsd->Instance == SDMMC1) {
-        __HAL_RCC_SDMMC1_CLK_DISABLE();
-        HAL_GPIO_DeInit(GPIOC, GPIO_PIN_8 | GPIO_PIN_9 | GPIO_PIN_10 |
-                                GPIO_PIN_11 | GPIO_PIN_12);
-        HAL_GPIO_DeInit(GPIOD, GPIO_PIN_2);
-        HAL_NVIC_DisableIRQ(SDMMC1_IRQn);
-        HAL_NVIC_DisableIRQ(DMA2_Stream3_IRQn);
-        HAL_NVIC_DisableIRQ(DMA2_Stream6_IRQn);
+    if (hsd->Instance == SDMMC2) {
+        __HAL_RCC_SDMMC2_CLK_DISABLE();
+        HAL_GPIO_DeInit(GPIOG, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 |
+                                GPIO_PIN_3 | GPIO_PIN_4 | GPIO_PIN_5);
+        HAL_NVIC_DisableIRQ(SDMMC2_IRQn);
+        HAL_NVIC_DisableIRQ(DMA2_Stream0_IRQn);
+        HAL_NVIC_DisableIRQ(DMA2_Stream5_IRQn);
     }
 }
 

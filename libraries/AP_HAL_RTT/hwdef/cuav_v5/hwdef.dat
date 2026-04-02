@@ -70,6 +70,15 @@ define AP_SCRIPTING_ENABLED 1
 define SCRIPTING_DIRECTORY "/APM/scripts_rtt"
 # RTT DFS provides POSIX FS interface (open/close/read/write/stat/mkdir)
 define AP_FILESYSTEM_POSIX_ENABLED 1
+# ---- RGB LED (PixRacer scheme: PH10/PH11/PH12, open-drain active-low) ----
+# RTT uses GET_PIN(port, num) = port*16+num: H=7 → PH10=122, PH11=123, PH12=124
+# Set LED_ON=1 (active-high write) so PixRacerLED calls pinMode() to configure output mode
+define HAL_GPIO_LED_ON 1
+define AP_NOTIFY_GPIO_LED_RGB_RED_PIN 122
+define AP_NOTIFY_GPIO_LED_RGB_GREEN_PIN 123
+define AP_NOTIFY_GPIO_LED_RGB_BLUE_PIN 124
+define AP_NOTIFY_GPIO_LED_RGB_ENABLED 1
+
 define AP_FILESYSTEM_POSIX_HAVE_UTIME 0
 define AP_FILESYSTEM_POSIX_HAVE_STATFS 1
 define HAL_BOARD_LOG_DIRECTORY "/APM/LOGS"

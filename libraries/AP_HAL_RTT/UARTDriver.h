@@ -73,7 +73,7 @@ private:
     bool _initialized;
     bool _deferred_open;
     bool _is_usb{false};
-    uint8_t _usb_write_fail_count{0};
+    uint16_t _usb_write_fail_count{0};
     enum flow_control _flow_control = FLOW_CONTROL_DISABLE;
     uint16_t _last_options = 0;
     uint32_t _tx_stats_bytes = 0;

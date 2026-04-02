@@ -42,6 +42,38 @@ isProject: false
   - 确认 ArduPilot 的 GCS 串口选择逻辑中，serial0 作为 MAVLink 端口（通常为默认）。
   - 用 QGC 或 MAVProxy 连接 USB 串口，验证：心跳(HEARTBEAT)、参数列表/读写、简单命令；若有丢包或校验错误，再排查缓冲区与 D-Cache 一致性（[usb_config.h](libraries/AP_HAL_RTT/rtt_bsp_cuav_v5/board/ports/cherryusb/usb_config.h) 中已开 CONFIG_USB_DCACHE_ENABLE）。
 
+## 目标 3：RGB LED Notify 正常工作（ArduCopter / ArduPlane / Blimp 通用）
+
+**含义**：飞控板载 RGB LED（PixRacer 方案：PH10/PH11/PH12）能根据飞控状态正常显示颜色和闪烁模式（如解锁/上锁、飞行模式、预检等），且 ArduCopter、ArduPlane、Blimp 都能使用。
+
+**当前状态**：
+
+- ChibiOS 的 CUAVv5Nano hwdef 已有完整 RGB LED 配置（`PixRacerLED` 后端，`AP_NOTIFY_GPIO_LED_RGB_ENABLED 1`）。
+- RTT 的 hwdef（`libraries/AP_HAL_RTT/hwdef/cuav_v5/hwdef.dat`）之前**完全缺失** RGB LED 配置。
+- 已完成初步修改：添加了 `AP_NOTIFY_GPIO_LED_RGB_RED/GREEN/BLUE_PIN`（RTT GET_PIN 编号：122/123/124）和 `AP_NOTIFY_GPIO_LED_RGB_ENABLED 1`，并设置 `HAL_GPIO_LED_ON 1` 以确保 `PixRacerLED::init()` 会调用 `pinMode()` 配置输出模式。
+- AP_Notify 是通用库，ArduCopter/ArduPlane/Blimp 都通过 `AP_Notify::flags` + `notify.update()` 驱动，hwdef 改动对所有 vehicle 生效。
+
+**已完成**：
+
+- [x] 在 RTT hwdef 中添加 RGB LED pin 定义和 `AP_NOTIFY_GPIO_LED_RGB_ENABLED`
+- [x] 修正 pin 编号为 RT-Thread GET_PIN 格式（PH10=122, PH11=123, PH12=124）
+- [x] 设置 `HAL_GPIO_LED_ON 1` 确保 `pinMode()` 被调用
+
+**待验证**：
+
+- [ ] 编译验证（ArduCopter + ArduPlane + Blimp，`rtt_cuav_v5` 目标）
+- [ ] 硬件验证：RGB LED 在飞控启动时是否亮起
+- [ ] 功能验证：RGB LED 是否能反映飞控状态（解锁/上锁、飞行模式切换等）
+- [ ] 若 PixRacerLED 在 RTT 下不工作（如 `hal.gpio->write()` 逻辑与 ChibiOS 不一致），需检查 RTT GPIO 的 OPENDRAIN / active-low 行为
+
+**建议子任务（可交给 subagent）：**
+
+1. **Subagent E - RGB LED Notify 集成验证**
+  - 确认 RTT hwdef 中的 RGB LED 配置正确（pin 编号、宏定义、PixRacerLED 后端被编译链接）。
+  - 编译 ArduCopter/ArduPlane/Blimp 的 `rtt_cuav_v5` 目标，检查 `ap_config.h` 中 `AP_NOTIFY_GPIO_LED_RGB_ENABLED` 是否为 1。
+  - 若硬件可用，上电验证 RGB LED 是否亮起并能反映状态。
+  - 若 `PixRacerLED` 不兼容 RTT GPIO（如 OPENDRAIN/high-Z 初始态），需在 `rt_hw_cherryusb_cdc_init()` 附近或 board init 中添加显式的 GPIO 初始化（设置 PH10/PH11/PH12 为 output opendrain 并拉高）。
+
 ## 依赖关系与顺序
 
 ```mermaid
@@ -49,20 +81,49 @@ flowchart LR
   A[Subagent_A_Clock_ErrorHandler] --> B[Subagent_B_OpenOCD_Verify_Main]
   B --> C[Subagent_C_USB_CDC_serial0]
   C --> D[Subagent_D_MAVLink_over_USB]
+  B --> E[Subagent_E_RGB_LED_Notify]
 ```
-
-
 
 - A 与 B 可部分并行：A 改代码，B 用现有/更新固件做断点验证并反馈；B 依赖 A 修掉 EP0 路径上的 Error_Handler 才能稳定进入 main。
 - C 依赖「能跑到 main」；D 依赖 C 的 USB 串口可用。
+- E 依赖「能跑到 main」（目标 1），但与 C/D 无依赖，可并行推进。hwdef 改动已就绪，主要待编译验证和硬件测试。
 
 ## 交付物与验收
 
 - **目标 1 验收**：上电/复位后，用 OpenOCD 能在 `_main_loop_entry` 或 `setup` 处命中断点，且不再因 board.c:43 的 Error_Handler 卡死。
 - **目标 2 验收**：主机识别 USB CDC 设备；GCS 通过该端口收到心跳并能进行参数/命令交互。
+- **目标 3 验收**：RGB LED 在飞控启动后亮起，且能反映飞控状态变化（解锁/上锁颜色切换、飞行模式指示等）；ArduCopter/ArduPlane/Blimp 均可正常使用。
 
 ## 建议的 subagent 调用方式
 
-- 每个 subagent 分配上述一个子任务（A/B/C/D），在任务描述中写明：当前仓库状态、已知的 board.c:43 与 USB EP0 调用栈、以及本子任务要达成的具体结果和交付物。
+- 每个 subagent 分配上述一个子任务（A/B/C/D/E），在任务描述中写明：当前仓库状态、已知的 board.c:43 与 USB EP0 调用栈、以及本子任务要达成的具体结果和交付物。
 - A、B 优先；A 完成后再或并行启动 B；B 通过后再做 C、D。
+- E 可在 B 通过后与 C/D 并行启动。
+
+## 最新进展 (2026-04-01)
+
+### 已修复的问题
+1. **PendSV 线程切换 HardFault**（根因修复）
+   - 文件：`modules/rt-thread/libcpu/arm/cortex-m7/cpuport.c`
+   - 原因：`USE_FPU=1` 时 `struct stack_frame` 大小为 68 字节（非 8 的倍数），导致线程初始 PSP 不 8 字节对齐，Cortex-M7 FPU 异常返回触发 INVPC HardFault
+   - 修复：`rt_hw_stack_init()` 减去 `sizeof(struct stack_frame)` 后再 `RT_ALIGN_DOWN` 到 8 字节
+   - 影响：所有 RTT Cortex-M7 线程，三 vehicle 通用
+
+2. **RGB LED Notify**（目标 3 编译完成）
+   - 文件：`libraries/AP_HAL/board/rtt.h`（添加 `#include <hwdef.h>` + RGB 宏定义）
+   - 文件：`libraries/AP_HAL_RTT/hwdef/cuav_v5/hwdef.dat`（RGB LED pin 配置）
+   - PixRacerLED 后端已链接进 ELF（+296 字节 ROM）
+   - ArduCopter/ArduPlane/Blimp 均编译通过
+
+3. **此前 Cursor 已修复的问题**
+   - `HAL_RTT::run()` 双重启动（重复 RT-Thread 初始化）
+   - `rt_hw_board_init()` 缺少 `rt_system_heap_init()`
+   - `SystemClock_Config()` 前缺少 `HAL_RCC_DeInit()`（bootloader 跳转后 RCC 状态污染）
+   - HSE 频率从 8MHz 修正为 16MHz（与 ArduPilot CUAVv5 一致）
+   - `HAL_PCD_MspInit()` 缺少 `OTG_FS_IRQn` NVIC 使能
+
+### 待验证
+- [ ] RTT 自然启动是否稳定（需上板烧录验证）
+- [ ] USB CDC 枚举（依赖 RTT 稳定启动）
+- [ ] RGB LED 硬件验证（依赖 RTT 稳定启动）
 

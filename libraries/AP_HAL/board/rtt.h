@@ -6,6 +6,26 @@
  * HAL implementation is provided by AP_HAL_RTT (libraries/AP_HAL_RTT).
  */
 
+#include <hwdef.h>
+
+/* RGB LED (PixRacer scheme): PH10/PH11/PH12 via RT-Thread GET_PIN(port,num) */
+#ifndef AP_NOTIFY_GPIO_LED_RGB_ENABLED
+#define AP_NOTIFY_GPIO_LED_RGB_ENABLED 1
+#endif
+#ifndef AP_NOTIFY_GPIO_LED_RGB_RED_PIN
+#define AP_NOTIFY_GPIO_LED_RGB_RED_PIN 122   /* GET_PIN(H,10) = 7*16+10 */
+#endif
+#ifndef AP_NOTIFY_GPIO_LED_RGB_GREEN_PIN
+#define AP_NOTIFY_GPIO_LED_RGB_GREEN_PIN 123  /* GET_PIN(H,11) = 7*16+11 */
+#endif
+#ifndef AP_NOTIFY_GPIO_LED_RGB_BLUE_PIN
+#define AP_NOTIFY_GPIO_LED_RGB_BLUE_PIN 124   /* GET_PIN(H,12) = 7*16+12 */
+#endif
+/* Force HAL_GPIO_LED_ON=1 so PixRacerLED::init() calls pinMode() */
+#ifndef HAL_GPIO_LED_ON
+#define HAL_GPIO_LED_ON 1
+#endif
+
 /*
  * GPS/WGS84 等需要 double 与 libm（RAD_TO_DEG_DOUBLE、sqrt 等），与 EKF 是否双精度无关。
  * AP_HAL_Macros.h 仅在 SITL/Linux/HAL_WITH_EKF_DOUBLE/AP_SIM 时开启 ALLOW_DOUBLE_MATH_FUNCTIONS；
