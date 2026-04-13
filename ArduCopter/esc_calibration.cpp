@@ -71,6 +71,7 @@ void Copter::esc_calibration_startup_check()
     if (g.esc_calibrate != ESCCalibrationModes::ESCCAL_DISABLED) {
         g.esc_calibrate.set_and_save(ESCCalibrationModes::ESCCAL_NONE);
     }
+
 #endif  // FRAME_CONFIG != HELI_FRAME
 }
 

@@ -115,7 +115,7 @@ uint16_t AP_Param::num_read_only;
 // goes true if we run out of param space
 bool AP_Param::eeprom_full;
 
-ObjectBuffer_TS<AP_Param::param_save> AP_Param::save_queue{30};
+ObjectBuffer_TS<AP_Param::param_save> AP_Param::save_queue{300};
 bool AP_Param::registered_save_handler;
 
 bool AP_Param::done_all_default_params;

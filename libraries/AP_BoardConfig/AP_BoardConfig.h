@@ -249,6 +249,9 @@ private:
         AP_Int8 ser_rtscts[9];
         AP_Int8 sbus_out_rate;
 #endif
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        AP_Int8 sbus_out_rate;
+#endif
         AP_Int8 board_type;
         AP_Int8 io_enable;
         AP_Int8 io_dshot;

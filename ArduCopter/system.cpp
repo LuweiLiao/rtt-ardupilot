@@ -1,6 +1,8 @@
 #include "Copter.h"
 #include <AP_ESC_Telem/AP_ESC_Telem.h>
 
+extern volatile uint32_t rtt_dbg_setup_stage;
+
 /*****************************************************************************
 *   The init_ardupilot function processes everything we need for an in - air restart
 *        We will determine later if we are actually on the ground and process a
@@ -13,29 +15,28 @@ static void failsafe_check_static()
     copter.failsafe_check();
 }
 
-extern volatile uint32_t rtt_dbg_setup_stage;
-
 void Copter::init_ardupilot()
 {
-    rtt_dbg_setup_stage = 100;
+    rtt_dbg_setup_stage = 600;
+
 #if AP_WINCH_ENABLED
     g2.winch.init();
 #endif
 
     notify.init();
     notify_flight_mode();
+    rtt_dbg_setup_stage = 601;
 
-    rtt_dbg_setup_stage = 101;
     battery.init();
 
 #if AP_RSSI_ENABLED
     rssi.init();
 #endif
 
-    rtt_dbg_setup_stage = 102;
+    rtt_dbg_setup_stage = 610;
     barometer.init();
+    rtt_dbg_setup_stage = 611;
 
-    rtt_dbg_setup_stage = 103;
     gcs().setup_uarts();
 
 #if OSD_ENABLED
@@ -54,6 +55,7 @@ void Copter::init_ardupilot()
 #endif
 
     init_rc_in();               // sets up rc channels from radio
+    rtt_dbg_setup_stage = 620;
 
 #if AP_RANGEFINDER_ENABLED
     // initialise surface to be tracked in SurfaceTracking
@@ -61,11 +63,11 @@ void Copter::init_ardupilot()
     surface_tracking.init((SurfaceTracking::Surface)copter.g2.surftrak_mode.get());
 #endif
 
-    rtt_dbg_setup_stage = 104;
     allocate_motors();
 
     // initialise rc channels including setting mode
     rc().convert_options(RC_Channel::AUX_FUNC::ARMDISARM_UNUSED, RC_Channel::AUX_FUNC::ARMDISARM_AIRMODE);
+
     rc().init();
 
     // sets up motors and output to escs
@@ -76,7 +78,6 @@ void Copter::init_ardupilot()
 
     // motors initialised so parameters can be sent
     ap.initialised_params = true;
-
 #if AP_RELAY_ENABLED
     relay.init();
 #endif
@@ -89,11 +90,14 @@ void Copter::init_ardupilot()
 
     // Do GPS init
     gps.set_log_gps_bit(MASK_LOG_GPS);
-    gps.init();
 
-    rtt_dbg_setup_stage = 105;
+    rtt_dbg_setup_stage = 630;
+    gps.init();
+    rtt_dbg_setup_stage = 631;
     AP::compass().set_log_bit(MASK_LOG_COMPASS);
+    rtt_dbg_setup_stage = 632;
     AP::compass().init();
+    rtt_dbg_setup_stage = 633;
 
 #if AP_AIRSPEED_ENABLED
     airspeed.set_log_bit(MASK_LOG_IMU);
@@ -134,9 +138,10 @@ void Copter::init_ardupilot()
     USERHOOK_INIT
 #endif
 
-    rtt_dbg_setup_stage = 106;
     barometer.set_log_baro_bit(MASK_LOG_IMU);
+    rtt_dbg_setup_stage = 640;
     barometer.calibrate();
+    rtt_dbg_setup_stage = 641;
 
 #if AP_RANGEFINDER_ENABLED
     // initialise rangefinder
@@ -171,7 +176,9 @@ void Copter::init_ardupilot()
     logger.setVehicle_Startup_Writer(FUNCTOR_BIND(&copter, &Copter::Log_Write_Vehicle_Startup_Messages, void));
 #endif
 
+    rtt_dbg_setup_stage = 650;
     startup_INS_ground();
+    rtt_dbg_setup_stage = 651;
 
 #if AC_CUSTOMCONTROL_MULTI_ENABLED
     custom_control.init();
@@ -457,7 +464,7 @@ void Copter::allocate_motors(void)
         AP_BoardConfig::allocation_error("AttitudeControl");
     }
     AP_Param::load_object_from_eeprom(attitude_control, attitude_control_var_info);
-        
+
     pos_control = NEW_NOTHROW AC_PosControl(*ahrs_view, *motors, *attitude_control);
     if (pos_control == nullptr) {
         AP_BoardConfig::allocation_error("PosControl");
@@ -490,7 +497,7 @@ void Copter::allocate_motors(void)
 
     // reload lines from the defaults file that may now be accessible
     AP_Param::reload_defaults_file(true);
-    
+
     // now setup some frame-class specific defaults
     switch ((AP_Motors::motor_frame_class)g2.frame_class.get()) {
     case AP_Motors::MOTOR_FRAME_Y6:
@@ -515,6 +522,7 @@ void Copter::allocate_motors(void)
     
     // upgrade parameters. This must be done after allocating the objects
     convert_pid_parameters();
+
 #if FRAME_CONFIG == HELI_FRAME
     motors->heli_motors_param_conversions();
 #endif

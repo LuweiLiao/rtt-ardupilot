@@ -306,15 +306,12 @@ volatile uint32_t rtt_dbg_setup_stage = 0;
  */
 void AP_Vehicle::setup()
 {
-    rtt_dbg_setup_stage = 1;
     AP_Param::setup_sketch_defaults();
 
-    rtt_dbg_setup_stage = 2;
 #if AP_SERIALMANAGER_ENABLED
     serial_manager.init_console();
 #endif
 
-    rtt_dbg_setup_stage = 3;
     DEV_PRINTF("\n\nInit %s"
                         "\n\nFree RAM: %u\n",
                         AP::fwversion().fw_string,
@@ -324,11 +321,9 @@ void AP_Vehicle::setup()
     check_firmware_print();
 #endif
 
-    rtt_dbg_setup_stage = 4;
     // validate the static parameter table, then load persistent
     // values from storage:
     AP_Param::check_var_info();
-    rtt_dbg_setup_stage = 5;
     load_parameters();
 
 #if CONFIG_HAL_BOARD == HAL_BOARD_CHIBIOS
@@ -352,18 +347,15 @@ void AP_Vehicle::setup()
     G_Dt = scheduler.get_loop_period_s();
 #endif
 
-    rtt_dbg_setup_stage = 6;
     // this is here for Plane; its failsafe_check method requires the
     // RC channels to be set as early as possible for maximum
     // survivability.
     set_control_channels();
 
-    rtt_dbg_setup_stage = 7;
 #if HAL_GCS_ENABLED
     gcs().init();
 #endif
 
-    rtt_dbg_setup_stage = 8;
 #if AP_SERIALMANAGER_ENABLED
 #if HAL_WITH_IO_MCU
     if (BoardConfig.io_enabled()) {
@@ -372,7 +364,6 @@ void AP_Vehicle::setup()
 #endif
     serial_manager.init();
 #endif
-    rtt_dbg_setup_stage = 9;
 #if HAL_GCS_ENABLED
     gcs().setup_console();
 #endif
@@ -416,15 +407,12 @@ void AP_Vehicle::setup()
     stats.init();
 #endif
 
-    rtt_dbg_setup_stage = 10;
     BoardConfig.init();
 
-    rtt_dbg_setup_stage = 11;
 #if HAL_CANMANAGER_ENABLED
     can_mgr.init();
 #endif
 
-    rtt_dbg_setup_stage = 12;
 #if HAL_LOGGING_ENABLED
     logger.init(get_log_bitmask(), get_log_structures(), get_num_log_structures());
 #endif
@@ -434,7 +422,6 @@ void AP_Vehicle::setup()
     AP::gripper().init();
 #endif
 
-    rtt_dbg_setup_stage = 13;
     // init_ardupilot is where the vehicle does most of its initialisation.
     init_ardupilot();
 

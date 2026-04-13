@@ -12,13 +12,16 @@ void AP_Vehicle::load_parameters(AP_Int16 &format_version, const uint16_t expect
 
         // erase all parameters
         hal.console->printf("Firmware change: erasing EEPROM...\n");
+
         StorageManager::erase();
+
         AP_Param::erase_all();
 
         // save the current format version
         format_version.set_and_save(expected_format_version);
         hal.console->printf("done.\n");
     }
+
     format_version.set_default(expected_format_version);
 
     // Load all auto-loaded EEPROM variables
