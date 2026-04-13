@@ -15,7 +15,15 @@
 #include "RCOutput.h"
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Common/ExpandingString.h>
+#include <AP_BoardConfig/AP_BoardConfig.h>
 #include <rtthread.h>
+
+extern const AP_HAL::HAL& hal;
+
+#if HAL_WITH_IO_MCU
+#include <AP_IOMCU/AP_IOMCU.h>
+extern AP_IOMCU iomcu;
+#endif
 
 #if defined(RT_USING_PWM)
 #include <rtdevice.h>
@@ -54,6 +62,12 @@ void RCOutput::init()
 #endif
 
     _initialized = true;
+
+#if HAL_WITH_IO_MCU
+    iomcu_enabled = true;
+#endif
+    // Register safety_update as a timer process at 10 Hz
+    hal.scheduler->register_timer_process(FUNCTOR_BIND_MEMBER(&RCOutput::safety_update, void));
 }
 
 void RCOutput::set_freq(uint32_t chmask, uint16_t freq_hz)
@@ -114,6 +128,10 @@ void RCOutput::_write_hw(uint8_t chan, uint16_t period_us)
 void RCOutput::write(uint8_t chan, uint16_t period_us)
 {
     if (chan >= RTT_RCOUT_MAX_CHANNELS) return;
+    // If safety is on and this channel is in the safety mask, suppress output
+    if (safety_state == AP_HAL::Util::SAFETY_DISARMED && (safety_mask & (1U << chan))) {
+        return;
+    }
     if (_corked) {
         _pending_us[chan] = period_us;
     } else {
@@ -173,6 +191,11 @@ void RCOutput::set_failsafe_pwm(uint32_t chmask, uint16_t period_us)
             _failsafe_us[i] = period_us;
         }
     }
+#if HAL_WITH_IO_MCU
+    if (iomcu_enabled) {
+        iomcu.set_failsafe_pwm(chmask, period_us);
+    }
+#endif
 }
 
 bool RCOutput::force_safety_on()
@@ -190,9 +213,11 @@ void RCOutput::force_safety_off()
 
 void RCOutput::set_safety_pwm(uint32_t chmask, uint16_t period_us)
 {
-    (void)chmask;
-    (void)period_us;
-    /* No IOMCU — safety PWM is a no-op */
+#if HAL_WITH_IO_MCU
+    if (iomcu_enabled) {
+        iomcu.set_safety_mask(chmask);
+    }
+#endif
 }
 
 void RCOutput::set_default_rate(uint16_t rate_hz)
@@ -215,6 +240,27 @@ AP_HAL::RCOutput::output_mode RCOutput::get_output_mode(uint32_t &mask)
 {
     mask = _enabled_mask;
     return _output_mode;
+}
+
+void RCOutput::safety_update(void)
+{
+    uint32_t now = AP_HAL::millis();
+    if (now - safety_update_ms < 100) {
+        return;
+    }
+    safety_update_ms = now;
+
+#if HAL_WITH_IO_MCU
+    if (iomcu_enabled) {
+        safety_state = iomcu.get_safety_switch_state();
+    }
+#endif
+
+    // Read safety mask from board config
+    const AP_BoardConfig *bc = AP_BoardConfig::get_singleton();
+    if (bc) {
+        safety_mask = bc->get_safety_mask();
+    }
 }
 
 void RCOutput::timer_tick(void)

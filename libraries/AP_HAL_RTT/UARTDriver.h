@@ -45,6 +45,13 @@ public:
 
     bool wait_timeout(uint16_t n, uint32_t timeout_ms) override;
 
+    /* Assign port number at runtime.  Needed because GCC --gc-sections may
+     * skip the C++ static constructors that normally set _port_num. */
+    void set_port_num(uint8_t n) {
+        _port_num = n;
+        if (n < RTT_UART_MAX_DRIVERS) { _drivers[n] = this; }
+    }
+
     void _timer_tick(void) override;
 
     void set_flow_control(enum flow_control flow) override;
@@ -73,11 +80,18 @@ private:
     bool _initialized;
     bool _deferred_open;
     bool _is_usb{false};
+    bool _unbuffered_writes{false};
     uint16_t _usb_write_fail_count{0};
     enum flow_control _flow_control = FLOW_CONTROL_DISABLE;
     uint16_t _last_options = 0;
     uint32_t _tx_stats_bytes = 0;
     uint32_t _rx_stats_bytes = 0;
+
+#if defined(SOC_SERIES_STM32F7)
+    /* Direct UART register base for register-level polling TX.
+     * Actually a uart_hw*, but stored as void* to avoid header dependency. */
+    void *_uart_hw{nullptr};
+#endif
 
     bool _check_usb_connected() const;
 

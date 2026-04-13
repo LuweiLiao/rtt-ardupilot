@@ -51,6 +51,11 @@ public:
 
     // Safety switch state (read by Util::safety_switch_state)
     uint8_t safety_state = 0;  // AP_HAL::Util::SAFETY_DISARMED
+    uint32_t safety_mask = 0;
+    uint32_t safety_update_ms = 0;
+    bool iomcu_enabled = false;
+
+    void safety_update(void);
 
 private:
     uint16_t _period_us[RTT_RCOUT_MAX_CHANNELS];

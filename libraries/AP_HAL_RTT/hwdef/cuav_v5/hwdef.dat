@@ -8,11 +8,46 @@ MCU STM32F7xx STM32F765xx
 # 2M flash, 32KB reserved for ArduPilot bootloader
 FLASH_SIZE_KB 2048
 FLASH_RESERVE_START_KB 32
+# Reserve last 512KB (pages 10-11) for STORAGE_FLASH_PAGE
+FLASH_RESERVE_END_KB 512
 # Match ArduPilot CUAVv5/fmuv5: 16MHz HSE -> 216MHz SYSCLK
 OSCILLATOR_HZ 16000000
 
-# Serial order for RTT: USB CDC first (GCS MAVLink), then USART3
-SERIAL_ORDER OTG1 USART3
+# Serial order — match ChibiOS fmuv5: OTG1 USART2 USART3 USART1 UART4 USART6 UART7 OTG2
+# (8 ports). UART7 stays in the list as a normal serial port now.
+# OTG2 is not physically wired on CUAV V5, included for API compatibility.
+SERIAL_ORDER OTG1 USART2 USART3 USART1 UART4 USART6 UART7
+
+# ---- USB OTG FS pins (match RT-Thread stm32f765-cuav-v5 BSP) ----
+PA8  OTG1_SOF  OTG1 AF10
+PA9  OTG1_VBUS OTG1 AF10
+PA10 OTG1_ID   OTG1 AF10
+PA11 OTG1_DM   OTG1 AF10
+PA12 OTG1_DP   OTG1 AF10
+
+# ---- USART2 TELEM1 (PD5 TX, PD6 RX) ----
+PD5  USART2_TX  USART2 AF7
+PD6  USART2_RX  USART2 AF7
+
+# ---- USART3 TELEM2 (PD8 TX, PD9 RX) ----
+PD8  USART3_TX  USART3 AF7
+PD9  USART3_RX  USART3 AF7
+
+# ---- USART1 GPS1 (PB6 TX, PB7 RX) ----
+PB6  USART1_TX  USART1 AF7
+PB7  USART1_RX  USART1 AF7
+
+# ---- UART4 GPS2 (PD1 TX, PD0 RX) ----
+PD1  UART4_TX  UART4 AF8
+PD0  UART4_RX  UART4 AF8
+
+# ---- USART6 TELEM3 (PG14 TX, PG9 RX) ----
+PG14 USART6_TX  USART6 AF8
+PG9  USART6_RX  USART6 AF8
+
+# ---- UART7 debug serial (PE8 TX, PF6 RX) ----
+PE8  UART7_TX  UART7 AF8
+PF6  UART7_RX  UART7 AF8
 
 # APJ board ID for bootloader/GCS (same as ChibiOS fmuv5 / CUAV V5)
 APJ_BOARD_ID TARGET_HW_PX4_FMU_V5
@@ -25,6 +60,24 @@ PF4  BMI055_G_CS CS
 PG10 BMI055_A_CS CS
 PF5  RAMTRON_CS  CS
 PF10 MS5611_CS   CS
+
+# ---- Power pins (match ChibiOS fmuv5 hwdef) ----
+PE3  VDD_3V3_SENSORS_EN  OUTPUT  HIGH
+PG5  VDD_5V_RC_EN        OUTPUT  HIGH
+PG7  VDD_3V3_SD_CARD_EN  OUTPUT  HIGH
+# Keep the IMU heater MOSFET disabled on RTT bring-up. We declare the
+# heater-enable GPIO as an output and drive it LOW from board init so PA7
+# never floats high before higher-level code runs.
+PA7  HEATER_EN           OUTPUT  LOW
+
+# ---- I2C bus pins (soft I2C bitbang) ----
+PH7  I2C3_SCL I2C3 AF4
+PH8  I2C3_SDA I2C3 AF4
+
+# ---- IOMCU UART (UART8 PE0/PE1) ----
+PE0  UART8_RX  UART8 AF8
+PE1  UART8_TX  UART8 AF8
+IOMCU_UART UART8
 
 # ---- SPI device table ----
 # SPIDEV name      bus   devid    cs_pin        mode    lowspeed  highspeed
@@ -45,10 +98,10 @@ IMU BMI088 SPI:bmi055_a SPI:bmi055_g ROTATION_ROLL_180_YAW_90
 
 BARO MS5611 SPI:ms5611
 
-define HAL_PROBE_EXTERNAL_I2C_COMPASSES
-# I2C bus order: match ChibiOS fmuv5 I2C_ORDER (I2C3 I2C1 I2C2 I2C4)
+#define HAL_PROBE_EXTERNAL_I2C_COMPASSES
+# I2C bus: only I2C3 has physical pins on CUAV V5
 # I2C3 (PH7 SCL, PH8 SDA) = bus 0 = internal compass (IST8310)
-define HAL_RTT_I2C_BUS_NAMES "i2c3", "i2c1", "i2c2", "i2c4"
+define HAL_RTT_I2C_BUS_NAMES "i2c3"
 # IST8310 on I2C3 (bus 0) at 0x0E, internal, match ChibiOS fmuv5 ROTATION
 define HAL_MAG_PROBE_LIST PROBE_MAG_I2C(IST8310, 0, 0x0E, false, ROTATION_ROLL_180_YAW_90)
 define HAL_COMPASS_AUTO_ROT_DEFAULT 2
@@ -70,10 +123,12 @@ define AP_SCRIPTING_ENABLED 1
 define SCRIPTING_DIRECTORY "/APM/scripts_rtt"
 # RTT DFS provides POSIX FS interface (open/close/read/write/stat/mkdir)
 define AP_FILESYSTEM_POSIX_ENABLED 1
+# Temporary: allow system to boot without IMU while debugging SPI issues (REMOVED - IMU works)
 # ---- RGB LED (PixRacer scheme: PH10/PH11/PH12, open-drain active-low) ----
 # RTT uses GET_PIN(port, num) = port*16+num: H=7 → PH10=122, PH11=123, PH12=124
-# Set LED_ON=1 (active-high write) so PixRacerLED calls pinMode() to configure output mode
-define HAL_GPIO_LED_ON 1
+# ChibiOS CUAVv5 leaves HAL_GPIO_LED_ON undefined, so AP_HAL_Boards.h falls
+# back to the default active-low value 0. Keep it undefined here as well:
+# PixRacerLED then skips pinMode(), preserving the board's open-drain wiring.
 define AP_NOTIFY_GPIO_LED_RGB_RED_PIN 122
 define AP_NOTIFY_GPIO_LED_RGB_GREEN_PIN 123
 define AP_NOTIFY_GPIO_LED_RGB_BLUE_PIN 124
@@ -84,3 +139,12 @@ define AP_FILESYSTEM_POSIX_HAVE_STATFS 1
 define HAL_BOARD_LOG_DIRECTORY "/APM/LOGS"
 define HAL_BOARD_TERRAIN_DIRECTORY "/APM/TERRAIN"
 define HAL_BOARD_STORAGE_DIRECTORY "/APM/STORAGE"
+
+# Board detection — enables per-board sensor probing (baro, compass, etc.)
+define AP_FEATURE_BOARD_DETECT 1
+define BOARD_TYPE_DEFAULT 24
+define HAL_BARO_ALLOW_INIT_NO_BARO 1
+
+# ---- IOMCU firmware (embedded in ROMFS, match ChibiOS fmuv5) ----
+# Uses iofirmware_lowpolh.bin (same as ChibiOS fmuv5)
+ROMFS io_firmware.bin Tools/IO_Firmware/iofirmware_lowpolh.bin

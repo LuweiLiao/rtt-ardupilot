@@ -12,6 +12,19 @@
 extern "C" bool usb_device_is_configured(uint8_t busid);
 extern "C" bool usb_cdc_dtr_active(void);
 
+/* USB debug counters from DWC2 driver and usbd_serial (non-invasive monitoring) */
+extern "C" {
+extern volatile uint32_t dbg_iepint_calls;
+extern volatile uint32_t dbg_iepint_ep1_xfrc;
+extern volatile uint32_t dbg_txfe_ep1_calls;
+extern volatile uint32_t dbg_txfe_ep1_wrote;
+extern volatile uint32_t dbg_ep_busy_cnt;
+extern volatile uint32_t dbg_ep_recover_cnt;
+extern volatile uint32_t dbg_serial_bulkin_cnt;
+extern volatile uint32_t dbg_serial_tx_kick;
+extern volatile uint32_t dbg_serial_write_calls;
+}
+
 #ifndef HAL_RTT_SERIAL0_OTG
 #define HAL_RTT_SERIAL0_OTG 0
 #endif
@@ -19,6 +32,50 @@ extern "C" bool usb_cdc_dtr_active(void);
 extern const AP_HAL::HAL &hal;
 
 using namespace RTT;
+
+#if defined(SOC_SERIES_STM32F7)
+/*
+ * Direct register-level UART TX for STM32F7.
+ * Bypasses RTT serial V1 TX completion mechanism which deadlocks:
+ * _serial_int_tx() blocks on rt_completion_wait() when stm32_putc() returns -1,
+ * but the TX-done ISR may never fire, permanently blocking the ap_uart thread.
+ */
+struct uart_hw { volatile uint32_t cr1; volatile uint32_t _r1[6]; volatile uint32_t isr; volatile uint32_t _r2[2]; volatile uint32_t tdr; };
+
+static uart_hw *uart_from_name(const char *name)
+{
+    int n = 0;
+    if (name && (name[0] == 'u' || name[0] == 'U')) {
+        const char *p = name;
+        while (*p && (*p < '0' || *p > '9')) p++;
+        if (*p) n = *p - '0';
+    }
+    switch (n) {
+    case 1: return (uart_hw*)0x40011000;
+    case 2: return (uart_hw*)0x40004400;
+    case 3: return (uart_hw*)0x40004800;
+    case 4: return (uart_hw*)0x40004C00;
+    case 5: return (uart_hw*)0x40005000;
+    case 6: return (uart_hw*)0x40011400;
+    case 7: return (uart_hw*)0x40007800;
+    case 8: return (uart_hw*)0x40007C00;
+    default: return nullptr;
+    }
+}
+
+static bool uart_poll_tx(volatile uint32_t *isr, volatile uint32_t *tdr, const uint8_t *buf, uint32_t len)
+{
+    for (uint32_t i = 0; i < len; i++) {
+        uint32_t timeout = 50000;
+        while (!(*isr & (1U << 7)) && --timeout) { asm volatile("nop"); }
+        if (timeout == 0) return false;
+        *((volatile uint8_t*)tdr) = buf[i];
+    }
+    uint32_t timeout = 50000;
+    while (!(*isr & (1U << 6)) && --timeout) { asm volatile("nop"); }
+    return true;
+}
+#endif /* SOC_SERIES_STM32F7 */
 
 /* 板级设备名表：未定义 HAL_RTT_UART_DEVICE_LIST 时使用占位 uart1, uart2, ... */
 #ifndef HAL_RTT_UART_DEVICE_LIST
@@ -82,20 +139,34 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
         return;
     }
 
+    /* Register this driver in the static array if not already done.
+     * GCC with -ffunction-sections -gc-sections may skip static constructors
+     * for objects it considers "trivially initialisable", so _port_num is set
+     * by the declaration argument but _drivers[] was never populated. */
+    if (_port_num < RTT_UART_MAX_DRIVERS && _drivers[_port_num] != this) {
+        _drivers[_port_num] = this;
+    }
+
+    /* If already initialized with device open, just change baud rate */
+    if (_initialized && _dev != nullptr && baud != 0) {
+        _baudrate = baud;
+        rt_device_control(_dev, 0x1000, &_baudrate);
+        return;
+    }
+
     if (_port_num >= RTT_UART_MAX_DRIVERS ||
         _port_num >= ARRAY_SIZE(_device_names)) {
         return;
     }
 
     const char *name = _device_names[_port_num];
+    // rt_kprintf("[UART%u] _begin: looking for device '%s'\n", (unsigned)_port_num, name);
     rt_device_t dev = rt_device_find(name);
+    /* No blocking retry — defer to _timer_tick instead.  The old 10×200ms
+     * retry loop could block for 2 s per port; with 8 ports the cumulative
+     * 10+ s stall triggered main_loop_stuck (Internal Error 0x8000). */
     if (dev == nullptr) {
-        for (int retry = 0; retry < 10 && dev == nullptr; retry++) {
-            rt_thread_mdelay(200);
-            dev = rt_device_find(name);
-        }
-    }
-    if (dev == nullptr) {
+        // rt_kprintf("[UART%u] device '%s' NOT found, deferring open\n", (unsigned)_port_num, name);
         _deferred_open = true;
         _baudrate = baud;
         uint16_t rxS = rxSpace < 512 ? 512 : rxSpace;
@@ -104,6 +175,7 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
         if (_writebuf.get_size() == 0) { _writebuf.set_size(txS); }
         return;
     }
+    // rt_kprintf("[UART%u] device '%s' found at %p\n", (unsigned)_port_num, name, dev);
 
     /* USB CDC 端口扩大缓冲，8192 字节足以容纳多个 MAVLink LOG_DATA 包，
      * 避免高速日志下载时 txspace 频繁归零导致 HAVE_PAYLOAD_SPACE 拒绝发送. */
@@ -114,21 +186,43 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
     }
 
     /* RDWR + INT_RX 与延期打开路径一致；部分 CDC 字符设备仅 INT_RX 时写路径异常 */
-    rt_err_t err = rt_device_open(dev, RT_DEVICE_FLAG_RDWR | RT_DEVICE_FLAG_INT_RX);
+    /* Try DMA TX first (non-blocking, truly async). Falls back to
+     * INT_RX-only open for ports without DMA config (e.g. USB CDC). */
+    rt_err_t err = rt_device_open(dev, RT_DEVICE_FLAG_RDWR | RT_DEVICE_FLAG_INT_RX | RT_DEVICE_FLAG_DMA_TX);
     if (err != RT_EOK) {
+        err = rt_device_open(dev, RT_DEVICE_FLAG_RDWR | RT_DEVICE_FLAG_INT_RX);
+    }
+    if (err != RT_EOK) {
+        rt_kprintf("[UART%u] INT_RX open failed (%d), trying DMA_RX\n", (unsigned)_port_num, (int)err);
         err = rt_device_open(dev, RT_DEVICE_FLAG_RDWR | RT_DEVICE_FLAG_DMA_RX);
     }
+    // rt_kprintf("[UART%u] open result=%d, is_usb=%d\n", (unsigned)_port_num, (int)err, is_usb);
     if (err != RT_EOK) {
         return;
     }
 
     _dev = dev;
     _baudrate = baud;
-#if defined(RT_DEVICE_CTRL_SET_BAUD_RATE)
-    if (_baudrate != 0) {
-        rt_device_control(_dev, RT_DEVICE_CTRL_SET_BAUD_RATE, &_baudrate);
-    }
+
+#if defined(SOC_SERIES_STM32F7)
+    /* Resolve UART hardware base for direct register-level TX polling.
+     * This bypasses the RTT serial V1 TX completion mechanism which can
+     * deadlock the ap_uart thread. */
+    _uart_hw = uart_from_name(name);
 #endif
+
+    if (_baudrate != 0) {
+        /* Skip baud rate change for the RTT console UART — it's already
+         * configured by rt_hw_board_init and shared with rt_kprintf.
+         * Reconfiguring it would break the console output. */
+        rt_device_t console_dev = rt_console_get_device();
+        bool is_console = (console_dev && dev == console_dev);
+        if (!is_console) {
+            rt_device_control(_dev, 0x1000, &_baudrate);
+        } else {
+            _baudrate = 115200;  // console is always 115200
+        }
+    }
 
     /* 每个端口独立 rx_sem */
     if (_rx_sem == nullptr) {
@@ -160,6 +254,15 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
     }
 
     _initialized = true;
+
+    /* If this port is the RTT console device, disable console output so
+     * rt_kprintf text doesn't interleave with MAVLink binary frames. */
+    if (!is_usb) {
+        rt_device_t console_dev = rt_console_get_device();
+        if (console_dev && dev == console_dev) {
+            rt_console_output_set_enabled(RT_FALSE);
+        }
+    }
 }
 
 void UARTDriver::_end()
@@ -194,6 +297,10 @@ uint32_t UARTDriver::_available()
     if (!_initialized) {
         return 0;
     }
+    // Drain any pending hardware RX into the ring buffer so callers
+    // (e.g. IOMCU thread) see up-to-date data without waiting for
+    // the next timer tick.
+    _drain_rx_to_readbuf();
     return _readbuf.available();
 }
 
@@ -208,32 +315,36 @@ void UARTDriver::_drain_rx_to_readbuf()
     }
 }
 
+/* Debug counters for UART drain path — read via GDB */
+volatile uint32_t rtt_uart_dbg_drain_calls = 0;
+volatile uint32_t rtt_uart_dbg_drain_writes = 0;
+volatile uint32_t rtt_uart_dbg_drain_zero = 0;
+volatile uint32_t rtt_uart_dbg_drain_bytes = 0;
+
 void UARTDriver::_drain_writebuf_to_dev()
 {
     if (_dev == nullptr) {
         return;
     }
-    /*
-     * 每次 timer tick 把 _writebuf 里的数据尽量写进设备 tx ring buffer.
-     * USB CDC: rt_device_write 是非阻塞的（写入 cherryusb tx_rb 后立即返回），
-     * 每次循环写到返回 0（tx_rb 满）为止，不需要 chunk 数量限制.
-     * 硬件 UART: rt_device_write 可能阻塞等 DMA 完成，因此每次最多写一个
-     * _tx_bounce 大小的块，防止长时间占用 timer 线程.
-     */
-    const uint8_t max_chunks = _is_usb ? 8 : 4;
-    for (uint8_t chunk = 0; chunk < max_chunks; chunk++) {
-        uint32_t n = _writebuf.peekbytes(_tx_bounce, sizeof(_tx_bounce));
-        if (n == 0) {
-            break;
-        }
-        rt_size_t w = rt_device_write(_dev, 0, _tx_bounce, n);
-        if (w == 0) {
-            break;
-        }
+
+    /* Single write per timer tick to avoid DMA bounce buffer race.
+     * RTT serial DMA TX stores the buffer pointer (not the data), so
+     * reusing _tx_bounce in a loop can corrupt in-flight DMA transfers.
+     * One 512-byte write per 1ms tick = 512 KB/s max, well above
+     * 115200 baud (11.5 KB/s). */
+    uint32_t n = _writebuf.peekbytes(_tx_bounce, sizeof(_tx_bounce));
+    if (n == 0) {
+        return;
+    }
+
+    rt_size_t w = rt_device_write(_dev, 0, _tx_bounce, n);
+    rtt_uart_dbg_drain_calls++;
+    if (w > 0) {
+        rtt_uart_dbg_drain_writes++;
+        rtt_uart_dbg_drain_bytes += w;
         _writebuf.advance(w);
-        if (w < n) {
-            break;
-        }
+    } else {
+        rtt_uart_dbg_drain_zero++;
     }
 }
 
@@ -280,6 +391,13 @@ size_t UARTDriver::_write(const uint8_t *buffer, size_t size)
     if (!_initialized) {
         return 0;
     }
+    if (_unbuffered_writes && !_is_usb && _dev != nullptr) {
+        // For IOMCU and other unbuffered UART users: write directly to
+        // hardware, bypassing the ring buffer and timer-tick drain path.
+        // This ensures data is sent immediately rather than waiting for
+        // the next 1kHz timer tick in the uart thread.
+        return rt_device_write(_dev, 0, buffer, size);
+    }
     return _writebuf.write(buffer, size);
 }
 
@@ -315,13 +433,25 @@ bool UARTDriver::_check_usb_connected() const
     return usb_device_is_configured(0);
 }
 
+volatile uint32_t rtt_uart_dbg_tick_calls = 0;
+/* Per-port tick counter — identifies which port's _timer_tick crashes the thread */
+volatile uint32_t rtt_uart_dbg_port_ticks[10] = {};
+volatile uint32_t rtt_uart_dbg_crash_port = 0xFFFFFFFF;  /* set to port_num on crash entry */
+
 void UARTDriver::_timer_tick(void)
 {
+    rtt_uart_dbg_tick_calls++;
+    rtt_uart_dbg_crash_port = _port_num;
+    rtt_uart_dbg_port_ticks[_port_num < 10 ? _port_num : 0]++;
     if (!_initialized) {
         if (_deferred_open && _port_num < ARRAY_SIZE(_device_names)) {
-            rt_device_t dev = rt_device_find(_device_names[_port_num]);
+            const char *name = _device_names[_port_num];
+            rt_device_t dev = rt_device_find(name);
             if (dev != nullptr) {
-                rt_err_t err = rt_device_open(dev, RT_DEVICE_FLAG_RDWR | RT_DEVICE_FLAG_INT_RX);
+                rt_err_t err = rt_device_open(dev, RT_DEVICE_FLAG_RDWR | RT_DEVICE_FLAG_INT_RX | RT_DEVICE_FLAG_DMA_TX);
+                if (err != RT_EOK) {
+                    err = rt_device_open(dev, RT_DEVICE_FLAG_RDWR | RT_DEVICE_FLAG_INT_RX);
+                }
                 if (err == RT_EOK) {
                     _dev = dev;
                     if (_rx_sem == nullptr) {
@@ -332,8 +462,17 @@ void UARTDriver::_timer_tick(void)
                     if (_rx_sem) {
                         rt_device_set_rx_indicate(_dev, _rx_indicate_cb);
                     }
-                    if (_readbuf.get_size() == 0) { _readbuf.set_size(512); }
-                    if (_writebuf.get_size() == 0) { _writebuf.set_size(512); }
+                    const bool is_usb = (strncmp(name, "usb", 3) == 0);
+                    _is_usb = is_usb;
+                    uint16_t rxS = 512;
+                    uint16_t txS = 512;
+                    if (is_usb) {
+                        rxS = 2048;
+                        txS = 8192;
+                        _flow_control = FLOW_CONTROL_ENABLE;
+                    }
+                    if (_readbuf.get_size() < rxS) { _readbuf.set_size(rxS); }
+                    if (_writebuf.get_size() < txS) { _writebuf.set_size(txS); }
                     _initialized = true;
                     _deferred_open = false;
                 }
@@ -374,12 +513,22 @@ void UARTDriver::_timer_tick(void)
                 _diag_clears++;
             }
         }
-        // Diagnostic: every 5s print USB write stats to rt_kprintf (UART7 msh)
-        if (AP_HAL::millis() - _diag_last_ms > 5000 && _port_num == 0) {
-            rt_kprintf("[USB0] wb_avail=%u fails=%u clears=%u\n",
-                       (unsigned)_writebuf.available(),
-                       (unsigned)_usb_write_fail_count,
-                       (unsigned)_diag_clears);
+        // Diagnostic: every 5s print USB write stats + DWC2 debug counters
+        if (AP_HAL::millis() - _diag_last_ms > 5000) {
+            // rt_kprintf("[USB%d] wb=%u fail=%u clr=%u iep=%u xfrc=%u txfe=%u/%u kick=%u bin=%u w=%u busy=%u rec=%u\n",
+            //            (unsigned)_port_num,
+            //            (unsigned)_writebuf.available(),
+            //            (unsigned)_usb_write_fail_count,
+            //            (unsigned)_diag_clears,
+            //            (unsigned)dbg_iepint_calls,
+            //            (unsigned)dbg_iepint_ep1_xfrc,
+            //            (unsigned)dbg_txfe_ep1_calls,
+            //            (unsigned)dbg_txfe_ep1_wrote,
+            //            (unsigned)dbg_serial_tx_kick,
+            //            (unsigned)dbg_serial_bulkin_cnt,
+            //            (unsigned)dbg_serial_write_calls,
+            //            (unsigned)dbg_ep_busy_cnt,
+            //            (unsigned)dbg_ep_recover_cnt);
             _diag_clears = 0;
             _diag_last_ms = AP_HAL::millis();
         }
@@ -444,8 +593,8 @@ uint16_t UARTDriver::get_options(void) const
 
 bool UARTDriver::set_unbuffered_writes(bool on)
 {
-    (void)on;
-    return false;
+    _unbuffered_writes = on;
+    return true;
 }
 
 void UARTDriver::configure_parity(uint8_t v)
