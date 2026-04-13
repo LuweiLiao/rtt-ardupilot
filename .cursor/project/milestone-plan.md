@@ -36,15 +36,21 @@
 - [x] MAVLink 消息频率修复（call_delay_cb + delay callback 白名单 + USB CDC TX buffer）
 - [x] IWDG 独立看门狗骨架（暂 `#if 0` 禁用，需 GDB 调试）
 - [x] SD 卡实际插卡验证（挂载 + 日志写入 + 回读）— 188 logs on / mount, ELM-FAT
-- [ ] RCOutput 完善（至少确保基础 PWM 可控电调）
-- [ ] RCInput 完善（SBUS 路径验证）
+- [x] RAW_IMU 加速度修复（send_raw_imu 使用主 IMU 索引）— 2026-04-03 验证通过
+- [x] PWM 输出 TIM1/4/12 全运行，8 通道初始化 — 2026-04-03
+- [x] SD 卡挂载非阻塞化（后台线程替代 60s 同步阻塞）— 2026-04-03
+- [x] 构建系统 drv_pwm.o/drv_tim.o 链接修复 — 2026-04-03
+- [x] Boot 序列修复（main() 正确启动）— 2026-04-03
+- [ ] SD 卡 SDMMC2 硬件层响应（需 ChibiOS 对比测试）
+- [ ] RCOutput 实机电调验证（通过 GCS 命令驱动）
+- [ ] RCInput SBUS 实机验证（接 SBUS 接收机）
 - [ ] Scheduler 线程模型进一步对齐
 
 ## 升级到 M7 前需要确认
 
-- SD 卡日志可写入可回读
-- 至少一种 RC 输入方式可工作
-- PWM 输出可控电调
+- SD 卡 SDMMC2 硬件层可工作（可能需要硬件排查或 ChibiOS 对比测试确认）
+- 至少一种 RC 输入方式可工作（SBUS 实机验证）
+- PWM 输出可控电调（GCS 命令实机验证）
 - PreArm 检查项不再阻断基本操作
 
 ## M7 关注点

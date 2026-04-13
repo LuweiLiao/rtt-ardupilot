@@ -1,5 +1,11 @@
 # Decision Log
 
+## 2026-04-03: 硬件问题采用 ChibiOS 对比法调试
+- 原因：SD 卡在 SDMMC2 上无响应，GPIO/clock 配置已确认正确，纯软件调试无法确定是固件初始化序列问题还是硬件层问题
+- 决定：当遇到无法仅通过软件调试解决的硬件问题时，刷 ChibiOS CUAV V5 固件做对比测试。ChibiOS 是 ArduPilot 在 STM32 上的参考实现，若 ChibiOS 下同样不工作则可排除固件问题，确认为硬件缺陷
+- 放弃方案：继续在 RTT 侧单方面调整 SDMMC2 初始化参数（已证明 GPIO/clock 配置正确但无卡响应）
+- 适用场景：SDMMC/SDIO、SPI 外设、USB OTG、定时器等硬件外设行为与预期不符时
+
 ## 2026-03-30: `RAW_IMU` 使用 AHRS 主 IMU 索引，而非硬编码实例 0
 - 原因：多 IMU 飞机上主传感器可能不是 `instance 0`，固定发 0 会导致 GCS/测试看到加速度长期为 0，而 `ATTITUDE`/EKF 仍正常
 - 决定：`send_raw_imu()` 使用 `AP::ahrs().get_primary_accel_index()`，越界则回退 `0`

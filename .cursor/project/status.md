@@ -1,7 +1,7 @@
 # AP_HAL_RTT 当前状态
 
 > 基线：`CUAV v5` / `STM32F767` / `ArduCopter V4.7.0-dev on RT-Thread 5.3.0`
-> 最后更新：2026-03-31（MAVLink 三层频率修复 + IWDG 骨架 + USB CDC TX buffer 增大）
+> 最后更新：2026-04-08（SPI DMA SPE bit 修复 + 栈溢出修复 + 主循环慢调查）
 
 ## 当前稳定成立的事实
 
@@ -46,6 +46,11 @@
 - **RTT Copter 默认 MAVLink 流率已加运行时 fallback**：若启动时检测到 `streamRates[]` 整组仍为 0，则仅在内存中为 `RAW_SENS/EXT_STAT/RC_CHAN/POSITION/EXTRA1/EXTRA2/EXTRA3` 填入默认值，再初始化 message intervals，不改持久化参数
 - **MAVLink 消息频率三层修复**（2026-03-31）：(1) 主循环末尾显式 `call_delay_cb()` 弥补 RTT `delay_microseconds_boost()` 不触发 delay callback 的差异；(2) `should_send_message_in_delay_callback()` 对 RTT 返回 true 允许所有消息类型在 delay callback 中发送；(3) USB CDC TX ring buffer 从 2048B 增大到 8192B + `_usb_write_fail_count` 逻辑修正（仅 buffer 非空时递增）。修复后默认流率 96.6 msgs/s，ATTITUDE 13.3Hz
 - **IWDG 独立看门狗骨架已就位**（2026-03-31）：LSI enable + /256 prescaler + 10s reload；`watchdog_pat()` 中 kick；`set_system_initialized()` 中启动（当前 `#if 0` 暂禁用，因 GDB 无法在 reset loop 中 halt）；`was_watchdog_reset()` 读 RCC_CSR IWDGRSTF/WWDGRSTF 标志
+- **RAW_IMU 加速度修复已验证**（2026-04-03）：`send_raw_imu()` 改用 `AP::ahrs().get_primary_accel_index()` 取主 IMU 索引而非硬编码实例 0，加速度字段不再为 0
+- **PWM 输出 TIM1/4/12 全部运行**（2026-04-03）：所有 8 通道已通过 RTT PWM 框架初始化；TIM1（CH1-4）、TIM4（CH1-4）、TIM12 均已启用 PWM 模式
+- **SD 卡挂载改为非阻塞**（2026-04-03）：从同步 60s 阻塞改为 `INIT_APP_EXPORT` 后台线程挂载，不阻塞主启动链路；挂载点 `/sd`，自动创建 `/sd/APM/{LOGS,TERRAIN,STORAGE,scripts}`
+- **构建系统 drv_pwm.o/drv_tim.o 链接修复**（2026-04-03）：解决 PWM 驱动对象从 shared HAL drivers 路径正确链接
+- **boot 序列修复**（2026-04-03）：`main()` 入口已正确启动，`boot_stub -> Reset_Handler -> RTT app -> scheduler -> main -> hal.run()` 主链路稳定
 - **低频定位已闭环**：CPU 真实空闲仍约 98-99%，主循环稳态 `loop_us` 约 2185us（~457Hz）；修复前默认 `ATTITUDE/RAW_IMU/SYS_STATUS` 仅约 `0.07/0.33/0.33 Hz`，经三层修复后默认流率提升到 `13.3/5.4/4.1 Hz`（总 96.6 msgs/s）
 - **RTT MAVFTP OpenFileRO 本地文件路径**：对真实文件改为 **open-first + `lseek(SEEK_END)`** 取大小；`@PARAM` 等虚拟后端仍保留原 `stat()+open()` 路径
 - **MAVLink Logging 已禁用**（`HAL_LOGGING_MAVLINK_ENABLED=0`），避免无客户端时 PreArm 失败
@@ -113,9 +118,11 @@
 - `Semaphore::check_owner()` / `assert_owner()`
 - `BinarySemaphore::wait()` 60ms 分段循环避免 16 位定时器溢出
 
-#### GPIO ★
+#### GPIO ★★
 - `valid_pin()`, `pin_to_servo_channel()`, `wait_pin()`
 - `timer_tick()` ISR 洪泛检测 + `arming_checks()` 报告
+- **RGB LED GPIO 直驱已修复**（2026-04-04）：PH10/11/12 open-drain + BSRR 直写 + HAL_GPIO_LED_ON=0
+- **I2CDeviceManager bus_mask 扩展**：0x04→0x07，i2c3 纳入内部总线（IST8310 探测）
 
 #### RCOutput ★
 - `timer_tick()` 在独立 rcout 线程（50Hz PWM 模式）
@@ -194,7 +201,8 @@
 - Integration 6/6 ALL PASS：2224 msgs/60s (37.1/s), max_gap 0.70s
 
 ### 未对齐部分（硬件或板级依赖）
-- CAN / IOMCU（硬件不需要 / 独立固件）
+- CAN（硬件不需要）
+- IOMCU（✅ 已验证通过：ROMFS pipeline + UART8 通信 + MOTOR_OUTPUTS present+healthy）
 - DShot 完整协议（需 DMA + 定时器捕获，当前桩返回安全默认）
 - UARTDriver DMA TX/RX（当前用环形缓冲 + 设备框架）
 - PPM 脉冲捕获硬件路径（当前走串口协议 RC）
@@ -207,5 +215,16 @@
 - `SET_MESSAGE_INTERVAL` 设置特定频率后反而退化（96.6 → 16.2 msgs/s），可能与 `scheduler_delay_callback` 的 20ms 间隔限制有关
 - `mmcsd_detect` 线程栈使用率 90%，接近溢出
 - `EKF3` 仍存在内存压力，允许回退到 `DCM active`
-- `RCOutput`、`RCInput`、部分 `GPIO/I2C` 仍未形成实体飞行级能力
 - IWDG 看门狗暂禁用（需 GDB 调试 prescaler/timeout 配置）
+
+## 当前活跃待验证项（2026-04-04）
+
+- ~~**SD 卡 SDMMC1 已验证通过**~~：rtt_sd_mount_stage=10, rtt_sd_mount_result=0（成功挂载）
+- **RGB LED（PH10/11/12）**：**已修复** 2026-04-04。三个问题：(1) `HAL_GPIO_LED_ON=1` 应为 `0`（active-low open-drain，ChibiOS 默认=0）；(2) OTYPER 未设 open-drain（ChibiOS hwdef 用 OPENDRAIN）；(3) rt_pin_write 不可靠 → 改用 BSRR 直写。修复后 ODR 在 0xFFFF↔0xF3FF 间切换，黄色闪烁（pre-arm failing）已确认。LED 是 GPIO 驱动，不是 IS31FL3195 I2C。
+- **RCInput SBUS 验证**：SBUS 串口协议路径已实现但未实机验证
+- **Servo 输出验证**：PWM TIM1(50Hz)/TIM4(100Hz) 已运行，CCR=0（未解锁状态正常），需通过 GCS 命令实际驱动电调/舵机验证
+- **IOMCU ✅ 已实机验证**（2026-04-12）：ROMFS pipeline 完成（`rtt_hwdef.py` → `embed.py` → `ap_romfs_embedded.h`），`io_firmware.bin` 成功嵌入固件。烧录后 MAVLink 验证：SYS_STATUS `MOTOR_OUTPUTS` present + healthy，RC_CHANNELS 19 条消息（chancount=0 = 无RC接收器正常）。`HAL_WITH_IO_MCU=1` 已启用。详见 open-issues.md
+
+## 调试方法论
+
+- **ChibiOS 对比法**：当遇到无法仅通过软件调试解决的硬件问题时，刷 ChibiOS CUAV V5 固件做对比测试。ChibiOS 是 ArduPilot 在 STM32 上的参考实现，若 ChibiOS 下硬件同样不工作则可排除固件问题

@@ -1,35 +1,29 @@
 # Current Focus
 
 ## 当前阶段
-`CUAV v5` 的 RT-Thread ArduPilot **已完成首次全量 ArduCopter boot**。主循环 ~402Hz 稳定运行，CPU 空闲 99%，USB CDC 枚举成功。当前进入"MAVLink 验证 + SD 卡 + 日志 + 系统级收尾"阶段。
+`CUAV v5` 的 RT-Thread ArduPilot 已完成首次全量 ArduCopter boot 并进入**硬件验证与收尾**阶段。主循环 ~400Hz 稳定运行，CPU 空闲 99%，USB CDC 枚举成功。
+
+## 重大突破（2026-04-12）
+- **App 自由运行验证通过**：使用正确 bootloader（ArduPilot CUAVv5_bl.bin），等 12 秒后 app 完全运行
+- **主循环 11279 次迭代（60 秒内）**，VTOR=0x08008000，PC 在 app 代码区
+- **之前"回到 bootloader"是假象**：bootloader 正常上电等 5 秒才跳转，测试只等了 1~3 秒
+- **构建/烧录链路已完整**：scons → openocd program bootloader(0x08000000) + app(0x08008000)
 
 ## 当前主线目标
-- 对齐度约 **97%**（从 75-80% 经多轮深度对齐提升）
-- 全量 ArduCopter 固件首次完整 boot：setup() 完成 → 主循环 402Hz → CPU idle 99%
-- USB CDC 成功枚举（`ArduPilot CUAVv5 RTT` @ `/dev/ttyACM3`）
-- 剩余：MAVLink 验证（需串口权限）→ SD 卡验证 → 日志 → 完整系统级验证
+- **UART/USB MAVLink 通信验证**：确认 GCS 能连上
+- **RCInput SBUS 验证**：接 SBUS 接收机
+- **RCOutput PWM 验证**：通过 GCS 命令驱动电调/舵机
+- 完整系统级回归测试
 
 ## 当前优先级
-1. **串口权限**：`sudo usermod -a -G dialout llw` 并重新登录（ttyACM3 需 dialout 组）
-2. MAVLink 连通验证：心跳 + 参数下载 + 传感器数据
-3. SD 卡物理挂载验证
-4. 日志写入验证
-5. 完整系统级回归测试（MAVLink 压测）
-
-## 本轮已修复的关键问题
-- ROM overflow: -Os + 禁用 ETH（2.06MB → 1.27MB）
-- SPI4 DMA 传输挂起：改用轮询模式
-- .sram1_bss 与堆重叠：HEAP_BEGIN 改用 &_end
-- C++ 构造函数在堆前执行：startup_rtt_override.S 跳过 __libc_init_array
-
-## 暂不处理
-- CAN 总线（当前硬件不需要）
-- IOMCU（需要独立固件支持）
-- DShot 完整协议（需 DMA + 定时器捕获）
-- SPI DMA 模式修复（轮询模式已足够）
+1. **串口/MAVLink 验证**：USB CDC 或 UART 确认 GCS 连接
+2. **RCInput SBUS 验证**：接 SBUS 接收机验证 RC 通道
+3. **Servo 输出验证**：通过 GCS 命令驱动电调/舵机
+4. 完整系统级回归测试
 
 ## 推荐起手动作
-1. `sudo usermod -a -G dialout llw` + 注销重登
-2. MAVLink 测试：`python3 -c "from pymavlink import mavutil; m=mavutil.mavlink_connection('/dev/ttyACM3'); print(m.wait_heartbeat())"`
-3. GDB 验证：`openocd` + `arm-none-eabi-gdb` 连接后读 `rtt_dbg_*` 变量
-4. 编译：`python ./waf copter --board rtt_cuav_v5 -j$(nproc)`
+1. 连接 USB 到 PC，等 12 秒后检查 `/dev/ttyACM*` 是否出现
+2. MAVLink 测试：`python3 -c "from pymavlink import mavutil; m=mavutil.mavlink_connection('/dev/ttyACM1'); print(m.wait_heartbeat())"`
+3. 编译：`python3 -m SCons --target=cuav-v5 -j16`
+4. 烧录 bootloader：`openocd -f interface/stlink.cfg -f target/stm32f7x.cfg -c "program Tools/bootloaders/CUAVv5_bl.bin 0x08000000 verify reset exit"`
+5. 烧录 app：`openocd -f interface/stlink.cfg -f target/stm32f7x.cfg -c "program build/rtt_deploy/cuav_v5/rtthread.bin 0x08008000 verify reset exit"`
