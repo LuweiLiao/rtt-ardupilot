@@ -128,7 +128,7 @@ void Semaphore::assert_owner(void)
  * --------------------------------------------------------------- */
 
 BinarySemaphore::BinarySemaphore(bool initial_state)
-    : AP_HAL::BinarySemaphore(initial_state)
+    : AP_HAL::BinarySemaphore(initial_state), _initial_state(initial_state)
 {
     _sem = nullptr;
 }

@@ -299,7 +299,7 @@ uint8_t Scheduler::calculate_thread_priority(priority_base base, int8_t priority
 bool Scheduler::thread_create(AP_HAL::MemberProc proc, const char* name,
                               uint32_t stack_size, priority_base base, int8_t priority)
 {
-    auto *tproc = (AP_HAL::MemberProc *)malloc(sizeof(proc));
+    auto *tproc = (AP_HAL::MemberProc *)malloc(sizeof(AP_HAL::MemberProc));
     if (!tproc) {
         return false;
     }
@@ -583,7 +583,8 @@ void Scheduler::set_system_initialized()
      * Timeout ~10s (prescaler /256, reload 1250, LSI 32kHz).
      * Note: once started, IWDG cannot be stopped. GDB halt will trigger reset
      * after timeout — use "monitor reset halt" quickly or disable for deep debug.
-     * Disabled for now: IWDG causes boot loop because watchdog_pat() runs in
+     *
+     * TODO: Disabled (#if 0) — IWDG caused boot loops because watchdog_pat() only runs in
      * timer thread which may not be scheduled fast enough during init. Re-enable
      * after verifying timer thread priority and pat timing. */
 #if 0
