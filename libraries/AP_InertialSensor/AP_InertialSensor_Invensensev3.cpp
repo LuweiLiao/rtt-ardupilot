@@ -1002,6 +1002,7 @@ void AP_InertialSensor_Invensensev3::set_filter_and_scaling_icm456xy(void)
 bool AP_InertialSensor_Invensensev3::check_whoami(void)
 {
     uint8_t whoami = register_read(INV3REG_WHOAMI);
+    rt_kprintf("[Invensensev3] whoami=0x%02X\n", (unsigned)whoami);
 
     switch (whoami) {
     case INV3_ID_ICM40609:

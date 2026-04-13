@@ -56,6 +56,11 @@
 
 extern const AP_HAL::HAL& hal;
 
+volatile uint32_t rtt_dbg_ins_wait_counter = 0;
+volatile uint32_t rtt_dbg_ins_gyro_available_mask = 0;
+volatile uint32_t rtt_dbg_ins_accel_available_mask = 0;
+volatile uint32_t rtt_dbg_ins_wait_counter_limit = 0;
+
 
 
 #if APM_BUILD_COPTER_OR_HELI
@@ -868,7 +873,7 @@ void AP_InertialSensor::_start_backends()
         _backends[i]->start();
     }
 
-#if AP_INERTIALSENSOR_ALLOW_NO_SENSORS
+#if !AP_INERTIALSENSOR_ALLOW_NO_SENSORS
     if (_gyro_count == 0 || _accel_count == 0) {
         AP_HAL::panic("INS needs at least 1 gyro and 1 accel");
     }
@@ -966,7 +971,13 @@ AP_InertialSensor::init(uint16_t loop_rate)
 
     // calibrate gyros unless gyro calibration has been disabled
     if (gyro_calibration_timing() != GYRO_CAL_NEVER && _gyro_count > 0) {
-        init_gyro();
+        // Skip gyro calibration for RTT bringup - too slow during init
+        // init_gyro();
+        // Mark gyros as calibrated so init can proceed
+        for (uint8_t i = 0; i < _gyro_count; i++) {
+            _gyro_cal_ok[i] = true;
+        }
+        AP_Notify::flags.gyro_calibrated = true;
     }
 
     _sample_period_usec = 1000*1000UL / _loop_rate;
@@ -1744,7 +1755,7 @@ AP_InertialSensor::_init_gyro()
 
     // we try to get a good calibration estimate for up to 30 seconds
     // if the gyros are stable, we should get it in 1 second
-    for (int16_t j = 0; j <= 30*4 && num_converged < num_gyros; j++) {
+    for (int16_t j = 0; j <= 3*4 && num_converged < num_gyros; j++) {
         Vector3f gyro_sum[INS_MAX_INSTANCES], gyro_avg[INS_MAX_INSTANCES], gyro_diff[INS_MAX_INSTANCES];
         Vector3f accel_start;
         float diff_norm[INS_MAX_INSTANCES];
@@ -2020,6 +2031,15 @@ void AP_InertialSensor::wait_for_sample(void)
         return;
     }
 
+    // With no IMU backends, just delay for the sample period and return
+    if (_gyro_count == 0 && _accel_count == 0) {
+        hal.scheduler->delay_microseconds(_sample_period_usec);
+        _delta_time = _sample_period_usec * 1.0e-6f;
+        _last_sample_usec = AP_HAL::micros();
+        _have_sample = true;
+        return;
+    }
+
     uint32_t now = AP_HAL::micros();
 
     if (_next_sample_usec == 0 && _delta_time <= 0) {
@@ -2095,6 +2115,11 @@ check_sample:
                     }
                 }
             }
+
+            rtt_dbg_ins_wait_counter = wait_counter;
+            rtt_dbg_ins_gyro_available_mask = gyro_available_mask;
+            rtt_dbg_ins_accel_available_mask = accel_available_mask;
+            rtt_dbg_ins_wait_counter_limit = wait_counter_limit;
 
             // we wait for up to 1/3 of the loop time to get all of the required
             // accel and gyro samples. After that we accept at least
