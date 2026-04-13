@@ -20,7 +20,10 @@
 #include <AP_Logger/AP_Logger.h>
 #include <AP_Arming/AP_Arming.h>
 #include <AP_BLHeli/AP_BLHeli.h>
-#include <ch.h>
+#include <rtthread.h>
+
+/* EVENT_MASK compatible with ChibiOS semantics */
+#define EVENT_MASK(n) (1U << (n))
 #include <AP_SerialManager/AP_SerialManager.h>
 
 extern const AP_HAL::HAL &hal;
@@ -111,7 +114,7 @@ void AP_IOMCU::event_failed(uint32_t event_mask)
 {
     // wait 0.5ms then retry
     hal.scheduler->delay_microseconds(500);
-    chEvtSignal(thread_ctx, event_mask);
+    rt_event_send(&iomcu_event, event_mask);
 }
 
 /*
@@ -119,8 +122,9 @@ void AP_IOMCU::event_failed(uint32_t event_mask)
  */
 void AP_IOMCU::thread_main(void)
 {
-    thread_ctx = chThdGetSelfX();
-    chEvtSignal(thread_ctx, initial_event_mask);
+    thread_ctx = (thread_t *)rt_thread_self();
+    rt_event_init(&iomcu_event, "iomcu", RT_IPC_FLAG_PRIO);
+    rt_event_send(&iomcu_event, initial_event_mask);
 
     uart.begin(1500*1000, 128, 128);
     uart.set_unbuffered_writes(true);
@@ -144,7 +148,11 @@ void AP_IOMCU::thread_main(void)
             last_reg_access_ms = 0;
         }
 
-        eventmask_t mask = chEvtWaitAnyTimeout(~0, chTimeMS2I(10));
+        rt_uint32_t recved = 0;
+        rt_event_recv(&iomcu_event, (rt_uint32_t)~0,
+                      RT_EVENT_FLAG_OR | RT_EVENT_FLAG_CLEAR,
+                      rt_tick_from_millisecond(10), &recved);
+        eventmask_t mask = recved;
 
         // check for pending IO events
         if (mask & EVENT_MASK(IOEVENT_SEND_PWM_OUT)) {
@@ -828,7 +836,7 @@ void AP_IOMCU::write_channel(uint8_t chan, uint16_t pwm)
 void AP_IOMCU::trigger_event(uint8_t event)
 {
     if (thread_ctx != nullptr) {
-        chEvtSignal(thread_ctx, EVENT_MASK(event));
+        rt_event_send(&iomcu_event, EVENT_MASK(event));
     } else {
         // thread isn't started yet, trigger this event once it is started
         initial_event_mask |= EVENT_MASK(event);

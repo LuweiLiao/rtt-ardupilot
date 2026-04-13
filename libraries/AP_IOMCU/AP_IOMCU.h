@@ -15,7 +15,13 @@
 #include <AP_ESC_Telem/AP_ESC_Telem_Backend.h>
 
 typedef uint32_t eventmask_t;
+#if CONFIG_HAL_BOARD == HAL_BOARD_CHIBIOS
 typedef struct ch_thread thread_t;
+#elif CONFIG_HAL_BOARD == HAL_BOARD_RTT
+typedef struct rt_thread thread_t;
+#else
+typedef void thread_t;
+#endif
 
 #ifndef AP_IOMCU_FW_FLASH_SIZE
 #define AP_IOMCU_FW_FLASH_SIZE (0x10000 - 0x1000)
@@ -217,6 +223,9 @@ private:
 
     // IOMCU thread
     thread_t *thread_ctx;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    struct rt_event iomcu_event;
+#endif
 
     eventmask_t initial_event_mask;
 
