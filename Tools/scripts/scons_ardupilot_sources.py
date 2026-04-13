@@ -158,6 +158,7 @@ def _collect_cpppath(ap_root, bsp_dir, rtt_root, build_root, board="rtt_pixhawk6
     paths.append(os.path.join(ap_root, 'build', board, 'libraries'))
     paths.append(os.path.join(ap_root, 'build', board, 'libraries', 'GCS_MAVLink'))
     paths.append(os.path.join(ap_root, 'libraries', 'AP_HAL_RTT', 'include'))
+    paths.append(os.path.join(ap_root, 'libraries', 'AP_HAL_RTT'))
     paths.append(os.path.join(rtt_root, 'include'))
     paths.append(os.path.join(rtt_root, 'bsp'))
     paths.append(os.path.join(rtt_root, 'libcpu', 'arm', 'cortex-m7'))
