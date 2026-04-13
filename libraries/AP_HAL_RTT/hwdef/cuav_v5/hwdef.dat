@@ -70,6 +70,24 @@ PG7  VDD_3V3_SD_CARD_EN  OUTPUT  HIGH
 # never floats high before higher-level code runs.
 PA7  HEATER_EN           OUTPUT  LOW
 
+# ---- ADC channels (match ChibiOS fmuv5) ----
+PA0  BATT_VOLTAGE_SENS   ADC1    SCALE(1)
+PA1  BATT_CURRENT_SENS   ADC1    SCALE(1)
+PA2  BATT2_VOLTAGE_SENS  ADC1    SCALE(1)
+PA3  BATT2_CURRENT_SENS  ADC1    SCALE(1)
+PB0  RSSI_IN             ADC1    SCALE(1)
+PC0  VDD_5V_SENS         ADC1    SCALE(2)
+PC1  SCALED_V3V3         ADC1    SCALE(2)
+PC4  SPARE1_ADC1         ADC1    SCALE(1)
+
+# Battery monitor pin assignments (channel index in AnalogIn)
+define HAL_BATT_VOLT_PIN 0
+define HAL_BATT_CURR_PIN 1
+define HAL_BATT2_VOLT_PIN 2
+define HAL_BATT2_CURR_PIN 3
+define HAL_BATT_VOLT_SCALE 18.0
+define HAL_BATT_CURR_SCALE 24.0
+
 # ---- I2C bus pins (soft I2C bitbang) ----
 PH7  I2C3_SCL I2C3 AF4
 PH8  I2C3_SDA I2C3 AF4
