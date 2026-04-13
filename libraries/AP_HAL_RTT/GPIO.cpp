@@ -10,6 +10,10 @@
 #include <drivers/dev_pin.h>
 #include <cstdio>
 
+#if AP_NOTIFY_GPIO_LED_RGB_ENABLED && defined(AP_NOTIFY_GPIO_LED_RGB_RED_PIN)
+#include <stm32f7xx_hal.h>
+#endif
+
 using namespace RTT;
 
 /* DigitalSource */
@@ -42,6 +46,12 @@ GPIO::IRQState GPIO::_irq_state[RTT_GPIO_MAX_IRQ] = {};
 
 void GPIO::init()
 {
+    /* RGB LED GPIO (PH10/11/12) MODER is set lazily in write() on first use.
+     * Cannot set it here because TIM12 HAL_GPIO_Init (stm32f7xx_hal_msp.c)
+     * does read-modify-write on GPIOH->MODER AFTER this point, clobbering
+     * PH10-12 OUTPUT configuration.  The lazy init in write() runs from the
+     * AP_Notify thread, which is well past all board-level HAL inits.
+     */
 }
 
 void GPIO::pinMode(uint8_t pin, uint8_t output)
@@ -66,6 +76,37 @@ uint8_t GPIO::read(uint8_t pin)
 
 void GPIO::write(uint8_t pin, uint8_t value)
 {
+#if AP_NOTIFY_GPIO_LED_RGB_ENABLED && defined(AP_NOTIFY_GPIO_LED_RGB_RED_PIN)
+    /* RGB LED pins on CUAV V5: PH10(R) / PH11(G) / PH12(B), active-low.
+     * ChibiOS configures these as OPENDRAIN. The LED turns ON when pin is
+     * LOW (open-drain sinks current). Bypass RTT pin driver, write BSRR
+     * directly to avoid rt_pin_write() reliability issues on GPIOH.
+     * BSRR: bits[15:0] set ODR (pin HIGH), bits[31:16] reset ODR (pin LOW).
+     */
+    if (pin == AP_NOTIFY_GPIO_LED_RGB_RED_PIN ||
+        pin == AP_NOTIFY_GPIO_LED_RGB_GREEN_PIN ||
+        pin == AP_NOTIFY_GPIO_LED_RGB_BLUE_PIN) {
+        static bool led_moder_done = false;
+        if (!led_moder_done) {
+            __HAL_RCC_GPIOH_CLK_ENABLE();
+            /* Set PH10/11/12 to OUTPUT (MODER bits 21:20, 23:22, 25:24 = 01) */
+            GPIOH->MODER = (GPIOH->MODER & ~(0x3FUL << 20)) | (0x15UL << 20);
+            /* Set PH10/11/12 to open-drain (OTYPER bits 10,11,12 = 1) */
+            GPIOH->OTYPER |= (0x7UL << 10);
+            /* Set ODR HIGH (LED off — open-drain HIGH = floating) */
+            GPIOH->BSRR = (0x7UL << 10);
+            led_moder_done = true;
+        }
+        /* Pin bit: PH10=10, PH11=11, PH12=12 — same as pin % 16 */
+        uint8_t bit = pin % 16;
+        if (value) {
+            GPIOH->BSRR = 1UL << bit;       /* set ODR → pin HIGH → LED off */
+        } else {
+            GPIOH->BSRR = 1UL << (bit + 16); /* reset ODR → pin LOW → LED on */
+        }
+        return;
+    }
+#endif
     rt_pin_write(pin, value ? PIN_HIGH : PIN_LOW);
 }
 

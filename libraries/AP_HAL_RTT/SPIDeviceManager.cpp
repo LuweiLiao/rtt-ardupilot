@@ -20,11 +20,15 @@ static RTT_SPIDesc *_device_table = nullptr;
 
 AP_HAL::SPIDevice *SPIDeviceManager::get_device_ptr(const char *name)
 {
+    // rt_kprintf("[SPI-MGR] Looking for device '%s' in table of %u devices\n", name, _DEVICE_TABLE_COUNT);
     for (uint8_t i = 0; i < _DEVICE_TABLE_COUNT; i++) {
+        // rt_kprintf("[SPI-MGR]   [%u] '%s' (rtt='%s')\n", i, _device_table[i].name, _device_table[i].rtt_devname);
         if (strcmp(name, _device_table[i].name) == 0) {
+            // rt_kprintf("[SPI-MGR] Found '%s', creating SPIDevice\n", name);
             return NEW_NOTHROW SPIDevice(_device_table[i]);
         }
     }
+    // rt_kprintf("[SPI-MGR] Device '%s' NOT FOUND in table\n", name);
     return nullptr;
 }
 

@@ -119,16 +119,25 @@ bool Flash::erasepage(uint32_t page)
                   FLASH_CR_PSIZE_1;
     FLASH->CR = cr;
 
+    /* Only disable interrupts around the STRT register write itself.
+     * The erase of a 256KB sector takes ~1-2 seconds on STM32F767.
+     * Keeping interrupts disabled for that duration starves RTT's
+     * scheduler and causes watchdog fires.  We re-enable interrupts
+     * immediately after starting the erase and poll with yields. */
     rt_base_t level = rt_hw_interrupt_disable();
     FLASH->CR = cr | FLASH_CR_STRT;
-    if (_wait_bsy(0xFFFFFFFFU)) {
-        rt_hw_interrupt_enable(level);
-        FLASH->CR &= ~(FLASH_CR_SER | FLASH_CR_SNB_Msk);
-        if (!_keep_unlocked) _flash_lock();
-        _sem.give();
-        return false;
-    }
     rt_hw_interrupt_enable(level);
+
+    /* Wait for erase to complete, yielding to other threads.
+     * The busy-wait checks BSY in a tight loop but calls rt_thread_yield()
+     * periodically so the RTT scheduler can run. */
+    uint32_t yield_counter = 0;
+    while (FLASH->SR & FLASH_SR_BSY) {
+        if (++yield_counter >= 10000) {
+            rt_thread_yield();
+            yield_counter = 0;
+        }
+    }
 
     FLASH->CR &= ~(FLASH_CR_SER | FLASH_CR_SNB_Msk);
     bool ok = !(FLASH->SR & (FLASH_SR_OPERR | FLASH_SR_WRPERR | FLASH_SR_ERSERR));

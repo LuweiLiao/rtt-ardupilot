@@ -22,6 +22,7 @@ DeviceBus *DeviceBus::_buses[MAX_BUSES] = {};
 DeviceBus::DeviceBus(uint8_t thread_priority)
     : _thread_priority(thread_priority)
 {
+    // rt_kprintf("DeviceBus constructed at %p, priority=%u\n", this, thread_priority);
 }
 
 DeviceBus *DeviceBus::get_bus(uint8_t bus_num, uint8_t thread_priority)
@@ -39,6 +40,8 @@ void DeviceBus::_bus_thread_entry(void *arg)
 {
     DeviceBus *binfo = (DeviceBus *)arg;
 
+    // rt_kprintf("DeviceBus: thread started for bus, callbacks=%p\n", binfo->_callbacks);
+
     while (true) {
         uint64_t now = AP_HAL::micros64();
         callback_info *callback;
@@ -48,7 +51,10 @@ void DeviceBus::_bus_thread_entry(void *arg)
                 while (now >= callback->next_usec) {
                     callback->next_usec += callback->period_usec;
                 }
-                binfo->semaphore.take_blocking();
+                if (!binfo->semaphore.take(10)) {
+                    rt_kprintf("DeviceBus: semaphore take failed!\n");
+                    continue;
+                }
                 callback->cb();
                 binfo->semaphore.give();
             }
@@ -74,17 +80,30 @@ void DeviceBus::_bus_thread_entry(void *arg)
             delay_us = 100;
         }
 
-        rt_tick_t ticks = (rt_tick_t)((uint32_t)delay_us * RT_TICK_PER_SECOND / 1000000U);
-        if (ticks == 0) {
-            ticks = 1;
+        /*
+         * Yield the CPU via rt_thread_delay so lower-priority threads
+         * (main, UART, IO, storage) can run.  The DWT busy-loop from
+         * hal.scheduler->delay_microseconds() never yields, so a
+         * priority-4 bus thread spinning for ~950 µs between IMU
+         * callbacks starves everything at priority ≥5.
+         *
+         * At RT_TICK_PER_SECOND=10000, one tick = 100 µs.
+         * Minimum delay is 1 tick (100 µs), which is fine for
+         * 1 kHz IMU polling periods (1000 µs).
+         */
+        {
+            rt_tick_t ticks = (delay_us * RT_TICK_PER_SECOND) / 1000000U;
+            if (ticks < 1) ticks = 1;
+            rt_thread_delay(ticks);
         }
-        rt_thread_delay(ticks);
     }
 }
 
 AP_HAL::Device::PeriodicHandle DeviceBus::register_periodic_callback(
     uint32_t period_usec, AP_HAL::Device::PeriodicCb cb, AP_HAL::Device *hal_device)
 {
+    // rt_kprintf("DeviceBus: register_periodic_callback period=%u, device=%p\n", period_usec, hal_device);
+
     if (!_thread_started) {
         _thread_started = true;
 
@@ -108,22 +127,23 @@ AP_HAL::Device::PeriodicHandle DeviceBus::register_periodic_callback(
 
         uint8_t prio = _thread_priority;
         if (prio == 0 || prio >= RT_THREAD_PRIORITY_MAX) {
-            /* Must be higher priority than boosted main (MAX/4=8) so that
-             * bus callbacks preempt wait_for_sample() DWT loops.
-             * Use MAX/6 ≈ 5 — below timer (MAX/8=4), above boosted main. */
             prio = RT_THREAD_PRIORITY_MAX / 6;
         }
 
+        // rt_kprintf("DeviceBus: creating thread '%s' prio=%u\n", name, prio);
         _thread = rt_thread_create(name, _bus_thread_entry,
-                                   this, 8192, prio, 20);
+                                   this, 32768, prio, 20);
         if (_thread == nullptr) {
+            rt_kprintf("DeviceBus: FAILED to create thread!\n");
             return nullptr;
         }
         rt_thread_startup(_thread);
+        // rt_kprintf("DeviceBus: thread '%s' started\n", name);
     }
 
     auto *ci = new callback_info;
     if (ci == nullptr) {
+        rt_kprintf("DeviceBus: FAILED to allocate callback_info!\n");
         return nullptr;
     }
     ci->cb = cb;
@@ -131,6 +151,8 @@ AP_HAL::Device::PeriodicHandle DeviceBus::register_periodic_callback(
     ci->next_usec = AP_HAL::micros64() + period_usec;
     ci->next = _callbacks;
     _callbacks = ci;
+
+    // rt_kprintf("DeviceBus: callback registered, callbacks list=%p\n", _callbacks);
 
     return (AP_HAL::Device::PeriodicHandle)ci;
 }

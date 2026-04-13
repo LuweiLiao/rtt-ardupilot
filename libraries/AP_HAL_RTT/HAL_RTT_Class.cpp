@@ -18,6 +18,9 @@
 #include "Storage.h"
 #include "AnalogIn.h"
 #include "Util.h"
+#if HAL_WITH_IO_MCU
+#include <AP_IOMCU/AP_IOMCU.h>
+#endif
 #include "SPIDeviceManager.h"
 #include "I2CDeviceManager.h"
 #include <AP_HAL/OpticalFlow.h>
@@ -72,6 +75,11 @@ static RTT::Scheduler schedulerInstance;
 static RTT::Util utilInstance;
 static RTT::OpticalFlowStub opticalFlowDriver;
 static RTT::Flash flashDriver;
+#if HAL_WITH_IO_MCU
+// IOMCU UART — serial2Driver maps to HAL_UART_IOMCU_IDX=2 (UART8)
+static RTT::UARTDriver ioUartDriver(HAL_UART_IOMCU_IDX);
+AP_IOMCU iomcu(ioUartDriver);
+#endif
 #if AP_SIM_ENABLED && CONFIG_HAL_BOARD != HAL_BOARD_SITL
 static AP_HAL::SIMState xsimstate;
 #endif
@@ -131,28 +139,14 @@ extern "C" volatile uint32_t rtt_cpu_idle_pct;
 #if defined(RT_USING_FINSH) && defined(MSH_USING_BUILT_IN_COMMANDS)
 static void ap_rate(void)
 {
-    const uint32_t idle = rtt_cpu_idle_pct;
-    const uint32_t loop_us = rtt_dbg_loop_time_us;
-    const uint32_t work_us = rtt_dbg_work_time_us;
-    const uint32_t loop_hz = (loop_us > 0) ? (1000000U / loop_us) : 0;
-    const uint32_t clamped_idle = (idle > 100U) ? 100U : idle;
-
     rt_kprintf("cpu_idle=%lu%% load=%lu%% loop_us=%lu loop_hz=%lu\n",
-               (unsigned long)idle,
-               (unsigned long)(100U - clamped_idle),
-               (unsigned long)loop_us,
-               (unsigned long)loop_hz);
-    rt_kprintf("loop_max=%lu loop_min=%lu work_us=%lu work_max=%lu\n",
-               (unsigned long)rtt_dbg_loop_time_max_us,
-               (unsigned long)rtt_dbg_loop_time_min_us,
-               (unsigned long)work_us,
-               (unsigned long)rtt_dbg_work_time_max_us);
-    rt_kprintf("overrun=%lu fast_loop=%lu iterations=%lu boost_calls=%lu boost_us=%lu\n",
+               (unsigned long)rtt_cpu_idle_pct,
+               (unsigned long)(100U - ((rtt_cpu_idle_pct > 100U) ? 100U : rtt_cpu_idle_pct)),
+               (unsigned long)rtt_dbg_loop_time_us,
+               (unsigned long)(rtt_dbg_loop_time_us > 0 ? (1000000U / rtt_dbg_loop_time_us) : 0));
+    rt_kprintf("overrun=%lu iterations=%lu\n",
                (unsigned long)rtt_dbg_overrun_count,
-               (unsigned long)rtt_dbg_fast_loop_count,
-               (unsigned long)rtt_dbg_main_loop_iterations,
-               (unsigned long)rtt_dbg_boost_calls_per_loop,
-               (unsigned long)rtt_dbg_boost_total_us_per_loop);
+               (unsigned long)rtt_dbg_main_loop_iterations);
 }
 MSH_CMD_EXPORT(ap_rate, show ArduPilot CPU and loop timing stats);
 #endif

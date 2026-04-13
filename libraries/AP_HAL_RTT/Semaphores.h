@@ -28,7 +28,8 @@ public:
     void assert_owner(void);
 
 private:
-    rt_mutex_t _mtx = nullptr;
+    rt_mutex_t _mtx;
+    void _ensure_mtx();
 };
 
 class BinarySemaphore : public AP_HAL::BinarySemaphore
@@ -42,7 +43,9 @@ public:
     void signal_ISR() override;
 
 private:
-    rt_sem_t _sem = nullptr;
+    rt_sem_t _sem;
+    bool _initial_state;
+    void _ensure_sem();
 };
 
 } // namespace RTT

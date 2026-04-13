@@ -21,23 +21,33 @@
 #define RTT_SCHEDULER_MAX_IO_PROCS    8
 
 /*
- * RT-Thread priority mapping — mirrors ChibiOS priority order.
+ * RT-Thread priority mapping — mirrors ChibiOS priority order exactly.
  * ChibiOS higher number = higher priority; RT-Thread lower number = higher priority.
- * We map to ensure the same relative ordering.
+ *
+ * ChibiOS ordering:
+ *   MONITOR(183) > MAIN_BOOST(182) > TIMER/SPI/RCOUT(181) > MAIN_normal(180)
+ *   > RCIN(177) > I2C(176) >> UART/LED/NET(60) > STORAGE(59) > IO(58)
+ *
+ * RT-Thread (lower = higher priority):
+ *   MONITOR(2) > MAIN_BOOST(3) > TIMER/SPI/RCOUT(4) > MAIN_normal(5)
+ *   > RCIN(6) > I2C(7) >> UART(14) > LED(14) > STORAGE(16) > IO(18) > SCRIPTING(30)
+ *
+ * delay_microseconds_boost() uses rt_thread_delay to yield, allowing
+ * SPI/I2C bus threads to run even when main is boosted above them.
  */
-#define APM_RTT_MONITOR_PRIORITY  (RT_THREAD_PRIORITY_MAX / 8 - 1)  // highest HAL thread
-#define APM_RTT_TIMER_PRIORITY    (RT_THREAD_PRIORITY_MAX / 8)      // 4
-#define APM_RTT_RCOUT_PRIORITY    (RT_THREAD_PRIORITY_MAX / 8)      // same as timer
-#define APM_RTT_RCIN_PRIORITY     (RT_THREAD_PRIORITY_MAX / 6)      // 5
-#define APM_RTT_MAIN_PRIORITY     (RT_THREAD_PRIORITY_MAX / 3)      // 10
-#define APM_RTT_MAIN_BOOST        (RT_THREAD_PRIORITY_MAX / 4)      // 8
-#define APM_RTT_SPI_PRIORITY      (RT_THREAD_PRIORITY_MAX / 6)      // 5
-#define APM_RTT_I2C_PRIORITY      (RT_THREAD_PRIORITY_MAX / 5)      // 6
-#define APM_RTT_UART_PRIORITY     (RT_THREAD_PRIORITY_MAX / 4 + 1)  // 9 — must be near main_boost to prevent starvation
-#define APM_RTT_LED_PRIORITY      (RT_THREAD_PRIORITY_MAX / 3 + 2)  // 12
-#define APM_RTT_IO_PRIORITY       (RT_THREAD_PRIORITY_MAX / 2)      // 16
-#define APM_RTT_STORAGE_PRIORITY  (RT_THREAD_PRIORITY_MAX / 2 + 2)  // 18
-#define APM_RTT_SCRIPTING_PRIORITY (RT_THREAD_PRIORITY_MAX - 2)     // lowest
+#define APM_RTT_MONITOR_PRIORITY  2    // highest HAL thread
+#define APM_RTT_MAIN_BOOST        3    // above timer/SPI — only monitor preempts
+#define APM_RTT_TIMER_PRIORITY    4    // timer + SPI + RCOUT group
+#define APM_RTT_RCOUT_PRIORITY    4    // same as timer
+#define APM_RTT_SPI_PRIORITY      4    // same as timer — fast IMU sampling
+#define APM_RTT_MAIN_PRIORITY     5    // below timer/SPI, above RCIN/I2C
+#define APM_RTT_RCIN_PRIORITY     6    // RC protocol processing
+#define APM_RTT_I2C_PRIORITY      7    // I2C bus
+#define APM_RTT_UART_PRIORITY     14   // low priority (ChibiOS: 60) — DMA TX, non-blocking
+#define APM_RTT_LED_PRIORITY      14   // same as UART
+#define APM_RTT_STORAGE_PRIORITY  16   // (ChibiOS: 59)
+#define APM_RTT_IO_PRIORITY       18   // lowest HAL worker (ChibiOS: 58)
+#define APM_RTT_SCRIPTING_PRIORITY 30  // lowest
 
 class RTT::Scheduler : public AP_HAL::Scheduler
 {

@@ -16,11 +16,24 @@ using namespace RTT;
 
 /* ---------------------------------------------------------------
  *  Semaphore (Mutex wrapper)
+ *
+ *  Lazy init: C++ global constructors run BEFORE the RTT heap is
+ *  initialised (rt_system_heap_init is called from main→rtthread_startup).
+ *  We defer rt_mutex_create / rt_sem_create until first actual use.
  * --------------------------------------------------------------- */
+
+static bool _rtt_heap_ready()
+{
+    /* Simple check: if we're running in a thread context (not during early
+     * C++ constructors), rt_thread_self() returns non-NULL.
+     * During __libc_init_array (before main), the scheduler hasn't started
+     * and rt_thread_self() returns NULL. */
+    return rt_thread_self() != RT_NULL;
+}
 
 Semaphore::Semaphore()
 {
-    _mtx = rt_mutex_create("hal_mtx", RT_IPC_FLAG_PRIO);
+    _mtx = nullptr;
 }
 
 Semaphore::~Semaphore()
@@ -31,14 +44,34 @@ Semaphore::~Semaphore()
     }
 }
 
+void Semaphore::_ensure_mtx()
+{
+    if (_mtx == nullptr) {
+        if (!_rtt_heap_ready()) {
+            /* Heap not ready yet - this should not happen during normal operation
+             * but may occur during early C++ constructors. We'll retry later. */
+            return;
+        }
+        static uint16_t idx = 0;
+        char name[RT_NAME_MAX];
+        rt_snprintf(name, sizeof(name), "hm%u", idx++);
+        _mtx = rt_mutex_create(name, RT_IPC_FLAG_PRIO);
+        if (_mtx == nullptr) {
+            rt_kprintf("Semaphore: FAILED to create mutex '%s'\n", name);
+        }
+    }
+}
+
 bool Semaphore::give()
 {
+    _ensure_mtx();
     if (_mtx == nullptr) return false;
     return rt_mutex_release(_mtx) == RT_EOK;
 }
 
 bool Semaphore::take(uint32_t timeout_ms)
 {
+    _ensure_mtx();
     if (_mtx == nullptr) return false;
 
     /* HAL_SEMAPHORE_BLOCK_FOREVER == 0 in ArduPilot.
@@ -64,18 +97,21 @@ bool Semaphore::take(uint32_t timeout_ms)
 
 bool Semaphore::take_nonblocking()
 {
+    _ensure_mtx();
     if (_mtx == nullptr) return false;
     return rt_mutex_take(_mtx, 0) == RT_EOK;
 }
 
 void Semaphore::take_blocking()
 {
+    _ensure_mtx();
     if (_mtx == nullptr) return;
     rt_mutex_take(_mtx, RT_WAITING_FOREVER);
 }
 
 bool Semaphore::check_owner(void)
 {
+    _ensure_mtx();
     if (_mtx == nullptr) return false;
     return _mtx->owner == rt_thread_self();
 }
@@ -94,7 +130,7 @@ void Semaphore::assert_owner(void)
 BinarySemaphore::BinarySemaphore(bool initial_state)
     : AP_HAL::BinarySemaphore(initial_state)
 {
-    _sem = rt_sem_create("hal_bsem", initial_state ? 1 : 0, RT_IPC_FLAG_PRIO);
+    _sem = nullptr;
 }
 
 BinarySemaphore::~BinarySemaphore()
@@ -105,8 +141,19 @@ BinarySemaphore::~BinarySemaphore()
     }
 }
 
+void BinarySemaphore::_ensure_sem()
+{
+    if (_sem == nullptr && _rtt_heap_ready()) {
+        static uint16_t idx = 0;
+        char name[RT_NAME_MAX];
+        rt_snprintf(name, sizeof(name), "hb%u", idx++);
+        _sem = rt_sem_create(name, _initial_state ? 1 : 0, RT_IPC_FLAG_PRIO);
+    }
+}
+
 bool BinarySemaphore::wait(uint32_t timeout_us)
 {
+    _ensure_sem();
     if (_sem == nullptr) return false;
 
     if (timeout_us == 0) {
@@ -128,12 +175,14 @@ bool BinarySemaphore::wait(uint32_t timeout_us)
 
 bool BinarySemaphore::wait_blocking()
 {
+    _ensure_sem();
     if (_sem == nullptr) return false;
     return rt_sem_take(_sem, RT_WAITING_FOREVER) == RT_EOK;
 }
 
 void BinarySemaphore::signal()
 {
+    _ensure_sem();
     if (_sem != nullptr) {
         rt_sem_release(_sem);
     }
@@ -141,6 +190,7 @@ void BinarySemaphore::signal()
 
 void BinarySemaphore::signal_ISR()
 {
+    _ensure_sem();
     if (_sem != nullptr) {
         /* rt_sem_release() is ISR-safe in RT-Thread when called
          * with interrupts disabled or from ISR context */

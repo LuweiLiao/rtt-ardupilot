@@ -8,6 +8,8 @@
 #include <cstring>
 #include <stdio.h>
 
+extern volatile uint32_t rtt_dbg_setup_stage;
+
 extern const AP_HAL::HAL& hal;
 
 namespace RTT
@@ -19,9 +21,12 @@ void Storage::_storage_open(void)
         return;
     }
 
+    rtt_dbg_setup_stage = 500;  // _storage_open entered
+
     _dirty_mask.clearall();
 
 #if HAL_WITH_RAMTRON
+    rtt_dbg_setup_stage = 501;  // trying FRAM
     if (_fram.init() && _fram.read(0, _buffer, RTT_STORAGE_SIZE)) {
         _initialisedType = StorageBackend::FRAM;
         ::printf("RTT Storage: FRAM backend\n");
@@ -30,6 +35,7 @@ void Storage::_storage_open(void)
 #endif
 
 #ifdef STORAGE_FLASH_PAGE
+    rtt_dbg_setup_stage = 502;  // trying Flash
     _flash_load();
     if (_initialisedType == StorageBackend::Flash) {
         ::printf("RTT Storage: Flash backend page=%u\n", (unsigned)_flash_page);
@@ -37,6 +43,7 @@ void Storage::_storage_open(void)
     }
 #endif
 
+    rtt_dbg_setup_stage = 503;  // using stub
     memset(_buffer, 0xFF, RTT_STORAGE_SIZE);
     _initialisedType = StorageBackend::Stub;
     ::printf("RTT Storage: STUB backend (volatile)\n");

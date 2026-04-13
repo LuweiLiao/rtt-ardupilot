@@ -29,6 +29,13 @@
 #include <AP_Logger/AP_Logger.h>
 #include <rtthread.h>
 
+#if HAL_WITH_IO_MCU
+/* ch.h provides thread_t / chThdGetSelfX for AP_IOMCU's thread_main.
+ * thread_create must allocate a thread_t wrapper and set rt_thread->user_data
+ * so chThdGetSelfX() works inside threads created by the scheduler. */
+#include <ch.h>
+#endif
+
 #if !defined(IOMCU_FW)
 extern "C" void ap_rtt_iwdg_init(void);
 #endif
@@ -107,8 +114,10 @@ void Scheduler::_rcout_thread_entry(void *arg)
 
     while (true) {
         /* PWM-only mode: 50Hz is sufficient since servos are 50Hz.
-         * DShot would use event-driven timing like ChibiOS. */
-        sched->delay_microseconds(20000);
+         * DShot would use event-driven timing like ChibiOS.
+         * Use rt_thread_mdelay to yield CPU — DWT busy-loop starves
+         * all lower-priority threads (main, UART, IO, storage). */
+        rt_thread_mdelay(20);
         ((RCOutput *)hal.rcout)->timer_tick();
     }
 }
@@ -126,7 +135,7 @@ void Scheduler::_rcin_thread_entry(void *arg)
     }
 
     while (true) {
-        sched->delay_microseconds(1000);
+        rt_thread_mdelay(1);
         ((RCInput *)hal.rcin)->_timer_tick();
     }
 }
@@ -305,6 +314,21 @@ bool Scheduler::thread_create(AP_HAL::MemberProc proc, const char* name,
     rt_thread_t th = rt_thread_create(name, _thread_create_trampoline,
                                       tproc, stack_size, rtt_prio, 20);
     if (th != nullptr) {
+#if HAL_WITH_IO_MCU
+        /* Allocate a thread_t wrapper so chThdGetSelfX() works in this thread.
+         * AP_IOMCU::thread_main uses chThdGetSelfX() and chEvtWaitAnyTimeout()
+         * which need a valid thread_t with an embedded rt_event.  Threads not
+         * created via chThdCreateStatic() must have user_data set manually. */
+        auto *tp = (thread_t *)calloc(1, sizeof(thread_t));
+        if (tp) {
+            tp->rtt_thread = th;
+            static int evt_seq = 0;
+            char evt_name[RT_NAME_MAX];
+            rt_snprintf(evt_name, sizeof(evt_name), "te%d", evt_seq++);
+            rt_event_init(&tp->event, evt_name, RT_IPC_FLAG_PRIO);
+            th->user_data = (uintptr_t)tp;
+        }
+#endif
         rt_thread_startup(th);
         return true;
     }
@@ -329,7 +353,7 @@ void Scheduler::init()
 
     _timer_thread_ctx = rt_thread_create("ap_timer",
                                          _timer_thread_entry,
-                                         this, 8192,
+                                         this, 16384,
                                          APM_RTT_TIMER_PRIORITY, 20);
     if (_timer_thread_ctx) rt_thread_startup(_timer_thread_ctx);
 
@@ -347,7 +371,7 @@ void Scheduler::init()
 
     _uart_thread_ctx = rt_thread_create("ap_uart",
                                         _uart_thread_entry,
-                                        this, 4096,
+                                        this, 8192,
                                         APM_RTT_UART_PRIORITY, 20);
     if (_uart_thread_ctx) rt_thread_startup(_uart_thread_ctx);
 
@@ -359,7 +383,7 @@ void Scheduler::init()
 
     _storage_thread_ctx = rt_thread_create("storage",
                                            _storage_thread_entry,
-                                           this, 2048,
+                                           this, 8192,
                                            APM_RTT_STORAGE_PRIORITY, 20);
     if (_storage_thread_ctx) rt_thread_startup(_storage_thread_ctx);
 
@@ -375,8 +399,8 @@ void Scheduler::init()
  *  thread, which triggers scheduler_delay_callback() → GCS comms.
  *
  *  delay_microseconds():
- *    < 1 ms  : DWT busy-wait + yield (precise, lets bus threads run)
- *    >= 1 ms : rt_thread_delay() (yields CPU for round-robin)
+ *    < 1 tick : DWT busy-wait (true sub-tick delay; avoids 100us -> 1tick inflation)
+ *    >= 1 tick: sleep whole ticks, then busy-wait the remaining sub-tick tail
  * ---------------------------------------------------------------- */
 void Scheduler::delay(uint16_t ms)
 {
@@ -400,21 +424,25 @@ void Scheduler::delay_microseconds(uint16_t us)
         return;
     }
 
-    rt_tick_t ticks = (rt_tick_t)((uint32_t)us * RT_TICK_PER_SECOND / 1000000U);
-
-    if (ticks > 0) {
-        rt_thread_delay(ticks);
+    const uint32_t tick_us = 1000000U / RT_TICK_PER_SECOND;
+    if (tick_us == 0 || us < tick_us) {
+        _delay_microseconds_dwt(us);
         return;
     }
 
-    /* Sub-tick delay (< 100 µs at 10 kHz).
-     * >= 50 µs: sleep 1 tick — releases CPU to ALL priority levels
-     *           (yield only helps same/higher priority).
-     * <  50 µs: DWT spin for precise hardware timing (SPI CS setup etc). */
-    if (us >= 50) {
-        rt_thread_delay(1);
-    } else {
-        _delay_microseconds_dwt(us);
+    const rt_tick_t whole_ticks = us / tick_us;
+    const uint32_t remainder_us = us % tick_us;
+
+    if (whole_ticks > 0) {
+        /* Single sleep instead of per-tick loop: gives lower-priority threads
+         * (IO at prio 18, storage) a continuous window to drain work queues.
+         * The per-tick loop woke the main thread every 100us, preempting the
+         * IO thread before it could finish AP_Param::save_io_handler(). */
+        rt_thread_delay(whole_ticks);
+    }
+
+    if (remainder_us > 0) {
+        _delay_microseconds_dwt(remainder_us);
     }
 }
 
@@ -435,7 +463,27 @@ void Scheduler::delay_microseconds_boost(uint16_t us)
         _priority_boosted = true;
         _called_boost = true;
     }
-    delay_microseconds(us);
+    /*
+     * Hybrid sleep — same strategy as delay_microseconds():
+     *   1) Sleep whole ticks (yields CPU so bus threads can run)
+     *   2) DWT busy-wait sub-tick remainder (avoids 100µs→1tick inflation)
+     *
+     * Previous ceiling-rounding added up to 100µs overhead per
+     * wait_for_sample() call (~15% of main loop budget at 400 Hz).
+     */
+    const uint32_t tick_us = 1000000U / RT_TICK_PER_SECOND;
+    if (us < tick_us) {
+        rt_thread_delay(1);
+        return;
+    }
+    const rt_tick_t whole_ticks = us / tick_us;
+    const uint32_t remainder_us = us % tick_us;
+    if (whole_ticks > 0) {
+        rt_thread_delay(whole_ticks);
+    }
+    if (remainder_us > 0) {
+        _delay_microseconds_dwt(remainder_us);
+    }
 }
 
 bool Scheduler::check_called_boost(void)
@@ -532,7 +580,12 @@ void Scheduler::set_system_initialized()
 
     /* Start IWDG now that the system is fully initialized and the main loop is running.
      * The watchdog_pat() in the timer thread will keep it fed every ms.
-     * Temporarily disabled — prescaler/timeout tuning needed with GDB. */
+     * Timeout ~10s (prescaler /256, reload 1250, LSI 32kHz).
+     * Note: once started, IWDG cannot be stopped. GDB halt will trigger reset
+     * after timeout — use "monitor reset halt" quickly or disable for deep debug.
+     * Disabled for now: IWDG causes boot loop because watchdog_pat() runs in
+     * timer thread which may not be scheduled fast enough during init. Re-enable
+     * after verifying timer thread priority and pat timing. */
 #if 0
     ap_rtt_iwdg_init();
     _iwdg_started = true;

@@ -21,10 +21,10 @@
 #ifndef AP_NOTIFY_GPIO_LED_RGB_BLUE_PIN
 #define AP_NOTIFY_GPIO_LED_RGB_BLUE_PIN 124   /* GET_PIN(H,12) = 7*16+12 */
 #endif
-/* Force HAL_GPIO_LED_ON=1 so PixRacerLED::init() calls pinMode() */
-#ifndef HAL_GPIO_LED_ON
-#define HAL_GPIO_LED_ON 1
-#endif
+/* Active-low LEDs: HAL_GPIO_LED_ON defaults to 0 (write LOW to turn on).
+ * Do NOT define it — AP_HAL_Boards.h default is 0 and errors if explicitly
+ * set to 0. GPIO pin init is in rt_board_init.c instead of PixRacerLED::init()
+ * since PixRacerLED skips pinMode() when LED_ON==0 (ChibiOS uses hwdef pin parser). */
 
 /*
  * GPS/WGS84 等需要 double 与 libm（RAD_TO_DEG_DOUBLE、sqrt 等），与 EKF 是否双精度无关。
@@ -43,6 +43,14 @@
 #endif
 
 #define HAL_INS_DEFAULT HAL_INS_NONE
+
+/* Barometer SPI device names — must match SPIDEV names in hwdef.dat */
+#ifndef HAL_BARO_MS5611_NAME
+#define HAL_BARO_MS5611_NAME "ms5611"
+#endif
+#ifndef HAL_BARO_MS5611_SPI_EXT_NAME
+#define HAL_BARO_MS5611_SPI_EXT_NAME "ms5611_ext"
+#endif
 
 #define HAL_CPU_CLASS HAL_CPU_CLASS_150
 #define HAL_MEM_CLASS HAL_MEM_CLASS_192
