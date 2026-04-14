@@ -321,6 +321,17 @@ class RTTHWDef(HWDef):
         f.write('#ifndef SEEK_CUR\n#define SEEK_CUR 1\n#endif\n')
         f.write('#ifndef SEEK_END\n#define SEEK_END 2\n#endif\n\n')
 
+        # GNU libc extensions missing from newlib — declarations + compat shim
+        f.write('/* GNU libc extensions for RT-Thread/newlib */\n')
+        f.write('#ifdef __cplusplus\n')
+        f.write('#include <cstddef>\n')
+        f.write('extern "C" int ffs(int);\n')
+        f.write('extern "C" int asprintf(char **, const char *, ...);\n')
+        f.write('extern "C" void *memmem(const void *, std::size_t, const void *, std::size_t);\n')
+        f.write('extern "C" std::size_t strnlen(const char *s, std::size_t maxlen);\n')
+        f.write('extern "C" char *strdup(const char *s);\n')
+        f.write('#endif\n\n')
+
         # Sensor probe macros
         f.write('/* Sensor probe macros */\n')
         f.write('#define PROBE_IMU_SPI(driver, devname, args ...) ADD_BACKEND(AP_InertialSensor_ ## driver::probe(*this,hal.spi->get_device(devname),##args))\n')

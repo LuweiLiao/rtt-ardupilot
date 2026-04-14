@@ -93,6 +93,7 @@ private:
     void *_uart_hw{nullptr};
 #endif
 
+    bool _last_drain_wrote{true};
     bool _check_usb_connected() const;
 
     ByteBuffer _readbuf{0};

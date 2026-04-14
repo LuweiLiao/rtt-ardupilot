@@ -343,8 +343,10 @@ void UARTDriver::_drain_writebuf_to_dev()
         rtt_uart_dbg_drain_writes++;
         rtt_uart_dbg_drain_bytes += w;
         _writebuf.advance(w);
+        _last_drain_wrote = true;
     } else {
         rtt_uart_dbg_drain_zero++;
+        _last_drain_wrote = false;
     }
 }
 
@@ -482,9 +484,10 @@ void UARTDriver::_timer_tick(void)
     }
 
     if (_is_usb && !_check_usb_connected()) {
-        _writebuf.clear();
-        _readbuf.clear();
-        _usb_write_fail_count = 0;
+        /* Don't aggressively clear buffers — the USB configured check may
+         * briefly return false during normal operation (e.g. USB bus reset),
+         * causing all queued MAVLink data to be dropped. Instead, just skip
+         * draining and let the write-fail counter handle true disconnections. */
         return;
     }
 
@@ -492,26 +495,23 @@ void UARTDriver::_timer_tick(void)
     _drain_writebuf_to_dev();
 
     if (_is_usb) {
-        /* Track consecutive failures (ticks where drain could not write anything
-         * while data was available). Only clear the write buffer if we've failed
-         * to make progress for >100 ticks — this avoids the previous bug where
-         * _usb_write_fail_count was incremented unconditionally every tick,
-         * causing the write buffer to be cleared every ~100ms even when writes
-         * were succeeding. */
+        /* Track consecutive write failures: drain returned 0 bytes while data
+         * was queued.  Only clear the write buffer if the USB endpoint is truly
+         * stuck (no progress for 5 seconds at 1 kHz tick = 5000 ticks). */
         static uint32_t _diag_last_ms = 0;
         static uint32_t _diag_clears = 0;
         if (_writebuf.available() == 0) {
-            _usb_write_fail_count = 0;  /* buffer drained, reset counter */
-        } else {
+            _usb_write_fail_count = 0;
+        } else if (!_last_drain_wrote) {
+            /* drain was attempted but wrote 0 bytes → endpoint full/stuck */
             _usb_write_fail_count++;
             if (_usb_write_fail_count > 5000) {
-                /* 5 秒无进展才清空：大日志下载时 USB 端点会短暂饱和，
-                 * 100 ms 阈值过于激进，会导致已入队的 MAVLink 包丢失、
-                 * GCS 侧日志下载停滞在 ~95%. */
                 _writebuf.clear();
                 _usb_write_fail_count = 0;
                 _diag_clears++;
             }
+        } else {
+            _usb_write_fail_count = 0;  /* write succeeded */
         }
         // Diagnostic: every 5s print USB write stats + DWC2 debug counters
         if (AP_HAL::millis() - _diag_last_ms > 5000) {
