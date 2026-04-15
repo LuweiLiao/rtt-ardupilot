@@ -24,6 +24,8 @@ static void _adc_init_once(void)
 
     // Enable GPIO clocks
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOBEN | RCC_AHB1ENR_GPIOCEN;
+    // Read back to ensure clock is on
+    (void)RCC->AHB1ENR;
 
     // Configure ADC pins as analog
     GPIOA->MODER |= 0xFF;        // PA0-3 analog
@@ -44,7 +46,7 @@ static void _adc_init_once(void)
     ADC1->CR2 = ADC_CR2_ADON | ADC_CR2_EOCS;  // Enable + EOC per conversion
 
     // Wait for ADC to stabilize
-    for (volatile uint32_t i = 0; i < 200; i++) { __NOP(); }
+    for (volatile uint32_t i = 0; i < 1000; i++) { __NOP(); }
 
     _adc_inited = true;
 }
@@ -60,27 +62,25 @@ static uint32_t _adc_read(uint8_t ch)
     ADC1->SQR3 = ch;
     ADC1->SQR1 = 0;
 
+    // Clear all status flags, then start conversion
     ADC1->SR = 0;
     ADC1->CR2 |= ADC_CR2_SWSTART;
 
+    // Poll EOC with simple counter timeout (~0.5ms at 216MHz)
+    // ADC conversion typically completes in <1us; 100000 loops is generous.
     for (volatile uint32_t t = 0; t < 100000; t++) {
         if (ADC1->SR & ADC_SR_EOC) {
             return ADC1->DR & 0xFFF;
         }
     }
+    // Timeout — read DR to clear flags
+    (void)ADC1->DR;
     return 0;
 }
 
 /* AnalogSource */
-void AnalogSource::_add_sample(float v) {
-    _sum += v;
-    _count++;
-    _latest_value = v;
-}
-float AnalogSource::read_average() {
-    if (_count > 0) { _value = _sum / _count; _sum = 0; _count = 0; }
-    return _value;
-}
+void AnalogSource::_add_sample(float v) { _sum += v; _count++; _latest_value = v; }
+float AnalogSource::read_average() { if (_count > 0) { _value = _sum / _count; _sum = 0; _count = 0; } return _value; }
 float AnalogSource::read_latest() { return _latest_value; }
 bool AnalogSource::set_pin(uint8_t p) { _pin = (int16_t)p; return true; }
 float AnalogSource::voltage_average() { return read_average() * (3.3f / 4096.0f) * _scale; }
@@ -110,6 +110,7 @@ void AnalogIn::_timer_tick()
 {
     if (!_initialized) return;
 
+    // Read all 8 mapped channels
     for (uint8_t i = 0; i < 8; i++) {
         uint32_t raw = _adc_read(_ch_map[i]);
         if (i < RTT_ANALOG_MAX_CHANNELS) {
@@ -117,10 +118,11 @@ void AnalogIn::_timer_tick()
         }
     }
 
-    // VDD_5V via PC0 (ch10) scale 2x
-    uint32_t vdd = _adc_read(10);
-    if (vdd > 0) {
-        _board_voltage = (float)vdd * (3.3f / 4096.0f) * 2.0f;
+    // Board voltage: ch_map[5]=ch10 (PC0) already read above, use _sources[5]
+    // _sources[5] scale is set to 2.0 in channel() for ch10/11
+    float vdd = _sources[5].read_latest() * (3.3f / 4096.0f) * 2.0f;
+    if (vdd > 0.5f) {
+        _board_voltage = vdd;
     }
 
     uint16_t flags = 0;
