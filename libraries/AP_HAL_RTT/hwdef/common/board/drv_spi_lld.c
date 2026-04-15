@@ -261,6 +261,10 @@ rt_err_t spi_lld_xfer(spi_lld_bus_t *lld,
     }
     lld->error = 0;
 
+    /* Re-initialize completion before each transfer to prevent stale
+     * wakeup from a previous timeout/aborted transfer. */
+    rt_completion_init(&lld->cpt);
+
     /* Flush any stale SPI FIFO data */
     (void)spi->DR;
     (void)spi->SR;

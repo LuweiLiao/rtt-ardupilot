@@ -848,7 +848,7 @@ class RTTHWDef(HWDef):
                 f.write('        HAL_GPIO_Init(GPIO%s, &GPIO_InitStruct);\n' % vbus_pins[0]['port'])
 
             f.write('        __HAL_RCC_USB_OTG_FS_CLK_ENABLE();\n')
-            f.write('        HAL_NVIC_SetPriority(OTG_FS_IRQn, 0, 0);\n')
+            f.write('        HAL_NVIC_SetPriority(OTG_FS_IRQn, 1, 0);\n')
             f.write('        HAL_NVIC_EnableIRQ(OTG_FS_IRQn);\n')
             f.write('    }\n')
 

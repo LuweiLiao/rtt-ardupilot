@@ -75,12 +75,12 @@ void Storage::write_block(uint16_t dst, const void* src, size_t n)
         return;
     }
     _storage_open();
+    _sem.take_blocking();
     if (memcmp(src, &_buffer[dst], n) != 0) {
-        _sem.take_blocking();
         memcpy(&_buffer[dst], src, n);
         _mark_dirty(dst, n);
-        _sem.give();
     }
+    _sem.give();
 }
 
 bool Storage::erase()

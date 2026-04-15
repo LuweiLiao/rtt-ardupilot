@@ -168,41 +168,47 @@ bool Flash::write(uint32_t addr, const void *buf, uint32_t count)
     const uint8_t *b = (const uint8_t *)buf;
     bool ok = true;
 
-    rt_base_t level = rt_hw_interrupt_disable();
-
     while (count > 0 && ok) {
         if (_wait_bsy(0xFFFFFFU)) { ok = false; break; }
 
         if ((addr & 3) == 0 && count >= 4) {
-            FLASH->CR = FLASH_CR_PG | FLASH_CR_PSIZE_1;
+            /* Only disable interrupts around the register write sequence.
+             * _wait_bsy() and memcpy can run with interrupts enabled.
+             * A single 32-bit flash program takes ~25µs on STM32F767;
+             * we only need to protect the 3-register sequence. */
             uint32_t val;
             memcpy(&val, b, 4);
+            FLASH->CR = FLASH_CR_PG | FLASH_CR_PSIZE_1;
+            rt_base_t level = rt_hw_interrupt_disable();
             *(volatile uint32_t *)addr = val;
             __DSB();
+            rt_hw_interrupt_enable(level);
             if (_wait_bsy(0xFFFFFFU)) { ok = false; break; }
             FLASH->CR &= ~FLASH_CR_PG;
             if (*(volatile uint32_t *)addr != val) { ok = false; break; }
             addr += 4; b += 4; count -= 4;
         } else if ((addr & 1) == 0 && count >= 2) {
-            FLASH->CR = FLASH_CR_PG | FLASH_CR_PSIZE_0;
             uint16_t val;
             memcpy(&val, b, 2);
+            FLASH->CR = FLASH_CR_PG | FLASH_CR_PSIZE_0;
+            rt_base_t level = rt_hw_interrupt_disable();
             *(volatile uint16_t *)addr = val;
             __DSB();
+            rt_hw_interrupt_enable(level);
             if (_wait_bsy(0xFFFFFFU)) { ok = false; break; }
             FLASH->CR &= ~FLASH_CR_PG;
             addr += 2; b += 2; count -= 2;
         } else {
             FLASH->CR = FLASH_CR_PG;
+            rt_base_t level = rt_hw_interrupt_disable();
             *(volatile uint8_t *)addr = *b;
             __DSB();
+            rt_hw_interrupt_enable(level);
             if (_wait_bsy(0xFFFFFFU)) { ok = false; break; }
             FLASH->CR &= ~FLASH_CR_PG;
             addr++; b++; count--;
         }
     }
-
-    rt_hw_interrupt_enable(level);
 
     if (!_keep_unlocked) {
         _flash_lock();

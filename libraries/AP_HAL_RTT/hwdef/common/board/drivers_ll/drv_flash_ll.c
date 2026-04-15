@@ -114,7 +114,8 @@ int flash_ll_program_bytes(uint32_t addr, const uint8_t *buf, uint32_t len)
 
     /* Word writes for aligned middle */
     while (pos + 4 <= len) {
-        uint32_t word = *(const uint32_t *)(buf + pos);
+        uint32_t word;
+        memcpy(&word, buf + pos, 4);  /* safe for unaligned buf */
         int rc = flash_ll_program_word(addr + pos, word);
         if (rc) return rc;
         pos += 4;

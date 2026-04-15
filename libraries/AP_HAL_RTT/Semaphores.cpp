@@ -80,19 +80,12 @@ bool Semaphore::take(uint32_t timeout_ms)
         return rt_mutex_take(_mtx, RT_WAITING_FOREVER) == RT_EOK;
     }
 
-    if (take_nonblocking()) {
-        return true;
-    }
-
-    uint64_t start = AP_HAL::micros64();
-    do {
-        rt_thread_mdelay(1);
-        if (take_nonblocking()) {
-            return true;
-        }
-    } while ((AP_HAL::micros64() - start) < (uint64_t)timeout_ms * 1000);
-
-    return false;
+    /* Use native rt_mutex_take with tick timeout instead of polling.
+     * The old mdelay(1)+polling pattern wasted CPU cycles and could
+     * starve lower-priority threads. */
+    rt_tick_t ticks = (rt_tick_t)((uint64_t)timeout_ms * RT_TICK_PER_SECOND / 1000U);
+    if (ticks == 0) ticks = 1;
+    return rt_mutex_take(_mtx, ticks) == RT_EOK;
 }
 
 bool Semaphore::take_nonblocking()
@@ -190,10 +183,11 @@ void BinarySemaphore::signal()
 
 void BinarySemaphore::signal_ISR()
 {
-    _ensure_sem();
+    /* MUST NOT call _ensure_sem() here — it invokes rt_thread_self()
+     * and potentially rt_sem_create(), neither of which is ISR-safe.
+     * If _sem hasn't been created yet, the signal is lost (acceptable:
+     * ISR should only fire after driver init completes). */
     if (_sem != nullptr) {
-        /* rt_sem_release() is ISR-safe in RT-Thread when called
-         * with interrupts disabled or from ISR context */
         rt_base_t level = rt_hw_interrupt_disable();
         rt_sem_release(_sem);
         rt_hw_interrupt_enable(level);

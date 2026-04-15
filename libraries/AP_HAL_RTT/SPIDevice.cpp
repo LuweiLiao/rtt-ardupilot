@@ -257,6 +257,7 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
         } else {
             buf = (uint8_t *)rt_malloc_align(total_len, 32);
             if (buf == nullptr) {
+                if (!_cs_held) { _unlock_bus(); }
                 if (need_sem) _sem.give();
                 return false;
             }
@@ -384,6 +385,24 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
         if (need_sem) { _sem.give(); }
         return false;
     }
+
+    const bool cs_take = !_cs_held;
+    const bool cs_release = !_cs_held;
+
+#ifdef SOC_SERIES_STM32F7
+    /* SPI1: use direct register-level polling (same as transfer()).
+     * The RTT HAL polling path returns incorrect data for multi-byte
+     * reads on SPI1/STM32F7/CUAV-V5. */
+    if (_desc.bus == 1) {
+        bool ok = (len > 0)
+            ? spi1_poll_transfer(_dev, send, len, recv, len, cs_take, cs_release)
+            : true;
+        rtt_dbg_spi_xfer_count += 2;
+        if (!_cs_held) { _unlock_bus(); }
+        if (need_sem) { _sem.give(); }
+        return ok;
+    }
+#endif
 
     uint8_t _bounce[64];
     uint8_t *txbuf = (uint8_t *)send;
