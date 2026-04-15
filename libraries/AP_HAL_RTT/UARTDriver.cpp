@@ -327,26 +327,44 @@ void UARTDriver::_drain_writebuf_to_dev()
         return;
     }
 
-    /* Single write per timer tick to avoid DMA bounce buffer race.
-     * RTT serial DMA TX stores the buffer pointer (not the data), so
-     * reusing _tx_bounce in a loop can corrupt in-flight DMA transfers.
-     * One 512-byte write per 1ms tick = 512 KB/s max, well above
-     * 115200 baud (11.5 KB/s). */
-    uint32_t n = _writebuf.peekbytes(_tx_bounce, sizeof(_tx_bounce));
-    if (n == 0) {
-        return;
-    }
+    /*
+     * Drain as much as possible from _writebuf into the device.
+     *
+     * For UART with DMA TX we limit to one write per tick to avoid
+     * bounce-buffer races (DMA stores the pointer, not the data).
+     *
+     * For USB CDC (and other non-DMA backends) the single-write limit
+     * throttles throughput to 512 B/tick = 512 KB/s.  The CherryUSB
+     * CDC ringbuffer is only 4096 B and USB-FS max-packet is 64 B, so
+     * we need to keep it fed aggressively.  Loop until the device can't
+     * accept more or our buffer is empty.
+     */
+    const bool is_usb = (_port_num == 0);  /* serial0 = USB ACM */
 
-    rt_size_t w = rt_device_write(_dev, 0, _tx_bounce, n);
-    rtt_uart_dbg_drain_calls++;
-    if (w > 0) {
-        rtt_uart_dbg_drain_writes++;
-        rtt_uart_dbg_drain_bytes += w;
-        _writebuf.advance(w);
-        _last_drain_wrote = true;
-    } else {
-        rtt_uart_dbg_drain_zero++;
-        _last_drain_wrote = false;
+    for (;;) {
+        uint32_t n = _writebuf.peekbytes(_tx_bounce, sizeof(_tx_bounce));
+        if (n == 0) {
+            _last_drain_wrote = true;
+            return;
+        }
+
+        rt_size_t w = rt_device_write(_dev, 0, _tx_bounce, n);
+        rtt_uart_dbg_drain_calls++;
+        if (w > 0) {
+            rtt_uart_dbg_drain_writes++;
+            rtt_uart_dbg_drain_bytes += w;
+            _writebuf.advance(w);
+            _last_drain_wrote = true;
+            if (is_usb) {
+                continue;   /* keep feeding the USB ringbuffer */
+            }
+            /* UART DMA: one write per tick */
+            return;
+        } else {
+            rtt_uart_dbg_drain_zero++;
+            _last_drain_wrote = false;
+            return;  /* device buffer full – retry next tick */
+        }
     }
 }
 
