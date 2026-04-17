@@ -40,12 +40,25 @@ static void _adc_init_once(void)
     // ADC common prescaler: PCLK2/4
     ADC123_COMMON->CCR = (ADC123_COMMON->CCR & ~(3U << 16)) | (1U << 16);
 
-    // Disable ADC1, configure, then enable
+    // Disable ADC1 and configure CR1
     ADC1->CR2 = 0;
     ADC1->CR1 = 0;  // 12-bit, no scan
-    ADC1->CR2 = ADC_CR2_ADON | ADC_CR2_EOCS;  // Enable + EOC per conversion
 
-    // Wait for ADC to stabilize
+    // First ADON write: wake up from power-down
+    ADC1->CR2 = ADC_CR2_ADON;
+
+    // Wait for ADC internal regulator to stabilize after wake-up
+    for (volatile uint32_t i = 0; i < 1000; i++) { __NOP(); }
+
+    // Verify ADON took effect
+    if (!(ADC1->CR2 & ADC_CR2_ADON)) {
+        return;  // ADC failed to wake
+    }
+
+    // Second ADON write: fully enable with EOCS
+    ADC1->CR2 = ADC_CR2_ADON | ADC_CR2_EOCS;
+
+    // Wait for ADC ready for conversion
     for (volatile uint32_t i = 0; i < 1000; i++) { __NOP(); }
 
     _adc_inited = true;
