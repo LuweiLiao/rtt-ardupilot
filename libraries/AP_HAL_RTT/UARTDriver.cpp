@@ -523,7 +523,7 @@ void UARTDriver::_timer_tick(void)
         } else if (!_last_drain_wrote) {
             /* drain was attempted but wrote 0 bytes → endpoint full/stuck */
             _usb_write_fail_count++;
-            if (_usb_write_fail_count > 5000) {
+            if (_usb_write_fail_count > 500) {
                 _writebuf.clear();
                 _usb_write_fail_count = 0;
                 _diag_clears++;
