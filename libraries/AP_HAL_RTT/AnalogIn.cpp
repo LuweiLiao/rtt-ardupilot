@@ -8,8 +8,8 @@
 #include "AnalogIn.h"
 #include <AP_HAL/AP_HAL.h>
 #include <AP_HAL/board/rtt.h>
-#include <GCS_MAVLink/GCS.h>
 #include <stm32f7xx.h>
+#include <rtthread.h>
 
 namespace RTT
 {
@@ -141,11 +141,9 @@ void AnalogIn::_timer_tick()
         // Debug: print once when first non-zero reading appears
         if (!rtt_adc_debug_printed && raw != 0) {
             rtt_adc_debug_printed = true;
-            if (GCS::get_singleton()) {
-                gcs().send_text(MAV_SEVERITY_INFO, "ADC FIRST: ch=%u raw=%u timeouts=%u",
-                                (unsigned)_ch_map[i], (unsigned)raw,
-                                (unsigned)rtt_adc_timeout_count);
-            }
+            rt_kprintf("ADC FIRST: ch=%u raw=%u timeouts=%u\n",
+                        (unsigned)_ch_map[i], (unsigned)raw,
+                        (unsigned)rtt_adc_timeout_count);
         }
     }
 
@@ -153,12 +151,10 @@ void AnalogIn::_timer_tick()
     static uint32_t dbg_tick = 0;
     if (++dbg_tick >= 1000) {
         dbg_tick = 0;
-        if (GCS::get_singleton()) {
-            gcs().send_text(MAV_SEVERITY_INFO, "ADC: tmo=%u raw=%u vdd=%.2f",
-                            (unsigned)rtt_adc_timeout_count,
-                            (unsigned)rtt_adc_last_raw,
-                            (double)_board_voltage);
-        }
+        rt_kprintf("ADC STATUS: timeouts=%u last_raw=%u vdd=%.2f\n",
+                    (unsigned)rtt_adc_timeout_count,
+                    (unsigned)rtt_adc_last_raw,
+                    (double)_board_voltage);
     }
 
     // Board voltage: ch_map[5]=ch10 (PC0) already read above, use _sources[5]
