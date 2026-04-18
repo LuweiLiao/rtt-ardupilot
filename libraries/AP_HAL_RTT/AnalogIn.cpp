@@ -34,9 +34,9 @@ static void _adc_init_once(void)
     (void)RCC->AHB1ENR;
 
     // Configure ADC pins as analog
-    GPIOA->MODER |= 0xFF;        // PA0-3 analog
-    GPIOB->MODER |= 0x3;         // PB0 analog
-    GPIOC->MODER |= 0x30F;       // PC0,PC1,PC4 analog
+    GPIOA->MODER |= 0xFF;        // PA0-3 analog (BATT/BATT2 VOLTAGE/CURRENT)
+    GPIOB->MODER |= 0x3;         // PB0 analog (RSSI)
+    GPIOC->MODER |= 0x30F;       // PC0,PC1,PC4 analog (VDD_5V/3V3/SPARE)
 
     // Enable ADC1 clock on APB2
     RCC->APB2ENR |= RCC_APB2ENR_ADC1EN;

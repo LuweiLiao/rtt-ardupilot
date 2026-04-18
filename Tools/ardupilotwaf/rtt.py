@@ -1100,7 +1100,7 @@ def build(bld):
         env.append_value('LINKFLAGS', '-Wl,--no-whole-archive')
         # HAL_Drivers compiled in-place by scons; link selectively (not whole-archive)
         hal_drv_dir = os.path.join(os.path.dirname(bsp_dir), 'libraries', 'HAL_Drivers', 'drivers')
-        for drv_name in ('drv_spi.o', 'drv_sdio.o', 'drv_soft_i2c.o'):
+        for drv_name in ('drv_spi.o', 'drv_soft_i2c.o'):
             drv_path = os.path.join(hal_drv_dir, drv_name)
             if os.path.isfile(drv_path):
                 env.append_value('LINKFLAGS', os.path.abspath(drv_path))
@@ -1109,3 +1109,31 @@ def build(bld):
             env.append_value('LINKFLAGS', os.path.abspath(drv_flash))
         # Force strong OTG_FS_IRQHandler from BSP usb_irq.o; startup .s has weak->Default_Handler
         env.append_value('LINKFLAGS', '-Wl,-u,OTG_FS_IRQHandler')
+        # Link newlib syscalls stubs from RTT (_write, _read, _gettimeofday, etc.)
+        rtt_root = getattr(env, 'RTT_ROOT', '') or (bld.srcnode.abspath() + '/modules/rt-thread')
+        syscalls_c = os.path.join(rtt_root, 'components', 'libc', 'compilers', 'newlib', 'syscalls.c')
+        if os.path.isfile(syscalls_c):
+            syscalls_o = os.path.join(bsp_dir, 'syscalls.o')
+            cc_bin = os.path.join(os.environ.get('PATH', '').split(':')[0], 'arm-none-eabi-gcc')
+            if not os.path.isfile(cc_bin):
+                for p in os.environ.get('PATH', '').split(os.pathsep):
+                    c = os.path.join(p, 'arm-none-eabi-gcc')
+                    if os.path.isfile(c):
+                        cc_bin = c
+                        break
+            if os.path.isfile(cc_bin) and (not os.path.isfile(syscalls_o) or os.path.getmtime(syscalls_c) > os.path.getmtime(syscalls_o)):
+                subprocess.check_call([
+                    cc_bin, '-c', '-O2', '-mcpu=cortex-m7', '-mthumb',
+                    '-mfpu=fpv5-d16', '-mfloat-abi=hard', '-DARM_MATH_CM7',
+                    '-DRT_USING_NEWLIBC', '-DRT_USING_LIBC',
+                    '-I', bsp_dir,
+                    '-I', os.path.join(rtt_root, 'include'),
+                    '-I', os.path.join(rtt_root, 'components', 'libc', 'compilers', 'newlib'),
+                    '-I', os.path.join(rtt_root, 'components', 'libc', 'compilers', 'common', 'include'),
+                    '-I', os.path.join(rtt_root, 'components', 'libc', 'posix', 'include'),
+                    '-I', os.path.join(rtt_root, 'libcpu', 'arm', 'cortex-m7'),
+                    '-I', os.path.join(rtt_root, 'libcpu', 'arm', 'common'),
+                    '-o', syscalls_o, syscalls_c
+                ])
+            if os.path.isfile(syscalls_o):
+                env.append_value('LINKFLAGS', os.path.abspath(syscalls_o))

@@ -64,7 +64,10 @@ void RCOutput::init()
     _initialized = true;
 
 #if HAL_WITH_IO_MCU
-    iomcu_enabled = true;
+    if (AP_BoardConfig::io_enabled()) {
+        iomcu_enabled = true;
+        iomcu.init();
+    }
 #endif
     // Register safety_update as a timer process at 10 Hz
     hal.scheduler->register_timer_process(FUNCTOR_BIND_MEMBER(&RCOutput::safety_update, void));
