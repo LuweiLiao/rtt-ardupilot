@@ -259,6 +259,9 @@ void GCS_MAVLINK::handle_param_request_read(const mavlink_message_t &msg)
     // queue it for processing by io timer
     param_requests.push(req);
 
+    // ensure the deferred message loop will drain async replies:
+    send_message(MSG_NEXT_PARAM);
+
     // speaking of which, we'd best make sure it is running:
     if (!param_timer_registered) {
         param_timer_registered = true;
