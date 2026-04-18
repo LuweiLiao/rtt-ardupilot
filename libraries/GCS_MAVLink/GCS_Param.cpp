@@ -28,8 +28,11 @@
 extern const AP_HAL::HAL& hal;
 
 // queue of pending parameter requests and replies
-ObjectBuffer<GCS_MAVLINK::pending_param_request> GCS_MAVLINK::param_requests(20);
-ObjectBuffer<GCS_MAVLINK::pending_param_reply> GCS_MAVLINK::param_replies(5);
+// Use thread-safe ObjectBuffer_TS because param_io_timer runs in a
+// separate IO thread on RT-Thread (and ChibiOS), racing with pushes
+// from the main thread in handle_param_request_read.
+ObjectBuffer_TS<GCS_MAVLINK::pending_param_request> GCS_MAVLINK::param_requests(20);
+ObjectBuffer_TS<GCS_MAVLINK::pending_param_reply> GCS_MAVLINK::param_replies(5);
 
 bool GCS_MAVLINK::param_timer_registered;
 

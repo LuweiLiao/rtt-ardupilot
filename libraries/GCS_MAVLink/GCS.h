@@ -963,8 +963,8 @@ private:
     };
 
     // queue of pending parameter requests and replies
-    static ObjectBuffer<pending_param_request> param_requests;
-    static ObjectBuffer<pending_param_reply> param_replies;
+    static ObjectBuffer_TS<pending_param_request> param_requests;
+    static ObjectBuffer_TS<pending_param_reply> param_replies;
 
     // have we registered the IO timer callback?
     static bool param_timer_registered;
