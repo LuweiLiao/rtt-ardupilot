@@ -229,10 +229,10 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
     const bool cs_release = !_cs_held;
 
 #ifdef SOC_SERIES_STM32F7
-    /* SPI1: ALL transfers use direct register-level polling.
+    /* STM32F7: ALL transfers use direct register-level polling.
      * The RTT HAL polling path (HAL_SPI_TransmitReceive) returns incorrect
-     * data for multi-byte reads on SPI1 on STM32F7/CUAV-V5. */
-    if (_desc.bus == 1) {
+     * data for multi-byte reads on all SPI buses on STM32F7/CUAV-V5. */
+    if (true) {
         if (send_len > 0 || recv_len > 0) {
             ok = spi1_poll_transfer(_dev, send, send_len, recv, recv_len,
                                     cs_take, cs_release);
@@ -390,10 +390,10 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
     const bool cs_release = !_cs_held;
 
 #ifdef SOC_SERIES_STM32F7
-    /* SPI1: use direct register-level polling (same as transfer()).
+    /* STM32F7: use direct register-level polling (same as transfer()).
      * The RTT HAL polling path returns incorrect data for multi-byte
-     * reads on SPI1/STM32F7/CUAV-V5. */
-    if (_desc.bus == 1) {
+     * reads on all SPI buses on STM32F7/CUAV-V5. */
+    if (true) {
         bool ok = (len > 0)
             ? spi1_poll_transfer(_dev, send, len, recv, len, cs_take, cs_release)
             : true;
