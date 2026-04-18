@@ -407,6 +407,44 @@ INIT_ENV_EXPORT(sd_card_mount_sync);
 #endif
 
 /* ----------------------------------------------------------------
+ *  Internal Flash block device for DFS elmfat (logging without SD).
+ *  Uses sector 11 (256KB) — sector 10 is HAL_Storage parameters.
+ * ---------------------------------------------------------------- */
+extern int rt_hw_flash_blkdev_init(void);
+
+#define FLASH_BLKDEV_MOUNT_POINT  "/logs"
+#define FLASH_BLKDEV_DEV          "flash0"
+
+static int flash_blkdev_mount(void)
+{
+    if (rt_hw_flash_blkdev_init() != RT_EOK) return -1;
+
+    /* Try mounting first; if no filesystem, format then mount */
+    if (dfs_mount(FLASH_BLKDEV_DEV, FLASH_BLKDEV_MOUNT_POINT, "elm", 0, 0) == 0) {
+        rt_kprintf("[flash0] mounted on %s\n", FLASH_BLKDEV_MOUNT_POINT);
+        return 0;
+    }
+
+    rt_kprintf("[flash0] no filesystem, formatting...\n");
+    int rc = dfs_mkfs("elm", FLASH_BLKDEV_DEV);
+    if (rc != 0) {
+        rt_kprintf("[flash0] mkfs failed: %d\n", rc);
+        return -2;
+    }
+
+    rc = dfs_mount(FLASH_BLKDEV_DEV, FLASH_BLKDEV_MOUNT_POINT, "elm", 0, 0);
+    if (rc != 0) {
+        rt_kprintf("[flash0] mount after mkfs failed: %d\n", rc);
+        return -3;
+    }
+
+    mkdir(FLASH_BLKDEV_MOUNT_POINT, 0777);
+    rt_kprintf("[flash0] formatted and mounted on %s\n", FLASH_BLKDEV_MOUNT_POINT);
+    return 0;
+}
+INIT_ENV_EXPORT(flash_blkdev_mount);
+
+/* ----------------------------------------------------------------
  *  True CPU idle measurement via DWT cycle counter + idle hook.
  *  rtt_cpu_idle_pct is updated every second; read via GDB or MAVLink.
  * ---------------------------------------------------------------- */
