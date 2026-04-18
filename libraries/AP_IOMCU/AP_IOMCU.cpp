@@ -25,6 +25,7 @@
 /* EVENT_MASK compatible with ChibiOS semantics */
 #define EVENT_MASK(n) (1U << (n))
 #include <AP_SerialManager/AP_SerialManager.h>
+#include <cstdio>
 
 extern const AP_HAL::HAL &hal;
 
@@ -1151,7 +1152,10 @@ bool AP_IOMCU::check_crc(void)
     if (!upload_fw()) {
         AP_ROMFS::free(fw);
         fw = nullptr;
-        AP_BoardConfig::config_error("Failed to update IO firmware");
+        // Don't hard-fault on firmware upload failure; IO will run
+        // with existing (possibly stale) firmware.  This allows the
+        // vehicle to boot and send SYS_STATUS even when upload fails.
+        ::printf("IOMCU fw upload failed, using existing fw\n");
     }
 
     AP_ROMFS::free(fw);
