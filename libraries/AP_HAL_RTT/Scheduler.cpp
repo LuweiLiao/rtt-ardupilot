@@ -18,6 +18,7 @@
 
 #include "AP_HAL_RTT/Scheduler.h"
 #include "AP_HAL_RTT/UARTDriver.h"
+#include "AP_HAL_RTT/HAL_RTT_Class.h"
 #include "AP_HAL_RTT/AnalogIn.h"
 #include "AP_HAL_RTT/RCOutput.h"
 #include "AP_HAL_RTT/RCInput.h"
@@ -160,6 +161,13 @@ void Scheduler::_uart_thread_entry(void *arg)
                 uart->_timer_tick();
             }
         }
+#if HAL_WITH_IO_MCU
+        /* The IOMCU UART driver is not in hal.serial(), tick it separately. */
+        auto *iomcu_uart = get_rtt_iomcu_uart();
+        if (iomcu_uart) {
+            iomcu_uart->_timer_tick();
+        }
+#endif
     }
 }
 

@@ -11,6 +11,11 @@
 #include <AP_HAL_Empty/AP_HAL_Empty_Namespace.h>
 #include "HAL_RTT_Namespace.h"
 
+namespace RTT { class UARTDriver; }
+
+/* Return the IOMCU UART driver — used by Scheduler to tick it. */
+RTT::UARTDriver *get_rtt_iomcu_uart(void);
+
 class HAL_RTT : public AP_HAL::HAL
 {
 public:

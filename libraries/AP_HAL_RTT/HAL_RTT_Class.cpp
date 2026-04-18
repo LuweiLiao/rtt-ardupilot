@@ -76,9 +76,13 @@ static RTT::Util utilInstance;
 static RTT::OpticalFlowStub opticalFlowDriver;
 static RTT::Flash flashDriver;
 #if HAL_WITH_IO_MCU
-// IOMCU UART — serial2Driver maps to HAL_UART_IOMCU_IDX=2 (UART8)
+// IOMCU UART — maps to HAL_UART_IOMCU_IDX=7 (UART8)
+// This driver is NOT in the HAL serial array, so Scheduler must tick it
+// separately via get_rtt_iomcu_uart().
 static RTT::UARTDriver ioUartDriver(HAL_UART_IOMCU_IDX);
 AP_IOMCU iomcu(ioUartDriver);
+
+RTT::UARTDriver *get_rtt_iomcu_uart(void) { return &ioUartDriver; }
 #endif
 #if AP_SIM_ENABLED && CONFIG_HAL_BOARD != HAL_BOARD_SITL
 static AP_HAL::SIMState xsimstate;
