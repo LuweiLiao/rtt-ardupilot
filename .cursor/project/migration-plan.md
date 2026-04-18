@@ -79,7 +79,9 @@ HAL_DEFAULT_INS_FAST_SAMPLE=1, HAL_STORAGE_SIZE 从 16384 改为 32768
 - HAL_WITH_IO_MCU_DSHOT 已启用
 - HAL_OS_FATFS_IO 延后（AP_Filesystem_FATFS.cpp 硬编码 ChibiOS 头文件）
 
-#### 2.1 SD 卡（原计划）
+#### 2.1 SD 卡 — ⏸️ 跳过（PB4/PB14/PB15 与 DRDY 冲突，ChibiOS 也不使用 SDMMC2）
+
+#### ~~2.1 SD 卡（原计划）~~
 ```
 PD6  SDMMC2_CK   SDMMC2  AF10
 PD7  SDMMC2_CMD  SDMMC2  AF10
@@ -90,7 +92,7 @@ PB4  SDMMC2_D3   SDMMC2  AF9
 define FATFS_HAL_DEVICE SDCD2
 ```
 
-#### 2.2 UART 流控（6 组）
+#### 2.2 UART 流控 — ✅ 已完成（USART2/3/6 + UART7 CTS/RTS，跳过 UART4 GPS2 流控因引脚冲突）
 ```
 # USART2 TELEM1
 PD3  USART2_RTS  USART2  AF7
@@ -116,14 +118,14 @@ PE10 UART7_CTS   UART7   AF8
 
 ⚠️ 引脚冲突需逐个确认（特别是 PB14 SDMMC2_D1 vs USART1）
 
-#### 2.3 安全开关
+#### 2.3 安全开关 — ⏸️ 跳过（PF5 是 RAMTRON_CS，ChibiOS 未定义安全开关）
 ```
 PD10 LED_SAFETY   OUTPUT
 PF5  SAFETY_IN    INPUT  PULLDOWN
 define HAL_HAVE_SAFETY_SWITCH 1
 ```
 
-#### 2.4 状态 LED
+#### 2.4 状态 LED — ⏸️ 跳过（PE3 是 VDD_3V3_SENSORS_EN 电源引脚）
 ```
 PE3  LED_RED    OUTPUT  GPIO(90)  LOW
 PE4  LED_GREEN  OUTPUT  GPIO(91)  LOW
@@ -133,7 +135,7 @@ define AP_NOTIFY_GPIO_LED_RGB_GREEN_PIN 91
 define AP_NOTIFY_GPIO_LED_RGB_BLUE_PIN  92
 ```
 
-#### 2.5 PWM 舵机输出（12 路）
+#### 2.5 PWM 舵机输出 — ✅ 已完成（10 路，跳过 PH10/11/12 RGB LED 冲突、PE6 SPI4 MOSI 冲突）
 ```
 PI0  TIM5_CH4  TIM5  PWM(1)  GPIO(50)  BIDIR
 PH12 TIM5_CH3  TIM5  PWM(2)  GPIO(51)
@@ -151,7 +153,7 @@ PH6  TIM12_CH1 TIM12 PWM(13) GPIO(62)  NODMA
 PH9  TIM12_CH2 TIM12 PWM(14) GPIO(63)  NODMA
 ```
 
-#### 2.6 CAN 总线
+#### 2.6 CAN 总线 — ✅ 部分完成（CAN2 PB12/PB13 + PI8 silent；CAN1 跳过因 PD0/PD1 是 UART4）
 ```
 PD0  CAN1_RX  CAN1
 PD1  CAN1_TX  CAN1
@@ -161,12 +163,12 @@ PE2  GPIO_CAN1_SILENT  OUTPUT  PUSHPULL  SPEED_LOW  LOW  GPIO(70)
 PI8  GPIO_CAN2_SILENT  OUTPUT  PUSHPULL  SPEED_LOW  LOW  GPIO(71)
 ```
 
-#### 2.7 蜂鸣器
+#### 2.7 蜂鸣器 — ✅ 已完成
 ```
 PF9  TIM14_CH1  TIM14  GPIO(77)  ALARM
 ```
 
-#### 2.8 I2C 总线
+#### 2.8 I2C 总线 — ✅ 已完成（I2C1/2/4，I2C3 已在 Phase 1 存在）
 ```
 PB9  I2C1_SDA  I2C1
 PB8  I2C1_SCL  I2C1
@@ -176,7 +178,7 @@ PF15 I2C4_SDA  I2C4
 PF14 I2C4_SCL  I2C4
 ```
 
-#### 2.9 其他 define
+#### 2.9 其他 define — ✅ 已完成（HAL_WITH_IO_MCU_DSHOT；HAL_OS_FATFS_IO 延后因硬编码 ChibiOS 头文件）
 ```
 define HAL_WITH_IO_MCU_DSHOT 1
 define HAL_OS_FATFS_IO 1
