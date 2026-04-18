@@ -46,10 +46,35 @@ volatile struct {
  * simultaneously.  In half-duplex (write-then-read) mode we exchange
  * send_len + recv_len bytes sequentially.
  */
+/*
+ * Map AP bus number to STM32F7 SPI peripheral.
+ */
+static SPI_TypeDef *bus_to_spi(uint8_t bus)
+{
+    switch (bus) {
+    case 1: return SPI1;
+    case 2: return SPI2;
+#ifdef SPI3
+    case 3: return SPI3;
+#endif
+#ifdef SPI4
+    case 4: return SPI4;
+#endif
+#ifdef SPI5
+    case 5: return SPI5;
+#endif
+#ifdef SPI6
+    case 6: return SPI6;
+#endif
+    default: return SPI1;
+    }
+}
+
 static bool spi1_poll_transfer(struct rt_spi_device *dev,
                                 const uint8_t *send, uint32_t send_len,
                                 uint8_t *recv, uint32_t recv_len,
-                                bool cs_take, bool cs_release)
+                                bool cs_take, bool cs_release,
+                                SPI_TypeDef *spi)
 {
     const bool fullduplex = (send_len > 0 && recv_len > 0 &&
                              send == recv && send_len == recv_len);
@@ -80,7 +105,6 @@ static bool spi1_poll_transfer(struct rt_spi_device *dev,
         *bsrr = 1U << (pin + 16);
     }
 
-    SPI_TypeDef *spi = SPI1;
     CLEAR_BIT(spi->CR1, SPI_CR1_SPE);
 
     spi->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI |
@@ -235,7 +259,7 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
     if (true) {
         if (send_len > 0 || recv_len > 0) {
             ok = spi1_poll_transfer(_dev, send, send_len, recv, recv_len,
-                                    cs_take, cs_release);
+                                    cs_take, cs_release, bus_to_spi(_desc.bus));
         } else {
             ok = true; /* no-op */
         }
@@ -395,7 +419,8 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
      * reads on all SPI buses on STM32F7/CUAV-V5. */
     if (true) {
         bool ok = (len > 0)
-            ? spi1_poll_transfer(_dev, send, len, recv, len, cs_take, cs_release)
+            ? spi1_poll_transfer(_dev, send, len, recv, len, cs_take, cs_release,
+                                bus_to_spi(_desc.bus))
             : true;
         rtt_dbg_spi_xfer_count += 2;
         if (!_cs_held) { _unlock_bus(); }
