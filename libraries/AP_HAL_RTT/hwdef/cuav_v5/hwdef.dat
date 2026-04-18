@@ -25,13 +25,17 @@ PA10 OTG1_ID   OTG1 AF10
 PA11 OTG1_DM   OTG1 AF10
 PA12 OTG1_DP   OTG1 AF10
 
-# ---- USART2 TELEM1 (PD5 TX, PD6 RX) ----
+# ---- USART2 TELEM1 (PD5 TX, PD6 RX) + flow control ----
 PD5  USART2_TX  USART2 AF7
 PD6  USART2_RX  USART2 AF7
+PD3  USART2_CTS  USART2 AF7
+PD4  USART2_RTS  USART2 AF7
 
-# ---- USART3 TELEM2 (PD8 TX, PD9 RX) ----
+# ---- USART3 TELEM2 (PD8 TX, PD9 RX) + flow control ----
 PD8  USART3_TX  USART3 AF7
 PD9  USART3_RX  USART3 AF7
+PD11 USART3_CTS  USART3 AF7
+PD12 USART3_RTS  USART3 AF7
 
 # ---- USART1 GPS1 (PB6 TX, PB7 RX) ----
 PB6  USART1_TX  USART1 AF7
@@ -41,16 +45,35 @@ PB7  USART1_RX  USART1 AF7
 PD1  UART4_TX  UART4 AF8
 PD0  UART4_RX  UART4 AF8
 
-# ---- USART6 TELEM3 (PG14 TX, PG9 RX) ----
+# ---- USART6 TELEM3 (PG14 TX, PG9 RX) + flow control ----
 PG14 USART6_TX  USART6 AF8
 PG9  USART6_RX  USART6 AF8
+PG15 USART6_CTS  USART6 AF8
+PG8  USART6_RTS  USART6 AF8
 
-# ---- UART7 debug serial (PE8 TX, PF6 RX) ----
+# ---- UART7 debug serial (PE8 TX, PF6 RX) + flow control ----
 PE8  UART7_TX  UART7 AF8
 PF6  UART7_RX  UART7 AF8
+PE10 UART7_CTS  UART7 AF8
+PF8  UART7_RTS  UART7 AF8
 
 # APJ board ID for bootloader/GCS (same as ChibiOS fmuv5 / CUAV V5)
 APJ_BOARD_ID TARGET_HW_PX4_FMU_V5
+
+# ---- SPI1 - internal sensors ----
+PG11 SPI1_SCK  SPI1 AF5
+PA6  SPI1_MISO SPI1 AF5
+PD7  SPI1_MOSI SPI1 AF5
+
+# ---- SPI2 - FRAM ----
+PI1  SPI2_SCK  SPI2 AF5
+PI2  SPI2_MISO SPI2 AF5
+PI3  SPI2_MOSI SPI2 AF5
+
+# ---- SPI4 - sensors ----
+PE2  SPI4_SCK  SPI4 AF5
+PE13 SPI4_MISO SPI4 AF5
+PE6  SPI4_MOSI SPI4 AF5
 
 # ---- CS pin definitions ----
 PF2  ICM20689_CS CS
@@ -65,10 +88,20 @@ PF10 MS5611_CS   CS
 PE3  VDD_3V3_SENSORS_EN  OUTPUT  HIGH
 PG5  VDD_5V_RC_EN        OUTPUT  HIGH
 PG7  VDD_3V3_SD_CARD_EN  OUTPUT  HIGH
+PF12 nVDD_5V_HIPOWER_EN  OUTPUT  HIGH
+PG4  nVDD_5V_PERIPH_EN   OUTPUT  HIGH
+PF13 VDD_5V_HIPOWER_nOC  INPUT  PULLUP
+PE15 VDD_5V_PERIPH_nOC   INPUT  PULLUP
 # Keep the IMU heater MOSFET disabled on RTT bring-up. We declare the
 # heater-enable GPIO as an output and drive it LOW from board init so PA7
 # never floats high before higher-level code runs.
 PA7  HEATER_EN           OUTPUT  LOW
+
+# ---- IMU DRDY pins ----
+PB4  DRDY1_ICM20689    INPUT
+PB14 DRDY2_BMI055_GYRO INPUT
+PB15 DRDY3_BMI055_ACC  INPUT
+PC5  DRDY4_ICM20602    INPUT
 
 # ---- ADC channels (match ChibiOS fmuv5) ----
 PA0  BATT_VOLTAGE_SENS   ADC1    SCALE(1)
@@ -96,6 +129,54 @@ PH8  I2C3_SDA I2C3 AF4
 PE0  UART8_RX  UART8 AF8
 PE1  UART8_TX  UART8 AF8
 IOMCU_UART UART8
+
+# ---- SD Card (SDMMC1, match ChibiOS fmuv5) ----
+PC8  SDMMC_D0  SDMMC1 AF12
+PC9  SDMMC_D1  SDMMC1 AF12
+PC10 SDMMC_D2  SDMMC1 AF12
+PC11 SDMMC_D3  SDMMC1 AF12
+PC12 SDMMC_CK  SDMMC1 AF12
+PD2  SDMMC_CMD SDMMC1 AF12
+define FATFS_HAL_DEVICE SDCD1
+
+# ---- CAN Bus (match ChibiOS fmuv5 pin assignment) ----
+PI9  CAN1_RX CAN1
+PH13 CAN1_TX CAN1
+PB12 CAN2_RX CAN2
+PB13 CAN2_TX CAN2
+PH2  GPIO_CAN1_SILENT OUTPUT LOW
+PH3  GPIO_CAN2_SILENT OUTPUT LOW
+
+# ---- PWM Output (match ChibiOS fmuv5: 8 FMU + 2 AUX NODMA) ----
+PE14 TIM1_CH4  TIM1 PWM(1) GPIO(50)
+# PA10 conflicts with OTG1_ID — skip PWM(2) on RTT (USB takes priority)
+# PA10 TIM1_CH3  TIM1 PWM(2) GPIO(51)
+PE11 TIM1_CH2  TIM1 PWM(3) GPIO(52)
+PE9  TIM1_CH1  TIM1 PWM(4) GPIO(53)
+PD13 TIM4_CH2  TIM4 PWM(5) GPIO(54)
+PD14 TIM4_CH3  TIM4 PWM(6) GPIO(55)
+PH6  TIM12_CH1 TIM12 PWM(7) GPIO(56) NODMA
+PH9  TIM12_CH2 TIM12 PWM(8) GPIO(57) NODMA
+
+# ---- Buzzer (PE5 TIM9_CH1, match ChibiOS fmuv5) ----
+PE5  TIM9_CH1  TIM9 GPIO(77) ALARM
+
+# ---- I2C Buses (match ChibiOS fmuv5) ----
+PB9  I2C1_SDA I2C1 AF4
+PB8  I2C1_SCL I2C1 AF4
+PF0  I2C2_SDA I2C2 AF4
+PF1  I2C2_SCL I2C2 AF4
+PF15 I2C4_SDA I2C4 AF4
+PF14 I2C4_SCL I2C4 AF4
+
+# ---- Safety Switch ----
+PD10 LED_SAFETY OUTPUT LOW
+define HAL_HAVE_SAFETY_SWITCH 1
+
+# ---- Status LEDs (match ChibiOS fmuv5: PB1 red, PC6 green, PC7 blue) ----
+PB1  LED_RED   OUTPUT LOW
+PC6  LED_GREEN OUTPUT LOW
+PC7  LED_BLUE  OUTPUT HIGH
 
 # ---- SPI device table ----
 # SPIDEV name      bus   devid    cs_pin        mode    lowspeed  highspeed
@@ -127,9 +208,10 @@ define HAL_COMPASS_AUTO_ROT_DEFAULT 2
 # MCU-specific defines for RT-Thread BSP and STM32 HAL
 define STM32F767xx 1
 define USE_HAL_DRIVER 1
-define HAL_STORAGE_SIZE 16384
+define HAL_STORAGE_SIZE 32768
 # CUAV V5 has FM25V02A FRAM on SPI2 — same as ChibiOS fmuv5
 define HAL_WITH_RAMTRON 1
+define HAL_DEFAULT_INS_FAST_SAMPLE 1
 # Flash fallback uses the last two 256KB sectors on STM32F767
 define STORAGE_FLASH_PAGE 10
 # 双精度 EKF 显著增大 NavEKF3_core；在 RTT 堆上易触发 "EKF3 not enough memory"，与 F4 板一致用单精度
@@ -166,4 +248,12 @@ define HAL_BARO_ALLOW_INIT_NO_BARO 1
 # ---- IOMCU firmware (embedded in ROMFS, match ChibiOS fmuv5) ----
 # Uses iofirmware_lowpolh.bin (same as ChibiOS fmuv5)
 ROMFS io_firmware.bin Tools/IO_Firmware/iofirmware_lowpolh.bin
+
+# ---- Additional HAL defines ----
+define HAL_WITH_IO_MCU_DSHOT 1
+# TODO: HAL_OS_FATFS_IO needs AP_Filesystem_FATFS.cpp adapted for RTT (currently hardcodes ChibiOS headers)
+# define HAL_OS_FATFS_IO 1
+define AP_NOTIFY_GPIO_LED_2_ENABLED 1
+define HAL_GPIO_A_LED_PIN 90
+define HAL_GPIO_B_LED_PIN 92
 

@@ -31,58 +31,33 @@ RTT hwdef 从头手写，系统性缺失大量硬件引脚配置。不是代码 
 
 ## 三、修复方案
 
-### 阶段 1：SPI + 电源 + 存储（CRITICAL，基础）
+### 阶段 1：SPI + 电源 + 存储（CRITICAL，基础） ✅ 已完成
 
 **目标：让 FRAM、IMU、气压计、传感器供电活起来**
 
-#### 1.1 补 SPI 总线引脚
-参考 ChibiOS fmuv5 hwdef.dat，在 RTT hwdef.dat 中添加：
+#### 1.1 补 SPI 总线引脚 ✅
+**注意：原方案引脚有冲突，已改用 ChibiOS fmuv5 正确引脚**
+- 原方案 PG9=SPI1_MISO 与 USART6_RX 冲突；PA10=DRDY_ACC 与 OTG1_ID 冲突
+- 使用 ChibiOS 参考引脚：SPI1(PG11/PA6/PD7), SPI2(PI1/PI2/PI3), SPI4(PE2/PE13/PE6)
+- AF 编号统一使用 AF5（STM32F7 标准映射，原方案 SPI2=AF3 错误）
+- rtt_hwdef.py 已正确解析，生成 SPI MSP init
 
-```
-# SPI1 - IMU (PA5 SCK, PB5 MOSI, PG9 MISO)
-PA5  SPI1_SCK  SPI1  AF5
-PB5  SPI1_MOSI SPI1  AF5
-PG9  SPI1_MISO SPI1  AF5
+#### 1.2 补 5V 电源使能引脚 ✅
+使用 ChibiOS fmuv5 正确引脚名：nVDD_5V_HIPOWER_EN(PF12), nVDD_5V_PERIPH_EN(PG4)
 
-# SPI2 - FRAM (PI1 SCK, PI3 MOSI, PI2 MISO)
-PI1  SPI2_SCK  SPI2  AF3
-PI3  SPI2_MOSI SPI2  AF3
-PI2  SPI2_MISO SPI2  AF3
+#### 1.3 补电源监测 GPIO ✅
+使用 ChibiOS 正确引脚：PF13(VDD_5V_HIPOWER_nOC), PE15(VDD_5V_PERIPH_nOC)
+（原方案 PG10 与 BMI055_A_CS 冲突）
+rtt_hwdef.py 已新增 INPUT 引脚解析支持（gpio_in 列表 + _write_gpio_input_defines）
 
-# SPI4 - MS5611 Baro (PE12 SCK, PE14 MOSI, PE13 MISO)
-PE12 SPI4_SCK  SPI4  AF5
-PE14 SPI4_MOSI SPI4  AF5
-PE13 SPI4_MISO SPI4  AF5
-```
+#### 1.4 补 DRDY 引脚 ✅
+使用 ChibiOS fmuv5 正确引脚：PB4(ICM20689), PB14(BMI055_GYRO), PB15(BMI055_ACC), PC5(ICM20602)
+（原方案引脚全部有冲突）
 
-注意：RTT hwdef 使用 AF 编号语法，需确认 rtt_hwdef.py 正确解析。
+#### 1.5 补缺失 define ✅
+HAL_DEFAULT_INS_FAST_SAMPLE=1, HAL_STORAGE_SIZE 从 16384 改为 32768
 
-#### 1.2 补 5V 电源使能引脚
-```
-PG4  VDD_5V_PERIPH_EN   OUTPUT  HIGH
-PF12 VDD_5V_HIPOWER_EN  OUTPUT  HIGH
-```
-
-#### 1.3 补电源监测 GPIO
-```
-PG10 VDD_5V_HIPOWER_nOC  INPUT  PULLUP
-PE15 VDD_5V_PERIPH_nOC   INPUT  PULLUP
-```
-
-#### 1.4 补 DRDY 引脚
-```
-PG3  BMI055_G_DRDY_GYR   INPUT
-PA10 BMI055_DRDY_ACC      INPUT
-PF2  ICM20689_DRDY        INPUT
-```
-
-#### 1.5 补缺失 define
-```
-define HAL_DEFAULT_INS_FAST_SAMPLE 1
-define HAL_STORAGE_SIZE 32768
-```
-
-**验证：** 编译 → 烧录 → MAVLink 检查 STORAGE_INFO + RAW_IMU + SCALED_PRESSURE
+**验证：** ✅ 编译通过（1279852B text, 190KB RAM）
 
 ---
 
@@ -90,7 +65,21 @@ define HAL_STORAGE_SIZE 32768
 
 **目标：SD 卡、UART 流控、安全开关、LED、PWM、CAN、蜂鸣器、I2C**
 
-#### 2.1 SD 卡
+**验证：** ✅ 编译通过（1280028B text, 195KB RAM）— 2026-04-18 完成
+
+**实际添加（与原计划有差异，以 ChibiOS fmuv5 为准）：**
+- SD Card: SDMMC1 (PC8-PC12, PD2)，非原计划的 SDMMC2
+- UART flow control: USART2/3/6 CTS/RTS + UART7 CTS/RTS（USART1 无流控，PB13 与 CAN2_TX 冲突）
+- CAN: CAN1 (PI9/PH13), CAN2 (PB12/PB13) + PH2/PH3 silent pins
+- PWM: 7 ch (TIM1×3 + TIM4×2 + TIM12×2 NODMA)，PA10 跳过（OTG 冲突）
+- Buzzer: PE5 TIM9_CH1
+- I2C: I2C1/2/4 硬件总线
+- Safety: PD10 LED_SAFETY + HAL_HAVE_SAFETY_SWITCH
+- LEDs: PB1 red, PC6 green, PC7 blue（原计划 PE3/4/5 与电源/其他功能冲突）
+- HAL_WITH_IO_MCU_DSHOT 已启用
+- HAL_OS_FATFS_IO 延后（AP_Filesystem_FATFS.cpp 硬编码 ChibiOS 头文件）
+
+#### 2.1 SD 卡（原计划）
 ```
 PD6  SDMMC2_CK   SDMMC2  AF10
 PD7  SDMMC2_CMD  SDMMC2  AF10

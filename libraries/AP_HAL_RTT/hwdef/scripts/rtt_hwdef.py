@@ -117,6 +117,7 @@ class RTTHWDef(HWDef):
         self.i2c_pins = {}        # bus → {'SCL': ..., 'SDA': ...}
         self.pwm_pins = []        # [{'pin': 'PE9', 'timer': 'TIM1', 'ch': 'CH1', 'af': 1, 'pwm_num': 1, 'port': 'E', 'pin_num': 9}]
         self.gpio_out = []        # [{'pin': 'PE3', 'label': 'VDD_3V3_SENSORS_EN', 'init': 'HIGH', 'port': 'E', 'pin_num': 3}]
+        self.gpio_in = []         # [{'pin': 'PF13', 'label': 'VDD_5V_HIPOWER_nOC', 'pull': 'PULLUP', 'port': 'F', 'pin_num': 13}]
         self.adc_pins = []        # [{'pin': 'PA0', 'label': 'BATT_VOLTAGE_SENS', 'adc': 'ADC1', 'scale': 1, 'port': 'A', 'pin_num': 0}]
         self.sd_pins = {}         # periph → list of pin defs
         self.usb_pins = {}        # periph → list of pin defs
@@ -153,6 +154,17 @@ class RTTHWDef(HWDef):
             if p:
                 self.gpio_out.append({
                     'pin': a[0], 'label': a[1], 'init': a[3],
+                    'port': p[0], 'pin_num': p[1], 'rtt_pin': p[2]
+                })
+            return
+
+        # --- GPIO input: PF13 VDD_5V_HIPOWER_nOC INPUT PULLUP ---
+        if len(a) >= 3 and a[0].startswith('P') and a[2] == 'INPUT':
+            p = _pin_to_rtt(a[0])
+            if p:
+                pull = a[3] if len(a) > 3 else 'NONE'
+                self.gpio_in.append({
+                    'pin': a[0], 'label': a[1], 'pull': pull,
                     'port': p[0], 'pin_num': p[1], 'rtt_pin': p[2]
                 })
             return
@@ -441,6 +453,9 @@ class RTTHWDef(HWDef):
         # GPIO output defines
         self._write_gpio_defines(f)
 
+        # GPIO input defines
+        self._write_gpio_input_defines(f)
+
         # ADC defines
         self._write_adc_defines(f)
 
@@ -548,6 +563,21 @@ class RTTHWDef(HWDef):
             pin_val = 16 * port_idx + g['pin_num']
             f.write('#define HAL_GPIO_%s_VALUE %d\n' % (label, pin_val))
             f.write('#define HAL_GPIO_%s_INIT  %d\n' % (label, 1 if g['init'] == 'HIGH' else 0))
+        f.write('\n')
+
+    def _write_gpio_input_defines(self, f):
+        """Generate GPIO input pin defines."""
+        if not self.gpio_in:
+            return
+        f.write('/* GPIO input pins — generated from INPUT definitions */\n')
+        for g in self.gpio_in:
+            label = g['label']
+            f.write('#define HAL_GPIO_%s_PIN   GET_PIN(%s, %d)\n' % (label, g['port'], g['pin_num']))
+            port_idx = ord(g['port']) - ord('A')
+            pin_val = 16 * port_idx + g['pin_num']
+            f.write('#define HAL_GPIO_%s_VALUE %d\n' % (label, pin_val))
+            pull = g['pull'].upper()
+            f.write('#define HAL_GPIO_%s_PULL  %s\n' % (label, pull))
         f.write('\n')
 
     def _write_adc_defines(self, f):

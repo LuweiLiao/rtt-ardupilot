@@ -1,0 +1,41 @@
+[1/6] 连接 /dev/serial/by-id/usb-ArduPilot_CUAVv5_RTT_RTTUSB0001-if00...
+[2/6] 等待心跳 (最长60秒)...
+[2/6] 心跳 OK: sys=1 comp=1 type=2 autopilot=3 status=3
+[3/6] 开始120秒稳定性测试...
+
+=== 120秒稳定性测试结果 ===
+测试时长: 120.6s
+总消息数: 3762 (31.2 msg/s)
+消息类型: 24
+心跳数: 132 (1.09 Hz)
+心跳间隔: min=0.00s max=14.23s avg=0.66s
+超时次数: 78
+
+消息类型统计:
+  AHRS2: 482
+  ATTITUDE: 482
+  VFR_HUD: 208
+  RAW_IMU: 208
+  SCALED_IMU2: 208
+  SCALED_IMU3: 208
+  SCALED_PRESSURE: 208
+  SYS_STATUS: 174
+  HEARTBEAT: 132
+  AHRS: 107
+  GLOBAL_POSITION_INT: 107
+  POWER_STATUS: 107
+  MEMINFO: 107
+  NAV_CONTROLLER_OUTPUT: 107
+  MISSION_CURRENT: 107
+  SERVO_OUTPUT_RAW: 107
+  RC_CHANNELS: 107
+  GPS_RAW_INT: 107
+  SYSTEM_TIME: 107
+  TERRAIN_REPORT: 107
+  EKF_STATUS_REPORT: 107
+  VIBRATION: 107
+  STATUSTEXT: 51
+  TIMESYNC: 10
+
+=== 数据质量检查 ===
+FAIL: 重新连接后无心跳
