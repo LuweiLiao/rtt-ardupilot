@@ -28,9 +28,26 @@ void Storage::_storage_open(void)
 #if HAL_WITH_RAMTRON
     rtt_dbg_setup_stage = 501;  // trying FRAM
     if (_fram.init() && _fram.read(0, _buffer, RTT_STORAGE_SIZE)) {
-        _initialisedType = StorageBackend::FRAM;
-        ::printf("RTT Storage: FRAM backend\n");
-        return;
+        // Verify FRAM data integrity by reading back first line and comparing
+        uint8_t verify_buf[RTT_STORAGE_LINE_SIZE];
+        bool verified = false;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            if (_fram.read(0, verify_buf, RTT_STORAGE_LINE_SIZE) &&
+                memcmp(verify_buf, _buffer, RTT_STORAGE_LINE_SIZE) == 0) {
+                verified = true;
+                break;
+            }
+            ::printf("RTT Storage: FRAM verify attempt %d failed, retrying...\n", attempt);
+            hal.scheduler->delay(1);
+        }
+        if (verified) {
+            _initialisedType = StorageBackend::FRAM;
+            ::printf("RTT Storage: FRAM backend\n");
+            return;
+        } else {
+            ::printf("RTT Storage: FRAM data inconsistent, falling back\n");
+            // FRAM data is unreliable, fall through to next backend
+        }
     }
 #endif
 
@@ -125,6 +142,12 @@ void Storage::_timer_tick(void)
 #if HAL_WITH_RAMTRON
     if (_initialisedType == StorageBackend::FRAM) {
         write_ok = _fram.write(RTT_STORAGE_LINE_SIZE * i, _tmpline, RTT_STORAGE_LINE_SIZE);
+        if (write_ok) {
+            // Read back to verify
+            uint8_t verify_buf[RTT_STORAGE_LINE_SIZE];
+            write_ok = _fram.read(RTT_STORAGE_LINE_SIZE * i, verify_buf, RTT_STORAGE_LINE_SIZE) &&
+                       memcmp(verify_buf, _tmpline, RTT_STORAGE_LINE_SIZE) == 0;
+        }
     }
 #endif
 
