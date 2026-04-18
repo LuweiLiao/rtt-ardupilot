@@ -339,6 +339,7 @@ private:
 #endif
 
     uint32_t protocol_fail_count;
+    uint32_t init_fail_count;
     uint32_t protocol_count;
     uint32_t total_errors;
     uint32_t num_delayed;

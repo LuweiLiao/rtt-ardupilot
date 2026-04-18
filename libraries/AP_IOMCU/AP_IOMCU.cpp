@@ -113,8 +113,14 @@ void AP_IOMCU::init(void)
  */
 void AP_IOMCU::event_failed(uint32_t event_mask)
 {
-    // wait 0.5ms then retry
-    hal.scheduler->delay_microseconds(500);
+    init_fail_count++;
+    if (init_fail_count > 50) {
+        // IOMCU is not responding — stop retrying to avoid busy-spin starvation
+        DEV_PRINTF("IOMCU: not responding after %u attempts, giving up\n", init_fail_count);
+        return;
+    }
+    // wait then retry
+    hal.scheduler->delay(1);
     rt_event_send(&iomcu_event, event_mask);
 }
 
