@@ -185,8 +185,8 @@ define STORAGE_FLASH_PAGE 10
 # 双精度 EKF 显著增大 NavEKF3_core；在 RTT 堆上易触发 "EKF3 not enough memory"，与 F4 板一致用单精度
 define HAL_WITH_EKF_DOUBLE 0
 # SD 卡文件系统 logging（MAVLink logging 可用但不默认启用，避免无客户端时 PreArm 失败）
-define HAL_LOGGING_FILESYSTEM_ENABLED 1
-define HAL_LOGGING_MAVLINK_ENABLED 0
+define HAL_LOGGING_FILESYSTEM_ENABLED 0
+define HAL_LOGGING_MAVLINK_ENABLED 1
 define AP_SCRIPTING_ENABLED 0
 define SCRIPTING_DIRECTORY "/APM/scripts_rtt"
 # RTT DFS provides POSIX FS interface (open/close/read/write/stat/mkdir)
