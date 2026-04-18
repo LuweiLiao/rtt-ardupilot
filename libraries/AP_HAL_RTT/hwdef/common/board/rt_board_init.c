@@ -316,6 +316,10 @@ static int rtt_run_cpp_ctors(void)
 }
 INIT_COMPONENT_EXPORT(rtt_run_cpp_ctors);
 
+/* Always define for AP_Logger_File.cpp */
+volatile int rtt_sd_mount_stage = 0;
+volatile int rtt_sd_mount_result = -99;
+
 #ifdef BSP_USING_SDIO
 #include <dfs_fs.h>
 #include <sys/stat.h>
@@ -328,9 +332,6 @@ INIT_COMPONENT_EXPORT(rtt_run_cpp_ctors);
 #define SD_POWER_PIN    GET_PIN(G, 7)   /* fallback default */
 #endif
 #define SD_MOUNT_POINT  "/"
-
-volatile int rtt_sd_mount_stage = 0;
-volatile int rtt_sd_mount_result = -99;
 
 static void _sd_try_mount_once(void)
 {
