@@ -418,6 +418,21 @@ size_t UARTDriver::_write(const uint8_t *buffer, size_t size)
         // the next 1kHz timer tick in the uart thread.
         return rt_device_write(_dev, 0, buffer, size);
     }
+    /*
+     * If the writebuf is full, drain it to the device to make room.
+     * For USB, loop until we get enough space — PARAM_VALUE responses
+     * must not be silently dropped (causes PARAM_REQUEST_READ failure).
+     */
+    if (_writebuf.space() < size) {
+        if (_is_usb) {
+            /* Drain aggressively until we have room or the buffer empties */
+            for (int i = 0; i < 10 && _writebuf.space() < size; i++) {
+                _drain_writebuf_to_dev();
+            }
+        } else {
+            _drain_writebuf_to_dev();
+        }
+    }
     return _writebuf.write(buffer, size);
 }
 

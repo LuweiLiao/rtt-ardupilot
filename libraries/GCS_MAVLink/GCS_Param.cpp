@@ -436,13 +436,7 @@ uint8_t GCS_MAVLINK::send_parameter_async_replies()
           we reserve some space for sending parameters if the client ever
           fails to get a parameter due to lack of space
         */
-        uint32_t saved_reserve_param_space_start_ms = reserve_param_space_start_ms;
-        reserve_param_space_start_ms = 0; // bypass packet_overhead_chan reservation checking
-        if (!HAVE_PAYLOAD_SPACE(reply.chan, PARAM_VALUE)) {
-            reserve_param_space_start_ms = AP_HAL::millis();
-            return async_replies_sent_count;
-        }
-        reserve_param_space_start_ms = saved_reserve_param_space_start_ms;
+        // RTT HAL: skip HAVE_PAYLOAD_SPACE check — queued_param_send handles throttling
 
         mavlink_msg_param_value_send(
             reply.chan,
