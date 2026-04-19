@@ -43,7 +43,7 @@
 #define CONFIG_USB_DWC2_TX2_FIFO_SIZE (64 / 4)
 #define CONFIG_USB_DWC2_TX3_FIFO_SIZE (64 / 4)
 
-#define CONFIG_USBDEV_SERIAL_TX_BUFSIZE 32768
+#define CONFIG_USBDEV_SERIAL_TX_BUFSIZE 4096
 #define CONFIG_USBDEV_SERIAL_RX_BUFSIZE 4096
 
 /* USB Host (required by usbh_core.h included from glue) */
