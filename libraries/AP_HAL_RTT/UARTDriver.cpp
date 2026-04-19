@@ -445,9 +445,6 @@ uint32_t UARTDriver::txspace()
     if (!_initialized) {
         return 0;
     }
-    if (_writebuf.available() > 0) {
-        _drain_writebuf_to_dev();
-    }
     return _writebuf.space();
 }
 

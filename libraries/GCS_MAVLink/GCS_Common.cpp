@@ -6387,6 +6387,7 @@ bool GCS_MAVLINK::try_send_message(const enum ap_message id)
 #endif
 
     case MSG_NEXT_PARAM:
+        CHECK_PAYLOAD_SIZE(PARAM_VALUE);
         queued_param_send();
         break;
 
