@@ -420,13 +420,13 @@ size_t UARTDriver::_write(const uint8_t *buffer, size_t size)
     }
     /*
      * If the writebuf is full, drain it to the device to make room.
-     * For USB, loop until we get enough space — PARAM_VALUE responses
-     * must not be silently dropped (causes PARAM_REQUEST_READ failure).
+     * For USB, flush aggressively — writebuf may be full of stream data
+     * that needs to be pushed to the CDC ringbuffer before we can
+     * enqueue the caller's data (e.g. a PARAM_VALUE response).
      */
     if (_writebuf.space() < size) {
         if (_is_usb) {
-            /* Drain aggressively until we have room or the buffer empties */
-            for (int i = 0; i < 10 && _writebuf.space() < size; i++) {
+            for (int i = 0; i < 100 && _writebuf.space() < size; i++) {
                 _drain_writebuf_to_dev();
             }
         } else {

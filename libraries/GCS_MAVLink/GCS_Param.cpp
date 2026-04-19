@@ -238,6 +238,29 @@ void GCS_MAVLINK::handle_param_request_read(const mavlink_message_t &msg)
     mavlink_param_request_read_t packet;
     mavlink_msg_param_request_read_decode(&msg, &packet);
 
+    // Direct send: bypass the broken async IO pipeline on AP_HAL_RTT
+    {
+        AP_Param *vp;
+        AP_Param::ParamToken token {};
+        enum ap_var_type p_type;
+        char param_name[AP_MAX_NAME_SIZE+1] {};
+
+        if (packet.param_index != -1) {
+            vp = AP_Param::find_by_index(packet.param_index, &p_type, &token);
+            if (vp != nullptr) {
+                vp->copy_name_token(token, param_name, AP_MAX_NAME_SIZE, true);
+            }
+        } else {
+            strncpy(param_name, packet.param_id, AP_MAX_NAME_SIZE);
+            vp = AP_Param::find(param_name, &p_type);
+        }
+
+        if (vp != nullptr) {
+            param_name[AP_MAX_NAME_SIZE] = 0;
+            send_parameter_value(param_name, p_type, vp->cast_to_float(p_type));
+        }
+    }
+
     /*
       we reserve some space for sending parameters if the client ever
       fails to get a parameter due to lack of space
