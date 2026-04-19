@@ -355,9 +355,7 @@ void GCS_MAVLINK::handle_param_set(const mavlink_message_t &msg)
 
 void GCS_MAVLINK::send_parameter_value(const char *param_name, ap_var_type param_type, float param_value)
 {
-    if (!HAVE_PAYLOAD_SPACE(chan, PARAM_VALUE)) {
-        return;
-    }
+    // RTT HAL: skip HAVE_PAYLOAD_SPACE — drain-before-write handles flow control
     mavlink_msg_param_value_send(
         chan,
         param_name,
