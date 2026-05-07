@@ -31,6 +31,16 @@ extern volatile uint32_t dbg_serial_write_calls;
 
 extern const AP_HAL::HAL &hal;
 
+// Global pointer to the USB console UARTDriver instance
+static RTT::UARTDriver *_usb_console_driver = nullptr;
+
+extern "C" void uart_usb_rx_bridge(const uint8_t *data, uint32_t len)
+{
+    if (_usb_console_driver != nullptr) {
+        RTT::UARTDriver::usb_rx_bridge(data, len);
+    }
+}
+
 using namespace RTT;
 
 #if defined(SOC_SERIES_STM32F7)
@@ -249,6 +259,10 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
 
     _is_usb = is_usb;
 
+    if (_is_usb) {
+        _usb_console_driver = this;
+    }
+
     if (is_usb) {
         _flow_control = FLOW_CONTROL_ENABLE;
     }
@@ -256,8 +270,10 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
     _initialized = true;
 
     /* If this port is the RTT console device, disable console output so
-     * rt_kprintf text doesn't interleave with MAVLink binary frames. */
-    if (!is_usb) {
+     * rt_kprintf text doesn't interleave with MAVLink binary frames.
+     * USB CDC (port 0) is the RT-Thread console on CUAV V5, so we must
+     * check regardless of USB status. [Cybernetics Ch.4 closed-loop] */
+    {
         rt_device_t console_dev = rt_console_get_device();
         if (console_dev && dev == console_dev) {
             rt_console_output_set_enabled(RT_FALSE);
@@ -659,4 +675,11 @@ uint64_t UARTDriver::receive_time_constraint_us(uint16_t nbytes)
         last_receive_us += ((uint64_t)nbytes * 1000000ULL * 10) / _baudrate;
     }
     return last_receive_us;
+}
+
+void RTT::UARTDriver::usb_rx_bridge(const uint8_t *data, size_t len)
+{
+    if (::_usb_console_driver != nullptr) {
+        ::_usb_console_driver->_readbuf.write(data, len);
+    }
 }
