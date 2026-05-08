@@ -1,10 +1,9 @@
 /*
- * AP_HAL_RTT — DeviceBus: per-bus callback thread (ChibiOS-aligned)
+ * AP_HAL_RTT — DeviceBus: per-bus callback threads with static allocation
  *
- * One thread per physical bus (SPI1, SPI2, SPI4, I2C…).  Multiple
- * periodic callbacks from different Device instances on the same bus
- * share a single thread and are dispatched by micros64() timestamps,
- * matching ChibiOS Device.cpp semantics.
+ * One thread per physical bus (SPI1, SPI2, SPI4, I2C…).  Each thread uses
+ * a static stack buffer (rt_thread_init, no heap) to avoid heap exhaustion
+ * from rt_thread_create.
  */
 
 #pragma once
@@ -39,6 +38,8 @@ public:
         callback_info *next;
     };
 
+    static constexpr uint8_t MAX_BUSES = 8;
+
 private:
     uint8_t _thread_priority;
     bool _thread_started = false;
@@ -46,8 +47,6 @@ private:
     rt_thread_t _thread = nullptr;
 
     static void _bus_thread_entry(void *arg);
-
-    static constexpr uint8_t MAX_BUSES = 8;
     static DeviceBus *_buses[MAX_BUSES];
 };
 

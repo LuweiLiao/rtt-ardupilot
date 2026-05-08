@@ -1,10 +1,14 @@
 /*
- * AP_HAL_RTT — DeviceBus: per-bus callback thread (ChibiOS-aligned)
+ * AP_HAL_RTT — DeviceBus: per-bus callback threads with static allocation
  *
- * Single thread per physical bus iterates a linked list of callbacks,
- * dispatching each when micros64() >= next_usec.  Sleep is computed as
- * the time until the earliest pending callback, clamped to [100 µs, 50 ms].
- * This mirrors ChibiOS Device.cpp::bus_thread().
+ * Per-bus threads (one per physical SPI/I2C bus) dispatch callbacks by
+ * micros64() timestamps.  Each thread uses a static stack buffer and
+ * rt_thread_init (no heap) to avoid rt_thread_create heap exhaustion.
+ *
+ * Bus-level exclusive access: each DeviceBus has its own Semaphore,
+ * taken before each callback dispatch.
+ *
+ * Max 8 buses supported (MAX_BUSES).  All static buffers allocated up front.
  */
 
 #include "DeviceBus.h"
@@ -19,22 +23,13 @@ namespace RTT
 
 DeviceBus *DeviceBus::_buses[MAX_BUSES] = {};
 
-DeviceBus::DeviceBus(uint8_t thread_priority)
-    : _thread_priority(thread_priority)
-{
-    // rt_kprintf("DeviceBus constructed at %p, priority=%u\n", this, thread_priority);
-}
-
-DeviceBus *DeviceBus::get_bus(uint8_t bus_num, uint8_t thread_priority)
-{
-    if (bus_num >= MAX_BUSES) {
-        return nullptr;
-    }
-    if (_buses[bus_num] == nullptr) {
-        _buses[bus_num] = new DeviceBus(thread_priority);
-    }
-    return _buses[bus_num];
-}
+/* ------------------------------------------------------------------
+ *  Per-bus thread: static thread objects + stacks (no heap)
+ *  Threads are started lazily on first register_periodic_callback.
+ * ------------------------------------------------------------------ */
+static struct rt_thread _bus_thread_objs[DeviceBus::MAX_BUSES];
+static char _bus_thread_stacks[DeviceBus::MAX_BUSES][6144];
+static bool _bus_thread_inited[DeviceBus::MAX_BUSES] = {false};
 
 void DeviceBus::_bus_thread_entry(void *arg)
 {
@@ -77,23 +72,33 @@ void DeviceBus::_bus_thread_entry(void *arg)
             delay_us = 100;
         }
 
-        /*
-         * Yield the CPU via rt_thread_delay so lower-priority threads
-         * (main, UART, IO, storage) can run.  The DWT busy-loop from
-         * hal.scheduler->delay_microseconds() never yields, so a
-         * priority-4 bus thread spinning for ~950 µs between IMU
-         * callbacks starves everything at priority ≥5.
-         *
-         * At RT_TICK_PER_SECOND=10000, one tick = 100 µs.
-         * Minimum delay is 1 tick (100 µs), which is fine for
-         * 1 kHz IMU polling periods (1000 µs).
-         */
+        /* Yield CPU */
         {
             rt_tick_t ticks = (delay_us * RT_TICK_PER_SECOND) / 1000000U;
             if (ticks < 1) ticks = 1;
             rt_thread_delay(ticks);
         }
     }
+}
+
+/* ------------------------------------------------------------------
+ *  Find or create a DeviceBus instance
+ * ------------------------------------------------------------------ */
+
+DeviceBus::DeviceBus(uint8_t thread_priority)
+    : _thread_priority(thread_priority)
+{
+}
+
+DeviceBus *DeviceBus::get_bus(uint8_t bus_num, uint8_t thread_priority)
+{
+    if (bus_num >= MAX_BUSES) {
+        return nullptr;
+    }
+    if (_buses[bus_num] == nullptr) {
+        _buses[bus_num] = new DeviceBus(thread_priority);
+    }
+    return _buses[bus_num];
 }
 
 AP_HAL::Device::PeriodicHandle DeviceBus::register_periodic_callback(
@@ -127,20 +132,29 @@ AP_HAL::Device::PeriodicHandle DeviceBus::register_periodic_callback(
             prio = RT_THREAD_PRIORITY_MAX / 6;
         }
 
-        // rt_kprintf("DeviceBus: creating thread '%s' prio=%u\n", name, prio);
-        _thread = rt_thread_create(name, _bus_thread_entry,
-                                   this, 4096, prio, 20);
-        if (_thread == nullptr) {
-            rt_kprintf("DeviceBus: FAILED to create thread!\n");
+        /* Find a free slot in the static thread pool */
+        int slot = -1;
+        for (int i = 0; i < MAX_BUSES; i++) {
+            if (!_bus_thread_inited[i]) {
+                slot = i;
+                break;
+            }
+        }
+        if (slot < 0) {
+            // No free slot — all 8 static threads used
             return nullptr;
         }
-        rt_thread_startup(_thread);
-        // rt_kprintf("DeviceBus: thread '%s' started\n", name);
+
+        rt_thread_init(&_bus_thread_objs[slot], name,
+                       _bus_thread_entry, this,
+                       _bus_thread_stacks[slot], sizeof(_bus_thread_stacks[slot]),
+                       prio, 20);
+        rt_thread_startup(&_bus_thread_objs[slot]);
+        _bus_thread_inited[slot] = true;
     }
 
     auto *ci = new callback_info;
     if (ci == nullptr) {
-        rt_kprintf("DeviceBus: FAILED to allocate callback_info!\n");
         return nullptr;
     }
     ci->cb = cb;
@@ -148,8 +162,6 @@ AP_HAL::Device::PeriodicHandle DeviceBus::register_periodic_callback(
     ci->next_usec = AP_HAL::micros64() + period_usec;
     ci->next = _callbacks;
     _callbacks = ci;
-
-    // rt_kprintf("DeviceBus: callback registered, callbacks list=%p\n", _callbacks);
 
     return (AP_HAL::Device::PeriodicHandle)ci;
 }
