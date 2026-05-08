@@ -234,7 +234,7 @@ SPIDevice::SPIDevice(RTT_SPIDesc &desc)
      * bypassing RT-Thread's SPI framework which has DMA and GPIO config issues.
      * See _spi1_gpio_init() and spi1_poll_transfer() for the polling path. */
 #ifndef FORCE_RTT_SPI_FRAMEWORK
-    if (_desc.bus == 1) {
+    if (_desc.bus == 1 || _desc.bus == 4) {
         _dev = nullptr;
         return;
     }

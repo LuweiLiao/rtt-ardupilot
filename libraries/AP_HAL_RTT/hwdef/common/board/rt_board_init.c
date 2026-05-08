@@ -286,7 +286,26 @@ void rt_hw_board_init(void)
     RCC->APB2ENR |= RCC_APB2ENR_SPI1EN;
 #endif
 #ifdef BSP_USING_SPI4
+    /* SPI4 GPIO — CUAV V5: PE12(SCK), PE13(MISO), PE14(MOSI), PF10(CS).
+     * Both the CubeMX HAL_SPI_MspInit and AP_HAL_RTT drv_spi_ll init
+     * go through this register-level IO, so we force-correct it here
+     * regardless of which init path is taken. */
     RCC->APB2ENR |= RCC_APB2ENR_SPI4EN;
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOEEN;
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOFEN;
+    (void)RCC->AHB1ENR;
+    /* PE12=SCK(AF5): MODER=AF, AFR[1]=AF5 */
+    GPIOE->MODER = (GPIOE->MODER & ~(3U << 24)) | (2U << 24);
+    GPIOE->AFR[1] = (GPIOE->AFR[1] & ~(0xFU << 16)) | (5U << 16);
+    /* PE13=MISO(AF5) */
+    GPIOE->MODER = (GPIOE->MODER & ~(3U << 26)) | (2U << 26);
+    GPIOE->AFR[1] = (GPIOE->AFR[1] & ~(0xFU << 20)) | (5U << 20);
+    /* PE14=MOSI(AF5) */
+    GPIOE->MODER = (GPIOE->MODER & ~(3U << 28)) | (2U << 28);
+    GPIOE->AFR[1] = (GPIOE->AFR[1] & ~(0xFU << 24)) | (5U << 24);
+    /* MS5611 CS (PF10): OUTPUT HIGH */
+    GPIOF->MODER = (GPIOF->MODER & ~(3U << 20)) | (1U << 20);
+    GPIOF->BSRR = (1U << 10);
 #endif
 
     rt_kprintf("[BOARD-INIT] Board initialization complete\n");
