@@ -21,20 +21,21 @@ static void _spi1_gpio_init(void)
     _spi1_gpio_init_done = true;
 
     /* Enable GPIO clocks */
-    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIODEN |
-                    RCC_AHB1ENR_GPIOFEN | RCC_AHB1ENR_GPIOGEN;
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOBEN |
+                    RCC_AHB1ENR_GPIODEN | RCC_AHB1ENR_GPIOFEN |
+                    RCC_AHB1ENR_GPIOGEN;
     (void)RCC->AHB1ENR;
 
-    /* PG11=SCK(AF5), PA6=MISO(AF5), PD7=MOSI(AF5) */
+    /* PG11=SCK(AF5), PA6=MISO(AF5), PD7=MOSI(AF5) — fmuv5/CUAV V5 pinout */
     /* PG11: MODE=AF(10), AF=AF5(0101) */
     GPIOG->MODER = (GPIOG->MODER & ~(3U << 22)) | (2U << 22);
     GPIOG->AFR[1] = (GPIOG->AFR[1] & ~(0xFU << 12)) | (5U << 12);
 
-    /* PA6: MODE=AF(10), AF=AF5(0101) */
+    /* PA6: MODE=AF(10), AF=AF5(0101) — was PG9 (WRONG) */
     GPIOA->MODER = (GPIOA->MODER & ~(3U << 12)) | (2U << 12);
     GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << 24)) | (5U << 24);
 
-    /* PD7: MODE=AF(10), AF=AF5(0101) */
+    /* PD7: MODE=AF(10), AF=AF5(0101) — was PB5 (WRONG) */
     GPIOD->MODER = (GPIOD->MODER & ~(3U << 14)) | (2U << 14);
     GPIOD->AFR[0] = (GPIOD->AFR[0] & ~(0xFU << 28)) | (5U << 28);
 
@@ -229,6 +230,15 @@ SPIDevice::SPIDevice(RTT_SPIDesc &desc)
 {
     set_device_bus(desc.bus);
     _cs_pin = _lookup_cs_pin(desc.rtt_devname);
+    /* For STM32F7 SPI1 devices (IMUs), use register-level polling directly,
+     * bypassing RT-Thread's SPI framework which has DMA and GPIO config issues.
+     * See _spi1_gpio_init() and spi1_poll_transfer() for the polling path. */
+#ifndef FORCE_RTT_SPI_FRAMEWORK
+    if (_desc.bus == 1) {
+        _dev = nullptr;
+        return;
+    }
+#endif
     _dev = (struct rt_spi_device *)rt_device_find(desc.rtt_devname);
     if (_dev != nullptr) {
         set_speed(AP_HAL::Device::SPEED_LOW);

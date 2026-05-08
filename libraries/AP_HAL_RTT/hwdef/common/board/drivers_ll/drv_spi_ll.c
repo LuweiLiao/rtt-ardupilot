@@ -12,10 +12,10 @@ const spi_ll_config_t spi1_ll_cfg = {
     .Instance       = SPI1,
     .sck_port_idx   = 6,  /* PG11 */
     .sck_pin_no     = 11,
-    .miso_port_idx  = 0,  /* PA6 */
-    .miso_pin_no    = 6,
-    .mosi_port_idx  = 3,  /* PD7 */
-    .mosi_pin_no    = 7,
+    .miso_port_idx  = 6,  /* PG9 */
+    .miso_pin_no    = 9,
+    .mosi_port_idx  = 1,  /* PB5 */
+    .mosi_pin_no    = 5,
     .af             = 5,
     .mode           = 3,  /* CPOL=1, CPHA=1 */
     .prescaler      = 3,  /* /16 → APB2 108MHz/16 = 6.75MHz */

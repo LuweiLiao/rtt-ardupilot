@@ -255,18 +255,30 @@ void rt_hw_board_init(void)
     rt_components_board_init();
 #endif
 
-    /* Workaround: SPI1 MOSI (PD7) MODER gets reset to INPUT by a subsequent
-     * HAL_GPIO_Init on the same GPIO port (GPIOD). The STM32F7 HAL performs
+    /* Workaround: SPI1 MOSI (PB5) MODER gets reset to INPUT by a subsequent
+     * HAL_GPIO_Init on the same GPIO port (GPIOB). The STM32F7 HAL performs
      * read-modify-write on MODER/AFR and the write may be lost if another
      * caller touches the same register concurrently or in a later init step.
-     * Force PD7 back to AF mode here, after all board init is done. */
+     * Force PB5 back to AF mode here, and ensure PG9 (MISO) is also AF,
+     * after all board init is done. */
 #ifdef BSP_USING_SPI1
     {
-        volatile uint32_t *moder = (volatile uint32_t *)0x40020C00; /* GPIOD */
-        uint32_t m = *moder;
-        m &= ~(3U << 14);  /* clear PD7 MODER bits */
-        m |= (2U << 14);   /* set AF mode */
-        *moder = m;
+        volatile uint32_t *moder_b = (volatile uint32_t *)0x40020400; /* GPIOB */
+        uint32_t m = *moder_b;
+        m &= ~(3U << 10);  /* clear PB5 MODER bits */
+        m |= (2U << 10);   /* set AF mode */
+        *moder_b = m;
+        /* PG9 MISO — force AF mode */
+        volatile uint32_t *moder_g = (volatile uint32_t *)0x40021800; /* GPIOG */
+        m = *moder_g;
+        m &= ~(3U << 18);  /* clear PG9 MODER bits */
+        m |= (2U << 18);   /* set AF mode */
+        *moder_g = m;
+        volatile uint32_t *afr_g = (volatile uint32_t *)(0x40021800 + 0x24); /* GPIOG AFR[1] */
+        m = *afr_g;
+        m &= ~(0xFU << 4); /* clear PG9 AF bits */
+        m |= (5U << 4);    /* AF5 */
+        *afr_g = m;
     }
     /* Force SPI1 clock on — HAL_SPI_MspInit may not be reached if
      * rt_hw_spi_init() fails or SPI device registration is incomplete.
