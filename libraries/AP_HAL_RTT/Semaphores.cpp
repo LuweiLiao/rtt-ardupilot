@@ -14,6 +14,10 @@
 
 using namespace RTT;
 
+/* Diagnostic counters visible via GDB */
+volatile uint32_t rtt_sem_create_attempts = 0;
+volatile uint32_t rtt_sem_create_failures = 0;
+
 /* ---------------------------------------------------------------
  *  Semaphore (Mutex wrapper)
  *
@@ -33,31 +37,30 @@ static bool _rtt_heap_ready()
 
 Semaphore::Semaphore()
 {
-    _mtx = nullptr;
+    _mtx_inited = false;
 }
 
 Semaphore::~Semaphore()
 {
-    if (_mtx != nullptr) {
-        rt_mutex_delete(_mtx);
-        _mtx = nullptr;
+    if (_mtx_inited) {
+        rt_mutex_detach(&_mtx_obj);
     }
 }
 
 void Semaphore::_ensure_mtx()
 {
-    if (_mtx == nullptr) {
+    if (!_mtx_inited) {
         if (!_rtt_heap_ready()) {
-            /* Heap not ready yet - this should not happen during normal operation
-             * but may occur during early C++ constructors. We'll retry later. */
             return;
         }
         static uint16_t idx = 0;
         char name[RT_NAME_MAX];
         rt_snprintf(name, sizeof(name), "hm%u", idx++);
-        _mtx = rt_mutex_create(name, RT_IPC_FLAG_PRIO);
-        if (_mtx == nullptr) {
-            rt_kprintf("Semaphore: FAILED to create mutex '%s'\n", name);
+        rtt_sem_create_attempts++;
+        if (rt_mutex_init(&_mtx_obj, name, RT_IPC_FLAG_PRIO) == RT_EOK) {
+            _mtx_inited = true;
+        } else {
+            rtt_sem_create_failures++;
         }
     }
 }
@@ -65,48 +68,65 @@ void Semaphore::_ensure_mtx()
 bool Semaphore::give()
 {
     _ensure_mtx();
-    if (_mtx == nullptr) return false;
-    return rt_mutex_release(_mtx) == RT_EOK;
+    if (!_mtx_inited) return false;
+    return rt_mutex_release(&_mtx_obj) == RT_EOK;
 }
 
 bool Semaphore::take(uint32_t timeout_ms)
 {
     _ensure_mtx();
-    if (_mtx == nullptr) return false;
+    if (!_mtx_inited) return false;
 
     /* HAL_SEMAPHORE_BLOCK_FOREVER == 0 in ArduPilot.
      * ChibiOS: take(0) blocks forever.  We match that. */
     if (timeout_ms == HAL_SEMAPHORE_BLOCK_FOREVER) {
-        return rt_mutex_take(_mtx, RT_WAITING_FOREVER) == RT_EOK;
+        return rt_mutex_take(&_mtx_obj, RT_WAITING_FOREVER) == RT_EOK;
     }
 
-    /* Use native rt_mutex_take with tick timeout instead of polling.
-     * The old mdelay(1)+polling pattern wasted CPU cycles and could
-     * starve lower-priority threads. */
     rt_tick_t ticks = (rt_tick_t)((uint64_t)timeout_ms * RT_TICK_PER_SECOND / 1000U);
     if (ticks == 0) ticks = 1;
-    return rt_mutex_take(_mtx, ticks) == RT_EOK;
+    return rt_mutex_take(&_mtx_obj, ticks) == RT_EOK;
 }
 
 bool Semaphore::take_nonblocking()
 {
     _ensure_mtx();
-    if (_mtx == nullptr) return false;
-    return rt_mutex_take(_mtx, 0) == RT_EOK;
+    if (!_mtx_inited) return false;
+    return rt_mutex_take(&_mtx_obj, 0) == RT_EOK;
 }
 
 void Semaphore::take_blocking()
 {
     _ensure_mtx();
-    if (_mtx == nullptr) return;
-    rt_mutex_take(_mtx, RT_WAITING_FOREVER);
+    if (!_mtx_inited) return;
+
+    /* RT-Thread mutex supports recursive locking (same thread can take
+     * multiple times).  However during init the timer thread (higher
+     * priority) may preempt the main thread and attempt to take the same
+     * mutex — deadlock follows because the timer thread ≠ owner.
+     *
+     * Our workaround: if the mutex is already owned by the current thread,
+     * bump hold ourselves and skip rt_mutex_take entirely.  This avoids
+     * the spin_lock → schedule → deadlock path in _rt_mutex_take.
+     *
+     * [Cybernetics Ch.5] Decoupled fix: localize RTT kernel workaround
+     * in our HAL layer rather than patching upstream AruvPilot.
+     */
+    if (_mtx_obj.owner == rt_thread_self()) {
+        if (_mtx_obj.hold < RT_MUTEX_HOLD_MAX) {
+            _mtx_obj.hold++;
+        }
+        return;
+    }
+
+    rt_mutex_take(&_mtx_obj, RT_WAITING_FOREVER);
 }
 
 bool Semaphore::check_owner(void)
 {
     _ensure_mtx();
-    if (_mtx == nullptr) return false;
-    return _mtx->owner == rt_thread_self();
+    if (!_mtx_inited) return false;
+    return _mtx_obj.owner == rt_thread_self();
 }
 
 void Semaphore::assert_owner(void)
