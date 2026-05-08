@@ -194,3 +194,4 @@ Tools/bootloaders/*.rtt_bak
 
 # ChibiOS-Contrib (未使用)
 modules/ChibiOS-Contrib/
+.trae/
