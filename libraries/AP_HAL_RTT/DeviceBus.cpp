@@ -40,8 +40,6 @@ void DeviceBus::_bus_thread_entry(void *arg)
 {
     DeviceBus *binfo = (DeviceBus *)arg;
 
-    // rt_kprintf("DeviceBus: thread started for bus, callbacks=%p\n", binfo->_callbacks);
-
     while (true) {
         uint64_t now = AP_HAL::micros64();
         callback_info *callback;
@@ -52,7 +50,6 @@ void DeviceBus::_bus_thread_entry(void *arg)
                     callback->next_usec += callback->period_usec;
                 }
                 if (!binfo->semaphore.take(10)) {
-                    rt_kprintf("DeviceBus: semaphore take failed!\n");
                     continue;
                 }
                 callback->cb();
@@ -132,7 +129,7 @@ AP_HAL::Device::PeriodicHandle DeviceBus::register_periodic_callback(
 
         // rt_kprintf("DeviceBus: creating thread '%s' prio=%u\n", name, prio);
         _thread = rt_thread_create(name, _bus_thread_entry,
-                                   this, 32768, prio, 20);
+                                   this, 4096, prio, 20);
         if (_thread == nullptr) {
             rt_kprintf("DeviceBus: FAILED to create thread!\n");
             return nullptr;
