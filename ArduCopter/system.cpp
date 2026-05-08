@@ -214,15 +214,20 @@ void Copter::init_ardupilot()
 //******************************************************************************
 void Copter::startup_INS_ground()
 {
+    rtt_dbg_setup_stage = 660;
     // initialise ahrs (may push imu calibration into the mpu6000 if using that device).
     ahrs.init();
+    rtt_dbg_setup_stage = 661;
     ahrs.set_vehicle_class(AP_AHRS::VehicleClass::COPTER);
+    rtt_dbg_setup_stage = 662;
 
     // Warm up and calibrate gyro offsets
     ins.init(scheduler.get_loop_rate_hz());
+    rtt_dbg_setup_stage = 663;
 
     // reset ahrs including gyro bias
     ahrs.reset();
+    rtt_dbg_setup_stage = 664;
 }
 
 // position_ok - returns true if the horizontal absolute position is ok and home position is set
