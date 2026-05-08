@@ -13,33 +13,37 @@
 #include <stm32f7xx.h>
 
 /* STM32F7 SPI1 GPIO pin configuration (register-level).
- * Called once when no RT-Thread SPI device is registered. */
-static bool _spi1_gpio_init_done = false;
+ * Called once, then guarded by _spi1_gpio_init_done.  The GPIO MODER/AFR
+ * for MISO/MOSI may be clobbered by other peripheral init (e.g. USART6 on PA6
+ * on some boards) so we restore on first transfer only — repeated init
+ * creates glitches that confuse IMU slaves during CS-held burst reads.
+ *
+ * Pinout (CUAV V5, from hwdef.dat):
+ *   PG11=SCK(AF5), PA6=MISO(AF5), PD7=MOSI(AF5)
+ *   PF2=ICM20689_CS, PF3=ICM20602_CS, PF4=BMI055_GYRO_CS */
 static void _spi1_gpio_init(void)
 {
-    if (_spi1_gpio_init_done) return;
-    _spi1_gpio_init_done = true;
-
     /* Enable GPIO clocks */
-    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOBEN |
-                    RCC_AHB1ENR_GPIODEN | RCC_AHB1ENR_GPIOFEN |
-                    RCC_AHB1ENR_GPIOGEN;
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIODEN |
+                    RCC_AHB1ENR_GPIOFEN | RCC_AHB1ENR_GPIOGEN;
     (void)RCC->AHB1ENR;
+    /* Ensure SPI1 peripheral clock is enabled */
+    RCC->APB2ENR |= RCC_APB2ENR_SPI1EN;
+    (void)RCC->APB2ENR;
 
-    /* PG11=SCK(AF5), PA6=MISO(AF5), PD7=MOSI(AF5) — fmuv5/CUAV V5 pinout */
-    /* PG11: MODE=AF(10), AF=AF5(0101) */
+    /* PG11 SCK: MODE=AF(10), AF=AF5(0101) */
     GPIOG->MODER = (GPIOG->MODER & ~(3U << 22)) | (2U << 22);
     GPIOG->AFR[1] = (GPIOG->AFR[1] & ~(0xFU << 12)) | (5U << 12);
 
-    /* PA6: MODE=AF(10), AF=AF5(0101) — was PG9 (WRONG) */
+    /* PA6 MISO: MODE=AF(10), AF=AF5(0101) */
     GPIOA->MODER = (GPIOA->MODER & ~(3U << 12)) | (2U << 12);
     GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << 24)) | (5U << 24);
 
-    /* PD7: MODE=AF(10), AF=AF5(0101) — was PB5 (WRONG) */
+    /* PD7 MOSI: MODE=AF(10), AF=AF5(0101) */
     GPIOD->MODER = (GPIOD->MODER & ~(3U << 14)) | (2U << 14);
     GPIOD->AFR[0] = (GPIOD->AFR[0] & ~(0xFU << 28)) | (5U << 28);
 
-    /* PF2=ICM20689_CS, PF3=ICM20602_CS, PF4=BMI055_GYRO_CS: OUTPUT, HIGH */
+    /* CS pins: OUTPUT, INITIAL STATE HIGH */
     GPIOF->MODER = (GPIOF->MODER & ~(3U << 4)) | (1U << 4);  /* PF2 OUT */
     GPIOF->MODER = (GPIOF->MODER & ~(3U << 6)) | (1U << 6);  /* PF3 OUT */
     GPIOF->MODER = (GPIOF->MODER & ~(3U << 8)) | (1U << 8);  /* PF4 OUT */
@@ -161,17 +165,26 @@ static bool spi1_poll_transfer(struct rt_spi_device *dev,
         *bsrr = 1U << (pin + 16);
     }
 
-    CLEAR_BIT(spi->CR1, SPI_CR1_SPE);
+    /*
+     * Only re-initialize SPI on standalone transactions (cs_take == true).
+     * When CS is held across calls (ICM20689 multi-part read: send addr
+     * then read data), mid-transaction SPE toggle creates a clock glitch
+     * that confuses the IMU slave, causing RXNE never to set.
+     * Ref: ICM20689 112-byte full-duplex read hang.
+     */
+    if (cs_take) {
+        CLEAR_BIT(spi->CR1, SPI_CR1_SPE);
 
-    spi->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI |
-               SPI_CR1_CPOL | SPI_CR1_CPHA |
-               SPI_CR1_BR_0 | SPI_CR1_BR_1;  /* /16 */
-    spi->CR2 = SPI_CR2_DS_0 | SPI_CR2_DS_1 | SPI_CR2_DS_2 | SPI_CR2_FRXTH;
-    SET_BIT(spi->CR1, SPI_CR1_SPE);
+        spi->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI |
+                   SPI_CR1_CPOL | SPI_CR1_CPHA |
+                   SPI_CR1_BR_0 | SPI_CR1_BR_1;  /* /16 */
+        spi->CR2 = SPI_CR2_DS_0 | SPI_CR2_DS_1 | SPI_CR2_DS_2 | SPI_CR2_FRXTH;
+        SET_BIT(spi->CR1, SPI_CR1_SPE);
 
-    /* Flush stale FIFO */
-    while (spi->SR & SPI_SR_RXNE) { (void)*((__IO uint8_t *)&spi->DR); }
-    (void)spi->SR;
+        /* Flush stale FIFO */
+        while (spi->SR & SPI_SR_RXNE) { (void)*((__IO uint8_t *)&spi->DR); }
+        (void)spi->SR;
+    }
 
     for (uint32_t i = 0; i < total_len; i++) {
         uint32_t timeout = 10000;
@@ -428,6 +441,22 @@ bool SPIDevice::set_chip_select(bool set)
 {
 #ifdef SOC_SERIES_STM32F7
     if (_dev == nullptr) {
+        if (set && !_cs_held) {
+            /* Actually assert CS via GPIO BSRR — callers (Invensense IMU
+             * driver) expect the pin to be driven LOW (active) after
+             * set_chip_select(true) so that subsequent transfer() /
+             * transfer_fullduplex() calls with cs_take=false happen while
+             * CS is asserted, enabling multi-byte burst reads (e.g.
+             * ICM20689 112-byte FIFO read). */
+            _spi1_gpio_init();
+            rt_base_t cs = (_cs_pin != 0) ? _cs_pin : 0;
+            if (cs != 0) {
+                uint32_t port_idx = cs >> 4;
+                uint32_t pin = cs & 0xF;
+                volatile uint32_t *bsrr = (volatile uint32_t *)(0x40020000U + port_idx * 0x400U + 0x18U);
+                *bsrr = 1U << (pin + 16);  /* BR = drive LOW */
+            }
+        }
         _cs_held = set;
         return true;
     }

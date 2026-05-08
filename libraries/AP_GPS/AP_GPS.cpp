@@ -290,6 +290,14 @@ AP_GPS::AP_GPS()
 
     AP_Param::setup_object_defaults(this, var_info);
 
+    /* Ensure all driver pointers are zero-initialized to prevent
+     * dereferencing uninitialized (garbage) pointers in calc_state etc.
+     * On platforms like RTT where BSS may not be reliably zeroed before
+     * static constructor calls, this avoids HardFault with bogus this=0x33. */
+    for (uint8_t i = 0; i < GPS_MAX_INSTANCES; i++) {
+        drivers[i] = nullptr;
+    }
+
     if (_singleton != nullptr) {
         AP_HAL::panic("AP_GPS must be singleton");
     }
