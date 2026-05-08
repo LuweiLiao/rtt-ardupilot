@@ -268,6 +268,13 @@ void rt_hw_board_init(void)
         m |= (2U << 14);   /* set AF mode */
         *moder = m;
     }
+    /* Force SPI1 clock on — HAL_SPI_MspInit may not be reached if
+     * rt_hw_spi_init() fails or SPI device registration is incomplete.
+     * Without SPI1 clock, all IMU sensor reads return 0xFFFF. */
+    RCC->APB2ENR |= RCC_APB2ENR_SPI1EN;
+#endif
+#ifdef BSP_USING_SPI4
+    RCC->APB2ENR |= RCC_APB2ENR_SPI4EN;
 #endif
 
     rt_kprintf("[BOARD-INIT] Board initialization complete\n");
