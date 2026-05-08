@@ -1,12 +1,6 @@
 /*
  * AP_HAL_RTT — SPI device driver
  * Board-independent: uses RTT_SPIDesc from hwdef-generated HAL_SPI_DEVICE_LIST.
- * Uses RT-Thread SPI framework API (rt_spi_transfer_message) to ensure proper
- * SPI configuration and DMA/polling path selection.
- *
- * SPI1 uses direct register-level polling on STM32F7/CUAV-V5: the RTT HAL
- * polling path returns incorrect data for multi-byte reads.  Root cause
- * suspected in HAL_SPI_TransmitReceive interaction with the STM32F7 SPI FIFO.
  */
 
 #include "SPIDevice.h"
@@ -17,6 +11,39 @@
 
 #ifdef SOC_SERIES_STM32F7
 #include <stm32f7xx.h>
+
+/* STM32F7 SPI1 GPIO pin configuration (register-level).
+ * Called once when no RT-Thread SPI device is registered. */
+static bool _spi1_gpio_init_done = false;
+static void _spi1_gpio_init(void)
+{
+    if (_spi1_gpio_init_done) return;
+    _spi1_gpio_init_done = true;
+
+    /* Enable GPIO clocks */
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIODEN |
+                    RCC_AHB1ENR_GPIOFEN | RCC_AHB1ENR_GPIOGEN;
+    (void)RCC->AHB1ENR;
+
+    /* PG11=SCK(AF5), PA6=MISO(AF5), PD7=MOSI(AF5) */
+    /* PG11: MODE=AF(10), AF=AF5(0101) */
+    GPIOG->MODER = (GPIOG->MODER & ~(3U << 22)) | (2U << 22);
+    GPIOG->AFR[1] = (GPIOG->AFR[1] & ~(0xFU << 12)) | (5U << 12);
+
+    /* PA6: MODE=AF(10), AF=AF5(0101) */
+    GPIOA->MODER = (GPIOA->MODER & ~(3U << 12)) | (2U << 12);
+    GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << 24)) | (5U << 24);
+
+    /* PD7: MODE=AF(10), AF=AF5(0101) */
+    GPIOD->MODER = (GPIOD->MODER & ~(3U << 14)) | (2U << 14);
+    GPIOD->AFR[0] = (GPIOD->AFR[0] & ~(0xFU << 28)) | (5U << 28);
+
+    /* PF2=ICM20689_CS, PF3=ICM20602_CS, PF4=BMI055_GYRO_CS: OUTPUT, HIGH */
+    GPIOF->MODER = (GPIOF->MODER & ~(3U << 4)) | (1U << 4);  /* PF2 OUT */
+    GPIOF->MODER = (GPIOF->MODER & ~(3U << 6)) | (1U << 6);  /* PF3 OUT */
+    GPIOF->MODER = (GPIOF->MODER & ~(3U << 8)) | (1U << 8);  /* PF4 OUT */
+    GPIOF->BSRR = (1U << 2) | (1U << 3) | (1U << 4);         /* set HIGH */
+}
 #endif
 
 using namespace RTT;
@@ -32,6 +59,33 @@ volatile struct {
     uint32_t last_recv_0;
     uint32_t last_recv_1;
 } rtt_spi1_rt = {};
+
+/*
+ * CS pin lookup table — matches rtt_devname to GPIO pin number.
+ * Values correspond to HAL_RTT_SPI_ATTACH_LIST CS pins.
+ */
+struct spi_cs_entry {
+    const char *rtt_devname;
+    rt_base_t cs_pin;
+};
+static const struct spi_cs_entry _spi_cs_table[] = {
+    {"spi11", 82},
+    {"spi12", 83},
+    {"spi13", 84},
+    {"spi14", 106},
+    {"spi21", 85},
+    {"spi41", 90},
+};
+
+static rt_base_t _lookup_cs_pin(const char *rtt_devname)
+{
+    for (uint32_t i = 0; i < ARRAY_SIZE(_spi_cs_table); i++) {
+        if (strcmp(_spi_cs_table[i].rtt_devname, rtt_devname) == 0) {
+            return _spi_cs_table[i].cs_pin;
+        }
+    }
+    return 0;
+}
 
 /*
  * SPI1 register-level polling transfer on STM32F7.
@@ -74,7 +128,8 @@ static bool spi1_poll_transfer(struct rt_spi_device *dev,
                                 const uint8_t *send, uint32_t send_len,
                                 uint8_t *recv, uint32_t recv_len,
                                 bool cs_take, bool cs_release,
-                                SPI_TypeDef *spi)
+                                SPI_TypeDef *spi,
+                                rt_base_t cs_pin)
 {
     const bool fullduplex = (send_len > 0 && recv_len > 0 &&
                              send == recv && send_len == recv_len);
@@ -98,7 +153,7 @@ static bool spi1_poll_transfer(struct rt_spi_device *dev,
 
     /* Assert CS via GPIO BSRR */
     if (cs_take) {
-        rt_base_t cs = dev->cs_pin;
+        rt_base_t cs = (cs_pin != 0) ? cs_pin : dev->cs_pin;
         uint32_t port_idx = cs >> 4;
         uint32_t pin = cs & 0xF;
         volatile uint32_t *bsrr = (volatile uint32_t *)(0x40020000U + port_idx * 0x400U + 0x18U);
@@ -131,7 +186,7 @@ static bool spi1_poll_transfer(struct rt_spi_device *dev,
 
     /* Release CS via GPIO BSRR */
     if (cs_release) {
-        rt_base_t cs = dev->cs_pin;
+        rt_base_t cs = (cs_pin != 0) ? cs_pin : dev->cs_pin;
         uint32_t port_idx = cs >> 4;
         uint32_t pin = cs & 0xF;
         volatile uint32_t *bsrr = (volatile uint32_t *)(0x40020000U + port_idx * 0x400U + 0x18U);
@@ -170,8 +225,10 @@ SPIDevice::SPIDevice(RTT_SPIDesc &desc)
     , _desc(desc)
     , _dev(nullptr)
     , _bus(DeviceBus::get_bus(desc.bus, 0))
+    , _cs_pin(0)
 {
     set_device_bus(desc.bus);
+    _cs_pin = _lookup_cs_pin(desc.rtt_devname);
     _dev = (struct rt_spi_device *)rt_device_find(desc.rtt_devname);
     if (_dev != nullptr) {
         set_speed(AP_HAL::Device::SPEED_LOW);
@@ -213,6 +270,9 @@ void SPIDevice::_unlock_bus()
 
 bool SPIDevice::set_speed(AP_HAL::Device::Speed speed)
 {
+#ifdef SOC_SERIES_STM32F7
+    if (_dev == nullptr) return true; /* register-level polling, speed configured per-transfer */
+#endif
     if (_dev == nullptr) return false;
     const uint32_t target_hz =
         (speed == AP_HAL::Device::SPEED_HIGH) ? _desc.highspeed : _desc.lowspeed;
@@ -233,12 +293,25 @@ bool SPIDevice::set_speed(AP_HAL::Device::Speed speed)
 /*
  * SPI1 register-level polling transfer on STM32F7.
  * Direct register polling bypasses broken HAL_SPI_TransmitReceive path.
- * TODO: investigate LLD DMA path once SOC_SERIES_STM32F7 build issue is fixed.
  */
 
 bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
                         uint8_t *recv, uint32_t recv_len)
 {
+#ifdef SOC_SERIES_STM32F7
+    if (_dev == nullptr) {
+        _spi1_gpio_init();
+        if (send_len > 0 || recv_len > 0) {
+            bool need_sem = !_cs_held;
+            if (need_sem && !_sem.take(HAL_SEMAPHORE_BLOCK_FOREVER)) return false;
+            bool ok = spi1_poll_transfer(nullptr, send, send_len, recv, recv_len,
+                                         !_cs_held, !_cs_held, bus_to_spi(_desc.bus), _cs_pin);
+            if (!_cs_held && need_sem) _sem.give();
+            return ok;
+        }
+        return true;
+    }
+#endif
     if (_dev == nullptr) return false;
 
     bool need_sem = !_cs_held;
@@ -251,24 +324,6 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
     bool ok = false;
     const bool cs_take = !_cs_held;
     const bool cs_release = !_cs_held;
-
-#ifdef SOC_SERIES_STM32F7
-    /* STM32F7: ALL transfers use direct register-level polling.
-     * The RTT HAL polling path (HAL_SPI_TransmitReceive) returns incorrect
-     * data for multi-byte reads on all SPI buses on STM32F7/CUAV-V5. */
-    if (true) {
-        if (send_len > 0 || recv_len > 0) {
-            ok = spi1_poll_transfer(_dev, send, send_len, recv, recv_len,
-                                    cs_take, cs_release, bus_to_spi(_desc.bus));
-        } else {
-            ok = true; /* no-op */
-        }
-        rtt_dbg_spi_xfer_count += 2;
-        if (!_cs_held) { _unlock_bus(); }
-        if (need_sem) { _sem.give(); }
-        return ok;
-    }
-#endif
 
     if (send_len > 0 && recv_len > 0) {
         uint8_t _bounce[64];
@@ -361,6 +416,12 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
 
 bool SPIDevice::set_chip_select(bool set)
 {
+#ifdef SOC_SERIES_STM32F7
+    if (_dev == nullptr) {
+        _cs_held = set;
+        return true;
+    }
+#endif
     if (_dev == nullptr) {
         return false;
     }
@@ -372,36 +433,34 @@ bool SPIDevice::set_chip_select(bool set)
         if (!_sem.take(HAL_SEMAPHORE_BLOCK_FOREVER)) {
             return false;
         }
-        if (!_lock_bus()) {
-            _sem.give();
-            return false;
-        }
-        if (rt_spi_take(_dev) != RT_EOK) {
-            _unlock_bus();
-            _sem.give();
-            return false;
-        }
-        _bus_locked = true;
         _cs_held = true;
         return true;
     }
 
-    if (!_cs_held) {
-        return true;
+    if (_cs_held) {
+        _cs_held = false;
+        _sem.give();
     }
-
-    const bool ok = (rt_spi_release(_dev) == RT_EOK);
-    _bus_locked = false;
-    _cs_held = false;
-    _unlock_bus();
-    _sem.give();
-    return ok;
+    return true;
 }
 
+/*
+ * transfer_fullduplex — send and receive simultaneously.
+ */
 bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t len)
 {
-    if (_dev == nullptr) return false;
-    const bool need_sem = !_cs_held;
+    if (_dev == nullptr) {
+#ifdef SOC_SERIES_STM32F7
+        _spi1_gpio_init();
+        if (len > 0) {
+            return spi1_poll_transfer(nullptr, send, len, recv, len,
+                                      !_cs_held, !_cs_held, bus_to_spi(_desc.bus), _cs_pin);
+        }
+#endif
+        return false;
+    }
+
+    bool need_sem = !_cs_held;
     if (need_sem && !_sem.take(HAL_SEMAPHORE_BLOCK_FOREVER)) {
         return false;
     }
@@ -413,32 +472,16 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
     const bool cs_take = !_cs_held;
     const bool cs_release = !_cs_held;
 
-#ifdef SOC_SERIES_STM32F7
-    /* STM32F7: use direct register-level polling (same as transfer()).
-     * The RTT HAL polling path returns incorrect data for multi-byte
-     * reads on all SPI buses on STM32F7/CUAV-V5. */
-    if (true) {
-        bool ok = (len > 0)
-            ? spi1_poll_transfer(_dev, send, len, recv, len, cs_take, cs_release,
-                                bus_to_spi(_desc.bus))
-            : true;
-        rtt_dbg_spi_xfer_count += 2;
-        if (!_cs_held) { _unlock_bus(); }
-        if (need_sem) { _sem.give(); }
-        return ok;
-    }
-#endif
-
     uint8_t _bounce[64];
     uint8_t *txbuf = (uint8_t *)send;
     uint8_t *rxbuf = recv;
-    bool heap = false;
     bool ok = false;
+    bool heap = false;
+
     if (send == recv) {
         if (len <= sizeof(_bounce)) {
             txbuf = _bounce;
             rxbuf = _bounce;
-            memcpy(txbuf, send, len);
         } else {
             txbuf = (uint8_t *)rt_malloc_align(len, 32);
             if (txbuf == nullptr) {
@@ -448,26 +491,26 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
             }
             rxbuf = txbuf;
             heap = true;
-            memcpy(txbuf, send, len);
         }
+        memcpy(txbuf, send, len);
     }
 
     struct rt_spi_message msg = {};
     msg.send_buf = txbuf;
     msg.recv_buf = rxbuf;
     msg.length = len;
-    msg.cs_take = !_cs_held ? 1U : 0U;
-    msg.cs_release = !_cs_held ? 1U : 0U;
+    msg.cs_take = cs_take ? 1U : 0U;
+    msg.cs_release = cs_release ? 1U : 0U;
     msg.next = RT_NULL;
 
-    rtt_dbg_spi_xfer_count++;
+    rtt_dbg_spi_xfer_count += 2;
     struct rt_spi_message *ret = rt_spi_transfer_message(_dev, &msg);
     ok = (ret == RT_NULL);
-    rtt_dbg_spi_xfer_count++;
-
-    if (send == recv && ok) {
+    if (ok && send == recv) {
         memcpy(recv, rxbuf, len);
     }
+    rtt_dbg_spi_xfer_count++;
+
     if (heap) { rt_free_align(txbuf); }
     if (!_cs_held) { _unlock_bus(); }
     if (need_sem) { _sem.give(); }
@@ -482,16 +525,11 @@ AP_HAL::Semaphore *SPIDevice::get_semaphore()
 AP_HAL::Device::PeriodicHandle SPIDevice::register_periodic_callback(
     uint32_t period_usec, AP_HAL::Device::PeriodicCb cb)
 {
-    if (_bus == nullptr) {
-        return nullptr;
-    }
     return _bus->register_periodic_callback(period_usec, cb, this);
 }
 
-bool SPIDevice::adjust_periodic_callback(AP_HAL::Device::PeriodicHandle h, uint32_t period_usec)
+bool SPIDevice::adjust_periodic_callback(
+    AP_HAL::Device::PeriodicHandle h, uint32_t period_usec)
 {
-    if (_bus == nullptr) {
-        return false;
-    }
     return _bus->adjust_timer(h, period_usec);
 }

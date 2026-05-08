@@ -55,6 +55,7 @@ private:
     bool _config_dirty = true;
     bool _bus_locked = false;
     bool _cs_held = false;
+    rt_base_t _cs_pin;
 };
 
 } // namespace RTT
