@@ -19,10 +19,9 @@ static const uint8_t _ch_map[8] = {0, 1, 2, 3, 8, 10, 11, 14};
 
 static bool _adc_inited = false;
 
-// Debug diagnostics (temporary)
+// Debug diagnostics — kept for GDB inspection
 static volatile uint32_t rtt_adc_timeout_count = 0;
 static volatile uint32_t rtt_adc_last_raw = 0;
-static bool rtt_adc_debug_printed = false;
 
 static void _adc_init_once(void)
 {
@@ -138,24 +137,11 @@ void AnalogIn::_timer_tick()
         if (i < RTT_ANALOG_MAX_CHANNELS) {
             _sources[i]._add_sample((float)raw);
         }
-        // Debug: print once when first non-zero reading appears
-        if (!rtt_adc_debug_printed && raw != 0) {
-            rtt_adc_debug_printed = true;
-            rt_kprintf("ADC FIRST: ch=%u raw=%u timeouts=%u\n",
-                        (unsigned)_ch_map[i], (unsigned)raw,
-                        (unsigned)rtt_adc_timeout_count);
-        }
+        // Debug removed: ADC FIRST message pollutes MAVLink.
     }
 
-    // Periodic debug: print every ~10s (1000 ticks at 100Hz)
-    static uint32_t dbg_tick = 0;
-    if (++dbg_tick >= 1000) {
-        dbg_tick = 0;
-        rt_kprintf("ADC STATUS: timeouts=%u last_raw=%u vdd=%.2f\n",
-                    (unsigned)rtt_adc_timeout_count,
-                    (unsigned)rtt_adc_last_raw,
-                    (double)_board_voltage);
-    }
+    // Debug removed: ADC STATUS rt_kprintf pollutes MAVLink over CDC.
+    // Use GDB to inspect rtt_adc_timeout_count / rtt_adc_last_raw if needed.
 
     // Board voltage: ch_map[5]=ch10 (PC0) already read above, use _sources[5]
     // _sources[5] scale is set to 2.0 in channel() for ch10/11
