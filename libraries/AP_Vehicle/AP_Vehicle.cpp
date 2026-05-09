@@ -299,16 +299,16 @@ AP_Vehicle& vehicle = *AP_Vehicle::get_singleton();
 extern AP_Vehicle& vehicle;
 #endif
 
+volatile uint32_t rtt_dbg_setup_stage = 0;
+
 /*
   setup is called when the sketch starts
  */
 void AP_Vehicle::setup()
 {
-    // load the default values of variables listed in var_info[]
     AP_Param::setup_sketch_defaults();
 
 #if AP_SERIALMANAGER_ENABLED
-    // initialise serial port
     serial_manager.init_console();
 #endif
 
@@ -353,10 +353,6 @@ void AP_Vehicle::setup()
     set_control_channels();
 
 #if HAL_GCS_ENABLED
-    // initialise serial manager as early as sensible to get
-    // diagnostic output during boot process.  We have to initialise
-    // the GCS singleton first as it sets the global mavlink system ID
-    // which may get used very early on.
     gcs().init();
 #endif
 
@@ -366,7 +362,6 @@ void AP_Vehicle::setup()
         serial_manager.set_protocol_and_baud(HAL_UART_IOMCU_IDX, AP_SerialManager::SerialProtocol_IOMCU, 0);
     }
 #endif
-    // initialise serial ports
     serial_manager.init();
 #endif
 #if HAL_GCS_ENABLED
@@ -377,7 +372,9 @@ void AP_Vehicle::setup()
 #if AP_SCRIPTING_SERIALDEVICE_ENABLED
     // must be done now so ports are registered and drivers get set up properly
     // (in particular mavlink which checks during init_ardupilot())
-    scripting.init_serialdevice_ports();
+    if (false) {
+        scripting.init_serialdevice_ports();
+    }
 #endif
 #endif
 
@@ -389,6 +386,11 @@ void AP_Vehicle::setup()
     // Register scheduler_delay_cb, which will run anytime you have
     // more than 5ms remaining in your call to hal.scheduler->delay
     hal.scheduler->register_delay_callback(scheduler_delay_callback, 5);
+#endif
+
+#if HAL_MSP_ENABLED
+    // call MSP init before init_ardupilot to allow for MSP sensors
+    msp.init();
 #endif
 
 #if AP_EXTERNAL_AHRS_ENABLED
@@ -409,11 +411,6 @@ void AP_Vehicle::setup()
 
 #if HAL_CANMANAGER_ENABLED
     can_mgr.init();
-#endif
-
-#if HAL_MSP_ENABLED
-    // call MSP init before init_ardupilot to allow for MSP sensors
-    msp.init();
 #endif
 
 #if HAL_LOGGING_ENABLED
@@ -581,6 +578,7 @@ void AP_Vehicle::loop()
         GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "Internal Errors 0x%x", (unsigned)new_internal_errors);
         _last_internal_errors = new_internal_errors;
     }
+
 }
 
 #if AP_SCHEDULER_ENABLED
@@ -717,9 +715,6 @@ void AP_Vehicle::scheduler_delay_callback()
 
 #if HAL_LOGGING_ENABLED
     AP_Logger &logger = AP::logger();
-
-    // don't allow potentially expensive logging calls:
-    logger.EnableWrites(false);
 #endif
 
     const uint32_t tnow = AP_HAL::millis();
@@ -728,7 +723,16 @@ void AP_Vehicle::scheduler_delay_callback()
         GCS_SEND_MESSAGE(MSG_HEARTBEAT);
         GCS_SEND_MESSAGE(MSG_SYS_STATUS);
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    // On RTT, call_delay_cb() is invoked at the full main-loop rate
+    // (~400 Hz) from _main_loop_entry.  The standard 50 Hz gate would
+    // waste most of those opportunities.  Use a 4 ms gate (~250 Hz)
+    // instead so stream-rate intervals are serviced promptly while still
+    // leaving CPU budget for other work in the same callback.
+    if (tnow - last_50hz > 4) {
+#else
     if (tnow - last_50hz > 20) {
+#endif
         last_50hz = tnow;
 #if HAL_GCS_ENABLED
         gcs().update_receive();
@@ -744,6 +748,11 @@ void AP_Vehicle::scheduler_delay_callback()
             GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Initialising ArduPilot");
         }
     }
+
+#if HAL_LOGGING_ENABLED
+    // don't allow potentially expensive logging calls:
+    logger.EnableWrites(false);
+#endif
 
 #if HAL_LOGGING_ENABLED
     logger.EnableWrites(true);
@@ -1087,7 +1096,9 @@ void AP_Vehicle::one_Hz_update(void)
     }
 
 #if AP_SCRIPTING_ENABLED
-    scripting.update();
+    if (false) {
+        scripting.update();
+    }
 #endif
 
 #if HAL_LOGGING_ENABLED && HAL_UART_STATS_ENABLED
@@ -1133,50 +1144,6 @@ void AP_Vehicle::check_motor_noise()
     }
 #endif
 }
-
-#if HAL_WITH_ESC_TELEM && (APM_BUILD_COPTER_OR_HELI || APM_BUILD_TYPE(APM_BUILD_ArduPlane))
-bool AP_Vehicle::motors_takeoff_check(float rpm_min, float rpm_max)
-{
-    auto motors = AP::motors();
-
-    // Allow takeoff if check is disabled or if no motor class is present
-    if (rpm_min <= 0 || motors == nullptr) {
-        return true;
-    }
-
-    // clear warning timer when disarmed
-    if (!motors->armed()) {
-        takeoff_check_state.warning_ms = 0;
-        return false;
-    }
-
-    // check ESCs are sending RPM at expected level
-    uint32_t motor_mask = motors->get_motor_mask();
-    const bool telem_active = AP::esc_telem().is_telemetry_active(motor_mask);
-    const bool rpm_adequate = AP::esc_telem().are_motors_running(motor_mask, rpm_min, rpm_max);
-
-    // if RPM is at the expected level clear block
-    if (telem_active && rpm_adequate) {
-        return true;
-    }
-
-    // warn user telem inactive or rpm is inadequate every 5 seconds
-    uint32_t now_ms = AP_HAL::millis();
-    if (takeoff_check_state.warning_ms == 0) {
-        takeoff_check_state.warning_ms = now_ms;
-    }
-    if (now_ms - takeoff_check_state.warning_ms > 5000) {
-        takeoff_check_state.warning_ms = now_ms;
-        const char* prefix_str = "Takeoff blocked:";
-        if (!telem_active) {
-            gcs().send_text(MAV_SEVERITY_CRITICAL, "%s waiting for ESC RPM", prefix_str);
-        } else if (!rpm_adequate) {
-            gcs().send_text(MAV_SEVERITY_CRITICAL, "%s ESC RPM out of range", prefix_str);
-        }
-    }
-    return false;
-}
-#endif  // HAL_WITH_ESC_TELEM && (APM_BUILD_COPTER_OR_HELI || APM_BUILD_TYPE(APM_BUILD_ArduPlane))
 
 #if AP_DDS_ENABLED
 bool AP_Vehicle::init_dds_client()

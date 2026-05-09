@@ -19,6 +19,7 @@
  */
 #include "AP_Baro.h"
 
+#include <utility>
 #include <stdio.h>
 
 #include <GCS_MAVLink/GCS.h>
@@ -139,7 +140,6 @@ const AP_Param::GroupInfo AP_Baro::var_info[] = {
     // @DisplayName: Specific Gravity (For water depth measurement)
     // @Description: This sets the specific gravity of the fluid when flying an underwater ROV.
     // @Values: 1.0:Freshwater,1.024:Saltwater
-    // @Range: 0.98 1.05
     AP_GROUPINFO_FRAME("_SPEC_GRAV", 8, AP_Baro, _specific_gravity, 1.0, AP_PARAM_FRAME_SUB),
 
 #if BARO_MAX_INSTANCES > 1
@@ -330,7 +330,12 @@ void AP_Baro::calibrate(bool save)
         do {
             update();
             if (AP_HAL::millis() - tstart > 500) {
+#ifdef HAL_BARO_ALLOW_INIT_NO_BARO
+                GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "Baro: unable to calibrate, skipping");
+                return;
+#else
                 AP_BoardConfig::config_error("Baro: unable to calibrate");
+#endif
             }
             hal.scheduler->delay(10);
         } while (!healthy());
@@ -347,7 +352,12 @@ void AP_Baro::calibrate(bool save)
         do {
             update();
             if (AP_HAL::millis() - tstart > 500) {
+#ifdef HAL_BARO_ALLOW_INIT_NO_BARO
+                GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "Baro: unable to calibrate, skipping");
+                return;
+#else
                 AP_BoardConfig::config_error("Baro: unable to calibrate");
+#endif
             }
         } while (!healthy());
         for (uint8_t i=0; i<_num_sensors; i++) {
@@ -382,7 +392,11 @@ void AP_Baro::calibrate(bool save)
     if (num_calibrated) {
         return;
     }
+#ifdef HAL_BARO_ALLOW_INIT_NO_BARO
+    GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "Baro: all sensors uncalibrated");
+#else
     AP_BoardConfig::config_error("Baro: all sensors uncalibrated");
+#endif
 }
 
 /*
@@ -497,7 +511,7 @@ bool AP_Baro::_add_backend(AP_Baro_Backend *backend)
     if (!backend) {
         return false;
     }
-    if (_num_drivers >= ARRAY_SIZE(drivers)) {
+    if (_num_drivers >= BARO_MAX_DRIVERS) {
         AP_HAL::panic("Too many barometer drivers");
     }
     drivers[_num_drivers++] = backend;
@@ -519,93 +533,17 @@ bool AP_Baro::_have_i2c_driver(uint8_t bus, uint8_t address) const
     return false;
 }
 
-#define RETURN_IF_NO_SPACE                          \
-    do {                                            \
-        if (_num_drivers == BARO_MAX_DRIVERS ||     \
-            _num_sensors == BARO_MAX_INSTANCES) {   \
-            return;                                 \
-        }                                           \
+/*
+  macro to add a backend with check for too many sensors
+ We don't try to start more than the maximum allowed
+ */
+#define ADD_BACKEND(backend) \
+    do { _add_backend(backend);     \
+       if (_num_drivers == BARO_MAX_DRIVERS || \
+          _num_sensors == BARO_MAX_INSTANCES) { \
+          return; \
+       } \
     } while (0)
-
-// macro for use by HAL_INS_PROBE_LIST and various helper functions
-#define GET_I2C_DEVICE_PTR(bus, address) _have_i2c_driver(bus, address)?nullptr:hal.i2c_mgr->get_device_ptr(bus, address)
-
-// probe for an I2C barometer.
-void AP_Baro::probe_i2c_dev(AP_Baro_Backend* (*probefn)(AP_Baro&, AP_HAL::Device&), uint8_t bus, uint8_t addr)
-{
-    auto *dev = GET_I2C_DEVICE_PTR(bus, addr);  // dev may be freed by probe_dev
-    probe_dev(probefn, dev);
-}
-
-// probe for an I2C barometer
-void AP_Baro::probe_spi_dev(AP_Baro_Backend* (*probefn)(AP_Baro&, AP_HAL::Device&), const char *name)
-{
-    auto *dev = hal.spi->get_device_ptr(name);  // dev may be freed by probe_dev
-    probe_dev(probefn, dev);
-}
-
-// see if Device dev exists.  If it does not delete it.
-void AP_Baro::probe_dev(AP_Baro_Backend* (*probefn)(AP_Baro&, AP_HAL::Device&), AP_HAL::Device *dev)
-{
-    if (dev == nullptr) {
-        return;
-    }
-    AP_Baro_Backend *backend = probefn(*this, *dev);
-    if (backend == nullptr) {
-        delete dev;
-        return;
-    }
-    if (!_add_backend(backend)) {
-        delete backend;
-        delete dev;
-        return;
-    }
-}
-
-#if AP_BARO_LPS2XH_ENABLED
-void AP_Baro::probe_lps2xh_via_Invensense_IMU(uint8_t bus, uint8_t addr, uint8_t mpu_addr)
-{
-    auto *i2c_dev = GET_I2C_DEVICE_PTR(bus, addr);
-    AP_Baro_Backend *backend = AP_Baro_LPS2XH::probe_InvensenseIMU(*this, *i2c_dev, mpu_addr);
-    if (!_add_backend(backend)) {
-        delete i2c_dev;
-    }
-}
-#endif  // AP_BARO_LPS2XH_ENABLED
-
-#if AP_BARO_ICM20789_ENABLED
-void AP_Baro::probe_icm20789(uint8_t bus, uint8_t addr, uint8_t mpu_bus, uint8_t mpu_addr)
-{
-    auto *i2c_dev = GET_I2C_DEVICE_PTR(bus, addr);
-    AP_HAL::I2CDevice *mpu_dev = GET_I2C_DEVICE_PTR(mpu_bus, mpu_addr);
-    _probe_icm20789(i2c_dev, mpu_dev);  // deletes devices on failure
-}
-
-void AP_Baro::probe_icm20789(uint8_t bus, uint8_t addr, const char *mpu_name)
-{
-    auto *i2c_dev = GET_I2C_DEVICE_PTR(bus, addr);
-    AP_HAL::SPIDevice *mpu_dev = hal.spi->get_device_ptr(mpu_name);
-    _probe_icm20789(i2c_dev, mpu_dev);  // deletes devices on failure
-}
-
-// convenience underlying method for other probe functions;
-// will. delete the passed-in devices if a backend is not found
-void AP_Baro::_probe_icm20789(AP_HAL::I2CDevice *i2c_dev, AP_HAL::Device *mpu_dev)
-{
-    if (i2c_dev == nullptr) {
-        return;
-    }
-    if (mpu_dev == nullptr) {
-        delete i2c_dev;
-        return;
-    }
-    AP_Baro_Backend *backend = AP_Baro_ICM20789::probe(*this, *i2c_dev, *mpu_dev);
-    if (!_add_backend(backend)) {
-        delete i2c_dev;
-        delete mpu_dev;
-    }
-}
-#endif  // AP_BARO_ICM20789_ENABLED
 
 /*
   initialise the barometer object, loading backend drivers
@@ -623,8 +561,8 @@ void AP_Baro::init(void)
     }
 
     // zero bus IDs before probing
-    for (auto &sensor : sensors) {
-        sensor.bus_id.set(0);
+    for (uint8_t i = 0; i < BARO_MAX_INSTANCES; i++) {
+        sensors[i].bus_id.set(0);
     }
 
 #if AP_SIM_BARO_ENABLED
@@ -635,8 +573,7 @@ void AP_Baro::init(void)
 #if !AP_TEST_DRONECAN_DRIVERS
     // use dronecan instances instead of SITL instances
     for(uint8_t i = 0; i < sitl->baro_count; i++) {
-        _add_backend(NEW_NOTHROW AP_Baro_SITL(*this));
-        RETURN_IF_NO_SPACE;
+        ADD_BACKEND(NEW_NOTHROW AP_Baro_SITL(*this));
     }
 #endif
 #endif
@@ -644,23 +581,24 @@ void AP_Baro::init(void)
 #if AP_BARO_DRONECAN_ENABLED
     // Detect UAVCAN Modules, try as many times as there are driver slots
     for (uint8_t i = 0; i < BARO_MAX_DRIVERS; i++) {
-        _add_backend(AP_Baro_DroneCAN::probe(*this));
-        RETURN_IF_NO_SPACE;
+        ADD_BACKEND(AP_Baro_DroneCAN::probe(*this));
     }
 #endif
 
 #if AP_BARO_EXTERNALAHRS_ENABLED
     const int8_t serial_port = AP::externalAHRS().get_port(AP_ExternalAHRS::AvailableSensor::BARO);
     if (serial_port >= 0) {
-        _add_backend(NEW_NOTHROW AP_Baro_ExternalAHRS(*this, serial_port));
-        RETURN_IF_NO_SPACE;
+        ADD_BACKEND(NEW_NOTHROW AP_Baro_ExternalAHRS(*this, serial_port));
     }
 #endif
 
+// macro for use by HAL_INS_PROBE_LIST
+#define GET_I2C_DEVICE(bus, address) _have_i2c_driver(bus, address)?nullptr:hal.i2c_mgr->get_device(bus, address)
+
 #if AP_SIM_BARO_ENABLED
 #if CONFIG_HAL_BOARD == HAL_BOARD_SITL && AP_BARO_MS5611_ENABLED
-    probe_i2c_dev(AP_Baro_MS5611::probe, _ext_bus, HAL_BARO_MS5611_I2C_ADDR);
-    RETURN_IF_NO_SPACE;
+    ADD_BACKEND(AP_Baro_MS5611::probe(*this,
+                                      std::move(GET_I2C_DEVICE(_ext_bus, HAL_BARO_MS5611_I2C_ADDR))));
 #endif
     // do not probe for other drivers when using simulation:
     return;
@@ -673,8 +611,8 @@ void AP_Baro::init(void)
     switch (AP_BoardConfig::get_board_type()) {
     case AP_BoardConfig::PX4_BOARD_PX4V1:
 #if AP_BARO_MS5611_ENABLED && defined(HAL_BARO_MS5611_I2C_BUS)
-        probe_i2c_dev(AP_Baro_MS5611::probe, HAL_BARO_MS5611_I2C_BUS, HAL_BARO_MS5611_I2C_ADDR);
-        RETURN_IF_NO_SPACE;
+        ADD_BACKEND(AP_Baro_MS5611::probe(*this,
+                                          std::move(GET_I2C_DEVICE(HAL_BARO_MS5611_I2C_BUS, HAL_BARO_MS5611_I2C_ADDR))));
 #endif
         break;
 
@@ -685,25 +623,25 @@ void AP_Baro::init(void)
     case AP_BoardConfig::PX4_BOARD_FMUV5:
     case AP_BoardConfig::PX4_BOARD_FMUV6:
 #if AP_BARO_MS5611_ENABLED
-        probe_spi_dev(AP_Baro_MS5611::probe, HAL_BARO_MS5611_NAME);
-        RETURN_IF_NO_SPACE;
+        ADD_BACKEND(AP_Baro_MS5611::probe(*this,
+                                          std::move(hal.spi->get_device(HAL_BARO_MS5611_NAME))));
 #endif
         break;
 
     case AP_BoardConfig::PX4_BOARD_PIXHAWK2:
 #if AP_BARO_MS5611_ENABLED
-        probe_spi_dev(AP_Baro_MS5611::probe, HAL_BARO_MS5611_SPI_EXT_NAME);
-        RETURN_IF_NO_SPACE;
-        probe_spi_dev(AP_Baro_MS5611::probe, HAL_BARO_MS5611_NAME);
-        RETURN_IF_NO_SPACE;
+        ADD_BACKEND(AP_Baro_MS5611::probe(*this,
+                                          std::move(hal.spi->get_device(HAL_BARO_MS5611_SPI_EXT_NAME))));
+        ADD_BACKEND(AP_Baro_MS5611::probe(*this,
+                                          std::move(hal.spi->get_device(HAL_BARO_MS5611_NAME))));
 #endif
         break;
 
     case AP_BoardConfig::PX4_BOARD_AEROFC:
 #if AP_BARO_MS5607_ENABLED
 #ifdef HAL_BARO_MS5607_I2C_BUS
-        probe_i2c_dev(AP_Baro_MS5607::probe, HAL_BARO_MS5607_I2C_BUS, HAL_BARO_MS5607_I2C_ADDR);
-        RETURN_IF_NO_SPACE;
+        ADD_BACKEND(AP_Baro_MS5607::probe(*this,
+                                          std::move(GET_I2C_DEVICE(HAL_BARO_MS5607_I2C_BUS, HAL_BARO_MS5607_I2C_ADDR))));
 #endif
 #endif  // AP_BARO_MS5607_ENABLED
         break;
@@ -717,24 +655,23 @@ void AP_Baro::init(void)
     if (_ext_bus >= 0) {
 #if APM_BUILD_TYPE(APM_BUILD_ArduSub)
 #if AP_BARO_MS5837_ENABLED
-        probe_i2c_dev(AP_Baro_MS5837::probe, _ext_bus, HAL_BARO_MS5837_I2C_ADDR);
-        RETURN_IF_NO_SPACE;
+        ADD_BACKEND(AP_Baro_MS5837::probe(*this,
+                                          std::move(GET_I2C_DEVICE(_ext_bus, HAL_BARO_MS5837_I2C_ADDR))));
 #endif
 #if AP_BARO_KELLERLD_ENABLED
-        probe_i2c_dev(AP_Baro_KellerLD::probe, _ext_bus, HAL_BARO_KELLERLD_I2C_ADDR);
-        RETURN_IF_NO_SPACE;
+        ADD_BACKEND(AP_Baro_KellerLD::probe(*this,
+                                          std::move(GET_I2C_DEVICE(_ext_bus, HAL_BARO_KELLERLD_I2C_ADDR))));
 #endif
 #else
 #if AP_BARO_MS5611_ENABLED
-        probe_i2c_dev(AP_Baro_MS5611::probe, _ext_bus, HAL_BARO_MS5611_I2C_ADDR);
-        RETURN_IF_NO_SPACE;
+        ADD_BACKEND(AP_Baro_MS5611::probe(*this,
+                                          std::move(GET_I2C_DEVICE(_ext_bus, HAL_BARO_MS5611_I2C_ADDR))));
 #endif
 #endif
     }
 
 #if AP_BARO_PROBE_EXTERNAL_I2C_BUSES
     _probe_i2c_barometers();
-    RETURN_IF_NO_SPACE;
 #endif
 
 #if AP_BARO_MSP_ENABLED
@@ -744,8 +681,7 @@ void AP_Baro::init(void)
     }
     for (uint8_t i=0; i<8; i++) {
         if (msp_instance_mask & (1U<<i)) {
-            _add_backend(NEW_NOTHROW AP_Baro_MSP(*this, i));
-            RETURN_IF_NO_SPACE;
+            ADD_BACKEND(NEW_NOTHROW AP_Baro_MSP(*this, i));
         }
     }
 #endif
@@ -757,7 +693,9 @@ void AP_Baro::init(void)
     }
 #endif
     if (_num_drivers == 0 || _num_sensors == 0 || drivers[0] == nullptr) {
-        AP_BoardConfig::config_error("Baro: unable to initialise driver");
+        // RTT bring-up: don't fatal on missing baro
+        DEV_PRINTF("no barometer driver found (num_drivers=%u num_sensors=%u)\n",
+                   (unsigned)_num_drivers, (unsigned)_num_sensors);
     }
 #endif
 #ifdef HAL_BUILD_AP_PERIPH
@@ -793,7 +731,7 @@ void AP_Baro::_probe_i2c_barometers(void)
 
     static const struct BaroProbeSpec {
         uint32_t bit;
-        AP_Baro_Backend* (*probefn)(AP_Baro&, AP_HAL::Device&);
+        AP_Baro_Backend* (*probefn)(AP_Baro&, AP_HAL::OwnPtr<AP_HAL::Device>);
         uint8_t addr;
     } baroprobespec[] {
 #if AP_BARO_BMP085_ENABLED
@@ -856,8 +794,7 @@ void AP_Baro::_probe_i2c_barometers(void)
             continue;
         }
         FOREACH_I2C_MASK(i, mask) {
-            probe_i2c_dev(spec.probefn, i, spec.addr);
-            RETURN_IF_NO_SPACE;
+            ADD_BACKEND(spec.probefn(*this, std::move(GET_I2C_DEVICE(i, spec.addr))));
         }
     }
 }
@@ -1059,7 +996,7 @@ float AP_Baro::thrust_pressure_correction(uint8_t instance)
 */
 uint8_t AP_Baro::register_sensor(void)
 {
-    if (_num_sensors >= ARRAY_SIZE(sensors)) {
+    if (_num_sensors >= BARO_MAX_INSTANCES) {
         AP_HAL::panic("Too many barometers");
     }
     return _num_sensors++;
