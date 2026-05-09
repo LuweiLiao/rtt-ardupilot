@@ -117,12 +117,6 @@ void AP_InertialSensor_BMI055::start()
                                          FUNCTOR_BIND_MEMBER(&AP_InertialSensor_BMI055::read_fifo_gyro, void));
 }
 
-/* BMI055/BMI088 debug — readable via GDB */
-volatile uint32_t rtt_dbg_bmi055_accel_chipid = 0xDE;
-volatile uint32_t rtt_dbg_bmi055_gyro_chipid = 0xDE;
-volatile uint32_t rtt_dbg_bmi055_accel_read_ok = 0;
-volatile uint32_t rtt_dbg_bmi055_gyro_read_ok = 0;
-
 /*
   probe and initialise accelerometer
  */
@@ -131,12 +125,7 @@ bool AP_InertialSensor_BMI055::accel_init()
     dev_accel->get_semaphore()->take_blocking();
 
     uint8_t v;
-    bool read_ok = dev_accel->read_registers(REGA_BGW_CHIPID, &v, 1);
-    rtt_dbg_bmi055_accel_chipid = v;
-    rtt_dbg_bmi055_accel_read_ok = read_ok ? 1 : 0;
-    rt_kprintf("[BMI055] accel chipid=0x%02X read_ok=%d (expect 0xFA)\n",
-               (unsigned)v, (int)read_ok);
-    if (!read_ok || v != 0xFA) {
+    if (!dev_accel->read_registers(REGA_BGW_CHIPID, &v, 1) || v != 0xFA) {
         goto failed;
     }
 
@@ -190,12 +179,7 @@ bool AP_InertialSensor_BMI055::gyro_init()
     dev_gyro->get_semaphore()->take_blocking();
 
     uint8_t v;
-    bool gyro_read_ok = dev_gyro->read_registers(REGG_CHIPID, &v, 1);
-    rtt_dbg_bmi055_gyro_chipid = v;
-    rtt_dbg_bmi055_gyro_read_ok = gyro_read_ok ? 1 : 0;
-    rt_kprintf("[BMI055] gyro chipid=0x%02X read_ok=%d (expect 0x0F)\n",
-               (unsigned)v, (int)gyro_read_ok);
-    if (!gyro_read_ok || v != 0x0F) {
+    if (!dev_gyro->read_registers(REGG_CHIPID, &v, 1) || v != 0x0F) {
         goto failed;
     }
 

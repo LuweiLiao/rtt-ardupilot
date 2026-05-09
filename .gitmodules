@@ -47,5 +47,5 @@
 	url = https://github.com/ArduPilot/littlefs.git
 [submodule "modules/rt-thread"]
 	path = modules/rt-thread
-	url = https://gitee.com/dronepogo/rtthread.git
+	url = git@gitee-pogo:dronepogo/ardu_rtt.git
 	branch = staging/pogo

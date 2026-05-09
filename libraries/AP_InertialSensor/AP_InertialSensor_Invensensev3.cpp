@@ -136,7 +136,8 @@ extern const AP_HAL::HAL& hal;
 #define INV3_ID_ICM40605      0x33
 #define INV3_ID_ICM40609      0x3b
 #define INV3_ID_ICM42605      0x42
-#define INV3_ID_ICM42688      0x47
+#define INV3_ID_ICM42688_P    0x47
+#define INV3_ID_ICM42688_V    0xDB
 #define INV3_ID_IIM42652      0x6f
 #define INV3_ID_IIM42653      0x56
 #define INV3_ID_ICM42670      0x67
@@ -1002,13 +1003,13 @@ void AP_InertialSensor_Invensensev3::set_filter_and_scaling_icm456xy(void)
 bool AP_InertialSensor_Invensensev3::check_whoami(void)
 {
     uint8_t whoami = register_read(INV3REG_WHOAMI);
-    rt_kprintf("[Invensensev3] whoami=0x%02X\n", (unsigned)whoami);
 
     switch (whoami) {
     case INV3_ID_ICM40609:
         inv3_type = Invensensev3_Type::ICM40609;
         return true;
-    case INV3_ID_ICM42688:
+    case INV3_ID_ICM42688_P:
+    case INV3_ID_ICM42688_V:
         inv3_type = Invensensev3_Type::ICM42688;
         return true;
     case INV3_ID_ICM42605:

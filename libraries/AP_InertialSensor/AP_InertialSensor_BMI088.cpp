@@ -195,12 +195,6 @@ bool AP_InertialSensor_BMI088::setup_accel_config(void)
 /*
   probe and initialise accelerometer
  */
-/* BMI088 debug — separate from BMI055 */
-volatile uint32_t rtt_dbg_bmi088_accel_chipid = 0xDE;
-volatile uint32_t rtt_dbg_bmi088_gyro_chipid = 0xDE;
-volatile uint32_t rtt_dbg_bmi088_accel_read_ok = 0;
-volatile uint32_t rtt_dbg_bmi088_gyro_read_ok = 0;
-
 bool AP_InertialSensor_BMI088::accel_init()
 {
     WITH_SEMAPHORE(dev_accel->get_semaphore());
@@ -211,27 +205,21 @@ bool AP_InertialSensor_BMI088::accel_init()
     read_accel_registers(REGA_CHIPID, &v, 1);
 
     if (!read_accel_registers(REGA_CHIPID, &v, 1)) {
-        rt_kprintf("[BMI088] accel read_accel_registers FAILED\n");
         return false;
     }
-
-    rtt_dbg_bmi088_accel_read_ok = 1;
-    rtt_dbg_bmi088_accel_chipid = v;
-    rt_kprintf("[BMI088] accel chipid=0x%02X (expect 0x1E)\n", (unsigned)v);
 
     switch (v) {
         case 0x1E:
             _accel_devtype = DEVTYPE_INS_BMI088;
             accel_range = 24.0;
-            rt_kprintf("[BMI088] Found BMI088 accel\n");
+            hal.console->printf("BMI088: Found device\n");
             break;
         case 0x1F:
             _accel_devtype = DEVTYPE_INS_BMI085;
             accel_range = 16.0;
-            rt_kprintf("[BMI088] Found BMI085 accel\n");
+            hal.console->printf("BMI085: Found device\n");
             break;
         default:
-            rt_kprintf("[BMI088] accel chipid 0x%02X not recognized\n", (unsigned)v);
             return false;
     }
 
@@ -252,12 +240,7 @@ bool AP_InertialSensor_BMI088::gyro_init()
     WITH_SEMAPHORE(dev_gyro->get_semaphore());
 
     uint8_t v;
-    bool gyro_read_ok = dev_gyro->read_registers(REGG_CHIPID, &v, 1);
-    rtt_dbg_bmi088_gyro_chipid = v;
-    rtt_dbg_bmi088_gyro_read_ok = gyro_read_ok ? 1 : 0;
-    rt_kprintf("[BMI088] gyro chipid=0x%02X read_ok=%d (expect 0x0F)\n",
-               (unsigned)v, (int)gyro_read_ok);
-    if (!gyro_read_ok || v != 0x0F) {
+    if (!dev_gyro->read_registers(REGG_CHIPID, &v, 1) || v != 0x0F) {
         return false;
     }
 

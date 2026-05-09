@@ -113,8 +113,9 @@ void AP_Scheduler::init(const AP_Scheduler::Task *tasks, uint8_t num_tasks, uint
         _loop_rate_hz.set(2000);
     }
     _last_loop_time_s = 1.0 / _loop_rate_hz;
-    // at least on SITL the lazy initialization of these gets called early
-    // make sure they reflect the current values of _loop_rate_hz
+
+    // These variables are initialized only here in scheduler::init()
+    // These are also defensively initialized in the getter functions to catch initialization order issues.
     _loop_period_us = 1000000UL / _loop_rate_hz;
     _loop_period_s = 1.0f / _loop_rate_hz;
     _active_loop_rate_hz = _loop_rate_hz;
@@ -332,10 +333,6 @@ uint16_t AP_Scheduler::time_available_usec(void) const
  */
 float AP_Scheduler::load_average()
 {
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-    extern volatile uint32_t rtt_cpu_idle_pct;
-    return constrain_float(1.0f - rtt_cpu_idle_pct / 100.0f, 0.0f, 1.0f);
-#else
     // return 1 if filtered main loop rate is 5% below the configured rate
     if (get_filtered_loop_rate_hz() < get_loop_rate_hz() * 0.95) {
         return 1.0;
@@ -346,7 +343,6 @@ float AP_Scheduler::load_average()
     const uint32_t loop_us = get_loop_period_us();
     const uint32_t used_time = loop_us - (_spare_micros/_spare_ticks);
     return constrain_float(used_time / (float)loop_us, 0, 1);
-#endif
 }
 
 void AP_Scheduler::loop()

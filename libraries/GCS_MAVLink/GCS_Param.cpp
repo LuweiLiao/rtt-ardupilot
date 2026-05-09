@@ -28,11 +28,8 @@
 extern const AP_HAL::HAL& hal;
 
 // queue of pending parameter requests and replies
-// Use thread-safe ObjectBuffer_TS because param_io_timer runs in a
-// separate IO thread on RT-Thread (and ChibiOS), racing with pushes
-// from the main thread in handle_param_request_read.
-ObjectBuffer_TS<GCS_MAVLINK::pending_param_request> GCS_MAVLINK::param_requests(20);
-ObjectBuffer_TS<GCS_MAVLINK::pending_param_reply> GCS_MAVLINK::param_replies(5);
+ObjectBuffer<GCS_MAVLINK::pending_param_request> GCS_MAVLINK::param_requests(20);
+ObjectBuffer<GCS_MAVLINK::pending_param_reply> GCS_MAVLINK::param_replies(5);
 
 bool GCS_MAVLINK::param_timer_registered;
 
@@ -223,9 +220,6 @@ void GCS_MAVLINK::handle_param_request_list(const mavlink_message_t &msg)
     _queued_parameter_index = 0;
     _queued_parameter_count = AP_Param::count_parameters();
     _queued_parameter_send_time_ms = AP_HAL::millis(); // avoid initial flooding
-
-    // Ensure MSG_NEXT_PARAM is scheduled even if _PARAMS stream rate is 0
-    send_message(MSG_NEXT_PARAM);
 }
 
 void GCS_MAVLINK::handle_param_request_read(const mavlink_message_t &msg)
@@ -237,29 +231,6 @@ void GCS_MAVLINK::handle_param_request_read(const mavlink_message_t &msg)
     
     mavlink_param_request_read_t packet;
     mavlink_msg_param_request_read_decode(&msg, &packet);
-
-    // Direct send: bypass the broken async IO pipeline on AP_HAL_RTT
-    {
-        AP_Param *vp;
-        AP_Param::ParamToken token {};
-        enum ap_var_type p_type;
-        char param_name[AP_MAX_NAME_SIZE+1] {};
-
-        if (packet.param_index != -1) {
-            vp = AP_Param::find_by_index(packet.param_index, &p_type, &token);
-            if (vp != nullptr) {
-                vp->copy_name_token(token, param_name, AP_MAX_NAME_SIZE, true);
-            }
-        } else {
-            strncpy(param_name, packet.param_id, AP_MAX_NAME_SIZE);
-            vp = AP_Param::find(param_name, &p_type);
-        }
-
-        if (vp != nullptr) {
-            param_name[AP_MAX_NAME_SIZE] = 0;
-            send_parameter_value(param_name, p_type, vp->cast_to_float(p_type));
-        }
-    }
 
     /*
       we reserve some space for sending parameters if the client ever
@@ -274,6 +245,8 @@ void GCS_MAVLINK::handle_param_request_read(const mavlink_message_t &msg)
     }
 
     struct pending_param_request req;
+    req.src_system_id = msg.sysid;
+    req.src_component_id = msg.compid;
     req.chan = chan;
     req.param_index = packet.param_index;
     memcpy(req.param_name, packet.param_id, MIN(sizeof(packet.param_id), sizeof(req.param_name)));
@@ -281,9 +254,6 @@ void GCS_MAVLINK::handle_param_request_read(const mavlink_message_t &msg)
 
     // queue it for processing by io timer
     param_requests.push(req);
-
-    // ensure the deferred message loop will drain async replies:
-    send_message(MSG_NEXT_PARAM);
 
     // speaking of which, we'd best make sure it is running:
     if (!param_timer_registered) {
@@ -307,7 +277,12 @@ void GCS_MAVLINK::handle_param_set(const mavlink_message_t &msg)
     // find existing param so we can get the old value
     uint16_t parameter_flags = 0;
     vp = AP_Param::find(key, &var_type, &parameter_flags);
-    if (vp == nullptr || isnan(packet.param_value) || isinf(packet.param_value)) {
+    if (vp == nullptr) {
+        send_param_error(msg, packet, MAV_PARAM_ERROR_DOES_NOT_EXIST);
+        return;
+    }
+    if (isnan(packet.param_value) || isinf(packet.param_value)) {
+        send_param_error(msg, packet, MAV_PARAM_ERROR_VALUE_OUT_OF_RANGE);
         return;
     }
 
@@ -320,6 +295,7 @@ void GCS_MAVLINK::handle_param_set(const mavlink_message_t &msg)
         // the value instead of us.
         if (gcs().get_allow_param_set()) {
             GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "Param write denied (%s)", key);
+            send_param_error(msg, packet, MAV_PARAM_ERROR_PERMISSION_DENIED);
         }
         // send the readonly value
         send_parameter_value(key, var_type, old_value);
@@ -351,16 +327,13 @@ void GCS_MAVLINK::handle_param_set(const mavlink_message_t &msg)
         logger->Write_Parameter(key, vp->cast_to_float(var_type));
     }
 #endif
-
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-    // RTT: direct send — the async IO pipeline is broken on RTT
-    send_parameter_value(key, var_type, vp->cast_to_float(var_type));
-#endif
 }
 
 void GCS_MAVLINK::send_parameter_value(const char *param_name, ap_var_type param_type, float param_value)
 {
-    // RTT HAL: skip HAVE_PAYLOAD_SPACE — drain-before-write handles flow control
+    if (!HAVE_PAYLOAD_SPACE(chan, PARAM_VALUE)) {
+        return;
+    }
     mavlink_msg_param_value_send(
         chan,
         param_name,
@@ -423,26 +396,73 @@ void GCS_MAVLINK::param_io_timer(void)
     if (req.param_index != -1) {
         AP_Param::ParamToken token {};
         vp = AP_Param::find_by_index(req.param_index, &reply.p_type, &token);
-        if (vp == nullptr) {
-            return;
+        if (vp != nullptr) {
+            vp->copy_name_token(token, reply.param_name, AP_MAX_NAME_SIZE, true);
+        } else {
+            memset(reply.param_name, '\0', sizeof(reply.param_name));
         }
-        vp->copy_name_token(token, reply.param_name, AP_MAX_NAME_SIZE, true);
     } else {
         strncpy(reply.param_name, req.param_name, AP_MAX_NAME_SIZE+1);
         vp = AP_Param::find(req.param_name, &reply.p_type);
-        if (vp == nullptr) {
-            return;
-        }
     }
 
     reply.chan = req.chan;
+    reply.src_system_id = req.src_system_id;
+    reply.src_component_id = req.src_component_id;
     reply.param_name[AP_MAX_NAME_SIZE] = 0;
-    reply.value = vp->cast_to_float(reply.p_type);
+    if (vp != nullptr) {
+        reply.value = vp->cast_to_float(reply.p_type);
+        reply.param_error = MAV_PARAM_ERROR_NO_ERROR;
+    } else {
+        reply.value = NaNf;
+        reply.param_error = MAV_PARAM_ERROR_DOES_NOT_EXIST;
+    }
     reply.param_index = req.param_index;
     reply.count = AP_Param::count_parameters();
 
     // queue for transmission
     param_replies.push(reply);
+}
+
+/*
+  A variant of send_param_error which sends based off the received mavlink message information
+ */
+void GCS_MAVLINK::send_param_error(const mavlink_message_t &msg, const mavlink_param_set_t &param_set, MAV_PARAM_ERROR error)
+{
+    if (!HAVE_PAYLOAD_SPACE(chan, PARAM_ERROR)) {
+        return;
+    }
+    char param_id[MAVLINK_MSG_PARAM_ERROR_FIELD_PARAM_ID_LEN] {};
+    strncpy_noterm(param_id, param_set.param_id, ARRAY_SIZE(param_id));
+    mavlink_msg_param_error_send(
+        chan,
+        msg.sysid,
+        msg.compid,
+        param_id,
+        -1,
+        error
+        );
+}
+
+/*
+  A variant of send_param_error which is sent based on what the
+  parameter set thread returns
+ */
+void GCS_MAVLINK::send_param_error(const GCS_MAVLINK::pending_param_reply &reply, MAV_PARAM_ERROR error)
+{
+    if (!HAVE_PAYLOAD_SPACE(chan, PARAM_ERROR)) {
+        return;
+    }
+    char param_id[MAVLINK_MSG_PARAM_ERROR_FIELD_PARAM_ID_LEN] {};
+    strncpy_noterm(param_id, reply.param_name, ARRAY_SIZE(param_id));
+    mavlink_msg_param_error_send(
+        chan,
+        reply.src_system_id,
+        reply.src_component_id,
+        param_id,
+        reply.param_index,
+        error
+        );
 }
 
 /*
@@ -458,19 +478,37 @@ uint8_t GCS_MAVLINK::send_parameter_async_replies()
             return async_replies_sent_count;
         }
 
+        uint16_t required_space;
+        if (reply.param_error == MAV_PARAM_ERROR_NO_ERROR) {
+            required_space = PAYLOAD_SIZE(chan, PARAM_VALUE);
+        } else {
+            required_space = PAYLOAD_SIZE(chan, PARAM_ERROR);
+        }
+
         /*
           we reserve some space for sending parameters if the client ever
           fails to get a parameter due to lack of space
         */
-        // RTT HAL: skip HAVE_PAYLOAD_SPACE check — queued_param_send handles throttling
+        uint32_t saved_reserve_param_space_start_ms = reserve_param_space_start_ms;
+        reserve_param_space_start_ms = 0; // bypass packet_overhead_chan reservation checking
+        if (txspace() < required_space) {
+            out_of_space_to_send();
+            reserve_param_space_start_ms = AP_HAL::millis();
+            return async_replies_sent_count;
+        }
+        reserve_param_space_start_ms = saved_reserve_param_space_start_ms;
 
-        mavlink_msg_param_value_send(
-            reply.chan,
-            reply.param_name,
-            reply.value,
-            mav_param_type(reply.p_type),
-            reply.count,
-            reply.param_index);
+        if (reply.param_error == MAV_PARAM_ERROR_NO_ERROR) {
+            mavlink_msg_param_value_send(
+                reply.chan,
+                reply.param_name,
+                reply.value,
+                mav_param_type(reply.p_type),
+                reply.count,
+                reply.param_index);
+        } else {
+            send_param_error(reply, reply.param_error);
+        }
 
         _queued_parameter_send_time_ms = AP_HAL::millis();
         async_replies_sent_count++;
