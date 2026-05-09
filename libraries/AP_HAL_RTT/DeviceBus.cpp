@@ -1,14 +1,14 @@
 /*
- * AP_HAL_RTT — DeviceBus: per-bus callback threads with static allocation
+ * AP_HAL_RTT — DeviceBus: per-bus callback threads with heap-allocated stacks
  *
  * Per-bus threads (one per physical SPI/I2C bus) dispatch callbacks by
- * micros64() timestamps.  Each thread uses a static stack buffer and
- * rt_thread_init (no heap) to avoid rt_thread_create heap exhaustion.
+ * micros64() timestamps.  Each thread stack is lazily heap-allocated via
+ * rt_malloc on first use, reducing BSS footprint vs. static arrays.
  *
  * Bus-level exclusive access: each DeviceBus has its own Semaphore,
  * taken before each callback dispatch.
  *
- * Max 8 buses supported (MAX_BUSES).  All static buffers allocated up front.
+ * Max 8 buses supported (MAX_BUSES).  Stacks allocated on demand.
  */
 
 #include "DeviceBus.h"
@@ -24,11 +24,13 @@ namespace RTT
 DeviceBus *DeviceBus::_buses[MAX_BUSES] = {};
 
 /* ------------------------------------------------------------------
- *  Per-bus thread: static thread objects + stacks (no heap)
+ *  Per-bus thread: static thread objects, heap-allocated stacks
  *  Threads are started lazily on first register_periodic_callback.
+ *  Each stack is rt_malloc'd on demand (8 KB) and never freed.
  * ------------------------------------------------------------------ */
 static struct rt_thread _bus_thread_objs[DeviceBus::MAX_BUSES];
-static char _bus_thread_stacks[DeviceBus::MAX_BUSES][6144];
+static char *_bus_thread_stacks[DeviceBus::MAX_BUSES] = {nullptr};
+static const unsigned BUS_STACK_SIZE = 8192;
 static bool _bus_thread_inited[DeviceBus::MAX_BUSES] = {false};
 
 void DeviceBus::_bus_thread_entry(void *arg)
@@ -145,9 +147,19 @@ AP_HAL::Device::PeriodicHandle DeviceBus::register_periodic_callback(
             return nullptr;
         }
 
+        /* Allocate stack for this slot on first use */
+        if (!_bus_thread_stacks[slot]) {
+            _bus_thread_stacks[slot] = (char *)rt_malloc(BUS_STACK_SIZE);
+            if (!_bus_thread_stacks[slot]) {
+                rt_kprintf("DeviceBus: failed to allocate %u-byte stack for slot %d\n",
+                           BUS_STACK_SIZE, slot);
+                return nullptr;
+            }
+        }
+
         rt_thread_init(&_bus_thread_objs[slot], name,
                        _bus_thread_entry, this,
-                       _bus_thread_stacks[slot], sizeof(_bus_thread_stacks[slot]),
+                       _bus_thread_stacks[slot], BUS_STACK_SIZE,
                        prio, 20);
         rt_thread_startup(&_bus_thread_objs[slot]);
         _bus_thread_inited[slot] = true;

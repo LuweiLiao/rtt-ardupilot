@@ -48,6 +48,9 @@ static void _spi1_gpio_init(void)
     GPIOF->MODER = (GPIOF->MODER & ~(3U << 6)) | (1U << 6);  /* PF3 OUT */
     GPIOF->MODER = (GPIOF->MODER & ~(3U << 8)) | (1U << 8);  /* PF4 OUT */
     GPIOF->BSRR = (1U << 2) | (1U << 3) | (1U << 4);         /* set HIGH */
+    /* PG10 BMI055 accel CS (spi14, cs_pin=106): OUTPUT, INITIAL STATE HIGH */
+    GPIOG->MODER = (GPIOG->MODER & ~(3U << 20)) | (1U << 20);
+    GPIOG->BSRR = (1U << 10);                                 /* set PG10 HIGH */
 }
 
 /* STM32F7 SPI4 GPIO pin configuration (register-level).
