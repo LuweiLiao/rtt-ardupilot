@@ -28,7 +28,7 @@ DeviceBus *DeviceBus::_buses[MAX_BUSES] = {};
  *  Threads are started lazily on first register_periodic_callback.
  * ------------------------------------------------------------------ */
 static struct rt_thread _bus_thread_objs[DeviceBus::MAX_BUSES];
-static char _bus_thread_stacks[DeviceBus::MAX_BUSES][8192];
+static char _bus_thread_stacks[DeviceBus::MAX_BUSES][6144];
 static bool _bus_thread_inited[DeviceBus::MAX_BUSES] = {false};
 
 void DeviceBus::_bus_thread_entry(void *arg)
