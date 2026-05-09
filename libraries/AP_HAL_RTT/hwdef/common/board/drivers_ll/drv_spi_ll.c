@@ -23,12 +23,12 @@ const spi_ll_config_t spi1_ll_cfg = {
 
 const spi_ll_config_t spi4_ll_cfg = {
     .Instance       = SPI4,
-    .sck_port_idx   = 4,  /* PE12 */
-    .sck_pin_no     = 12,
+    .sck_port_idx   = 4,  /* PE2 */
+    .sck_pin_no     = 2,
     .miso_port_idx  = 4,  /* PE13 */
     .miso_pin_no    = 13,
-    .mosi_port_idx  = 4,  /* PE14 */
-    .mosi_pin_no    = 14,
+    .mosi_port_idx  = 4,  /* PE6 */
+    .mosi_pin_no    = 6,
     .af             = 5,
     .mode           = 3,  /* CPOL=1, CPHA=1 */
     .prescaler      = 3,  /* /16 → APB2 108MHz/16 = 6.75MHz */

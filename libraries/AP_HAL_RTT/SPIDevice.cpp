@@ -49,6 +49,44 @@ static void _spi1_gpio_init(void)
     GPIOF->MODER = (GPIOF->MODER & ~(3U << 8)) | (1U << 8);  /* PF4 OUT */
     GPIOF->BSRR = (1U << 2) | (1U << 3) | (1U << 4);         /* set HIGH */
 }
+
+/* STM32F7 SPI4 GPIO pin configuration (register-level).
+ * Used for MS5611 barometer (and optionally external SPI devices).
+ * Called once, then guarded by _spi4_gpio_init_done.
+ *
+ * Pinout (CUAV V5, from hwdef.dat):
+ *   PE2=SCK(AF5), PE13=MISO(AF5), PE6=MOSI(AF5)
+ *   PF10=MS5611_CS */
+static bool _spi4_gpio_init_done = false;
+static void _spi4_gpio_init(void)
+{
+    if (_spi4_gpio_init_done) return;
+
+    /* Enable GPIO clocks for PORTE and PORTF */
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOEEN | RCC_AHB1ENR_GPIOFEN;
+    (void)RCC->AHB1ENR;
+    /* Ensure SPI4 peripheral clock is enabled (APB2) */
+    RCC->APB2ENR |= RCC_APB2ENR_SPI4EN;
+    (void)RCC->APB2ENR;
+
+    /* PE2 SPI4_SCK: MODE=AF(10), AF=AF5(0101) */
+    GPIOE->MODER = (GPIOE->MODER & ~(3U << 4)) | (2U << 4);
+    GPIOE->AFR[0] = (GPIOE->AFR[0] & ~(0xFU << 8)) | (5U << 8);
+
+    /* PE13 SPI4_MISO: MODE=AF(10), AF=AF5(0101) */
+    GPIOE->MODER = (GPIOE->MODER & ~(3U << 26)) | (2U << 26);
+    GPIOE->AFR[1] = (GPIOE->AFR[1] & ~(0xFU << 20)) | (5U << 20);
+
+    /* PE6 SPI4_MOSI: MODE=AF(10), AF=AF5(0101) */
+    GPIOE->MODER = (GPIOE->MODER & ~(3U << 12)) | (2U << 12);
+    GPIOE->AFR[0] = (GPIOE->AFR[0] & ~(0xFU << 24)) | (5U << 24);
+
+    /* PF10 MS5611_CS: OUTPUT, INITIAL STATE HIGH */
+    GPIOF->MODER = (GPIOF->MODER & ~(3U << 20)) | (1U << 20);
+    GPIOF->BSRR = (1U << 10);  /* set PF10 HIGH */
+
+    _spi4_gpio_init_done = true;
+}
 #endif
 
 using namespace RTT;
@@ -323,7 +361,11 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
 {
 #ifdef SOC_SERIES_STM32F7
     if (_dev == nullptr) {
-        _spi1_gpio_init();
+        if (_desc.bus == 4) {
+            _spi4_gpio_init();
+        } else {
+            _spi1_gpio_init();
+        }
         if (send_len > 0 || recv_len > 0) {
             bool need_sem = !_cs_held;
             if (need_sem && !_sem.take(HAL_SEMAPHORE_BLOCK_FOREVER)) return false;
@@ -448,7 +490,11 @@ bool SPIDevice::set_chip_select(bool set)
              * transfer_fullduplex() calls with cs_take=false happen while
              * CS is asserted, enabling multi-byte burst reads (e.g.
              * ICM20689 112-byte FIFO read). */
-            _spi1_gpio_init();
+            if (_desc.bus == 4) {
+                _spi4_gpio_init();
+            } else {
+                _spi1_gpio_init();
+            }
             rt_base_t cs = (_cs_pin != 0) ? _cs_pin : 0;
             if (cs != 0) {
                 uint32_t port_idx = cs >> 4;
@@ -490,7 +536,11 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
 {
     if (_dev == nullptr) {
 #ifdef SOC_SERIES_STM32F7
-        _spi1_gpio_init();
+        if (_desc.bus == 4) {
+            _spi4_gpio_init();
+        } else {
+            _spi1_gpio_init();
+        }
         if (len > 0) {
             return spi1_poll_transfer(nullptr, send, len, recv, len,
                                       !_cs_held, !_cs_held, bus_to_spi(_desc.bus), _cs_pin);

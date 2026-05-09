@@ -207,31 +207,25 @@ static void _spi_lld_board_init(void)
 
 void rt_hw_board_init(void)
 {
-    rt_kprintf("[BOARD-INIT] Starting board initialization\n");
-#ifdef FLASH_ORIGIN
-    SCB->VTOR = FLASH_ORIGIN;
-#else
     SCB->VTOR = 0x08008000U;
-#endif
+    rt_kprintf("[BOARD-INIT] Starting board initialization\n");
 
     _mpu_config();
     _fpu_context_init();
     SCB_EnableICache();
-    // SCB_EnableDCache();  // Disabled: USB DWC2 DMA coherency issues on STM32F7
+    // SCB_EnableDCache();
 
-    /* Minimal HAL_Init() equivalent — direct register operations */
     FLASH->ACR |= FLASH_ACR_ARTEN | FLASH_ACR_PRFTEN;
-    NVIC_SetPriorityGrouping(3U);  /* PRIGROUP=3 → 4-bit preemption (same as HAL NVIC_PRIORITYGROUP_4) */
+    NVIC_SetPriorityGrouping(3U);
 
     SystemClock_Config();
-    rt_hw_systick_init();
-    rt_hw_pin_init();
-    rt_hw_usart_init();
 
-    /* GPIO power pins moved to _sensor_power_init (INIT_PREV_EXPORT) —
-     * DCache interference causes MODER writes at this early stage to be
-     * lost when HAL_SPI_MspInit later does read-modify-write on the same
-     * GPIO port (e.g. SPI4 HAL_GPIO_Init on GPIOE clobbers PE3). */
+    /* SAFE: SysTick NULL guard in SysTick_Handler */
+    rt_hw_systick_init();
+
+    rt_hw_pin_init();
+
+    /* USART skip: rt_hw_usart_init() not implemented in STM32 drv_usart.c */
 
 #ifdef RT_USING_HEAP
     rt_system_heap_init(HEAP_BEGIN, HEAP_END);
@@ -241,8 +235,7 @@ void rt_hw_board_init(void)
     rt_console_set_device(RT_CONSOLE_DEVICE_NAME);
 #endif
 
-    /* Register SPI LLD contexts before rt_components_board_init() so that
-     * rt_hw_spi_init() (INIT_BOARD_EXPORT) finds them. */
+    /* SPI LLD contexts (DMA) */
 #ifdef SOC_SERIES_STM32F7
 #if (defined(BSP_USING_SPI1) && defined(BSP_SPI1_TX_USING_DMA) && defined(BSP_SPI1_RX_USING_DMA)) || \
     (defined(BSP_USING_SPI4) && defined(BSP_SPI4_TX_USING_DMA) && defined(BSP_SPI4_RX_USING_DMA))
@@ -250,60 +243,49 @@ void rt_hw_board_init(void)
 #endif
 #endif
 
+    /* Init SPI buses + I2C via INIT_BOARD_EXPORT table */
     rt_kprintf("[BOARD-INIT] Calling rt_components_board_init()\n");
 #ifdef RT_USING_COMPONENTS_INIT
     rt_components_board_init();
 #endif
 
-    /* Workaround: SPI1 MOSI (PB5) MODER gets reset to INPUT by a subsequent
-     * HAL_GPIO_Init on the same GPIO port (GPIOB). The STM32F7 HAL performs
-     * read-modify-write on MODER/AFR and the write may be lost if another
-     * caller touches the same register concurrently or in a later init step.
-     * Force PB5 back to AF mode here, and ensure PG9 (MISO) is also AF,
-     * after all board init is done. */
+    /* === CUAV V5 register-level GPIO/clock fixes === */
+
 #ifdef BSP_USING_SPI1
-    {
-        volatile uint32_t *moder_b = (volatile uint32_t *)0x40020400; /* GPIOB */
-        uint32_t m = *moder_b;
-        m &= ~(3U << 10);  /* clear PB5 MODER bits */
-        m |= (2U << 10);   /* set AF mode */
-        *moder_b = m;
-        /* PG9 MISO — force AF mode */
-        volatile uint32_t *moder_g = (volatile uint32_t *)0x40021800; /* GPIOG */
-        m = *moder_g;
-        m &= ~(3U << 18);  /* clear PG9 MODER bits */
-        m |= (2U << 18);   /* set AF mode */
-        *moder_g = m;
-        volatile uint32_t *afr_g = (volatile uint32_t *)(0x40021800 + 0x24); /* GPIOG AFR[1] */
-        m = *afr_g;
-        m &= ~(0xFU << 4); /* clear PG9 AF bits */
-        m |= (5U << 4);    /* AF5 */
-        *afr_g = m;
-    }
-    /* Force SPI1 clock on — HAL_SPI_MspInit may not be reached if
-     * rt_hw_spi_init() fails or SPI device registration is incomplete.
-     * Without SPI1 clock, all IMU sensor reads return 0xFFFF. */
+    /* SPI1: PA6(MISO,AF5) PD7(MOSI,AF5) PG11(SCK,AF5)
+     * Force clock on, MODER=AF2, AFR=AF5 */
     RCC->APB2ENR |= RCC_APB2ENR_SPI1EN;
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIODEN;
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOGEN;
+    (void)RCC->AHB1ENR;
+    /* PA6=MISO(AF5) */
+    GPIOA->MODER = (GPIOA->MODER & ~(3U << 12)) | (2U << 12);
+    GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << 24)) | (5U << 24);
+    /* PD7=MOSI(AF5) */
+    GPIOD->MODER = (GPIOD->MODER & ~(3U << 14)) | (2U << 14);
+    GPIOD->AFR[0] = (GPIOD->AFR[0] & ~(0xFU << 28)) | (5U << 28);
+    /* PG11=SCK(AF5) */
+    GPIOG->MODER = (GPIOG->MODER & ~(3U << 22)) | (2U << 22);
+    GPIOG->AFR[1] = (GPIOG->AFR[1] & ~(0xFU << 12)) | (5U << 12);
 #endif
+
 #ifdef BSP_USING_SPI4
-    /* SPI4 GPIO — CUAV V5: PE12(SCK), PE13(MISO), PE14(MOSI), PF10(CS).
-     * Both the CubeMX HAL_SPI_MspInit and AP_HAL_RTT drv_spi_ll init
-     * go through this register-level IO, so we force-correct it here
-     * regardless of which init path is taken. */
+    /* SPI4: PE2(SCK,AF5) PE13(MISO,AF5) PE6(MOSI,AF5) PF10(MS5611 CS,OUTPUT) */
     RCC->APB2ENR |= RCC_APB2ENR_SPI4EN;
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOEEN;
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOFEN;
     (void)RCC->AHB1ENR;
-    /* PE12=SCK(AF5): MODER=AF, AFR[1]=AF5 */
-    GPIOE->MODER = (GPIOE->MODER & ~(3U << 24)) | (2U << 24);
-    GPIOE->AFR[1] = (GPIOE->AFR[1] & ~(0xFU << 16)) | (5U << 16);
+    /* PE2=SCK(AF5) */
+    GPIOE->MODER = (GPIOE->MODER & ~(3U << 4)) | (2U << 4);
+    GPIOE->AFR[0] = (GPIOE->AFR[0] & ~(0xFU << 8)) | (5U << 8);
     /* PE13=MISO(AF5) */
     GPIOE->MODER = (GPIOE->MODER & ~(3U << 26)) | (2U << 26);
     GPIOE->AFR[1] = (GPIOE->AFR[1] & ~(0xFU << 20)) | (5U << 20);
-    /* PE14=MOSI(AF5) */
-    GPIOE->MODER = (GPIOE->MODER & ~(3U << 28)) | (2U << 28);
-    GPIOE->AFR[1] = (GPIOE->AFR[1] & ~(0xFU << 24)) | (5U << 24);
-    /* MS5611 CS (PF10): OUTPUT HIGH */
+    /* PE6=MOSI(AF5) */
+    GPIOE->MODER = (GPIOE->MODER & ~(3U << 12)) | (2U << 12);
+    GPIOE->AFR[0] = (GPIOE->AFR[0] & ~(0xFU << 24)) | (5U << 24);
+    /* PF10=CS (MS5611): OUTPUT HIGH */
     GPIOF->MODER = (GPIOF->MODER & ~(3U << 20)) | (1U << 20);
     GPIOF->BSRR = (1U << 10);
 #endif
