@@ -225,11 +225,36 @@ static bool spi1_poll_transfer(struct rt_spi_device *dev,
     }
 
     for (uint32_t i = 0; i < total_len; i++) {
-        uint32_t timeout = 10000;
+        uint32_t timeout = 100000;
         while (!(spi->SR & SPI_SR_TXE) && --timeout) { __NOP(); }
+        if (timeout == 0) {
+            if (cs_release) {
+                rt_base_t cs = (cs_pin != 0) ? cs_pin : dev->cs_pin;
+                uint32_t port_idx = cs >> 4;
+                uint32_t pin = cs & 0xF;
+                *(volatile uint32_t *)(0x40020000U + port_idx * 0x400U + 0x18U) = 1U << pin;
+            }
+            CLEAR_BIT(spi->CR1, SPI_CR1_SPE);
+            while (spi->SR & SPI_SR_RXNE) { (void)(*(__IO uint8_t *)&spi->DR); }
+            if (heap) { rt_free_align(buf); }
+            return false;
+        }
         *((__IO uint8_t *)&spi->DR) = buf[i];
-        timeout = 10000;
+        timeout = 100000;
         while (!(spi->SR & SPI_SR_RXNE) && --timeout) { __NOP(); }
+        if (timeout == 0) {
+            (void)*((__IO uint8_t *)&spi->DR); // drain DR
+            if (cs_release) {
+                rt_base_t cs = (cs_pin != 0) ? cs_pin : dev->cs_pin;
+                uint32_t port_idx = cs >> 4;
+                uint32_t pin = cs & 0xF;
+                *(volatile uint32_t *)(0x40020000U + port_idx * 0x400U + 0x18U) = 1U << pin;
+            }
+            CLEAR_BIT(spi->CR1, SPI_CR1_SPE);
+            while (spi->SR & SPI_SR_RXNE) { (void)(*(__IO uint8_t *)&spi->DR); }
+            if (heap) { rt_free_align(buf); }
+            return false;
+        }
         buf[i] = *((__IO uint8_t *)&spi->DR);
     }
 
