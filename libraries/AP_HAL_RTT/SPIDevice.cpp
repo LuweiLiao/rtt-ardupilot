@@ -386,10 +386,16 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
 {
 #ifdef SOC_SERIES_STM32F7
     if (_dev == nullptr) {
-        if (_desc.bus == 4) {
-            _spi4_gpio_init();
-        } else {
-            _spi1_gpio_init();
+        /* Skip GPIO re-init during CS-held burst reads.
+         * _spi1_gpio_init() sets ALL CS pins HIGH, which would
+         * inadvertently release CS mid-transaction, causing the
+         * IMU slave to abort the burst and return all-zero data. */
+        if (!_cs_held) {
+            if (_desc.bus == 4) {
+                _spi4_gpio_init();
+            } else {
+                _spi1_gpio_init();
+            }
         }
         if (send_len > 0 || recv_len > 0) {
             bool need_sem = !_cs_held;
@@ -561,10 +567,14 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
 {
     if (_dev == nullptr) {
 #ifdef SOC_SERIES_STM32F7
-        if (_desc.bus == 4) {
-            _spi4_gpio_init();
-        } else {
-            _spi1_gpio_init();
+        /* Skip GPIO re-init during CS-held burst reads.
+         * See transfer() for detailed rationale. */
+        if (!_cs_held) {
+            if (_desc.bus == 4) {
+                _spi4_gpio_init();
+            } else {
+                _spi1_gpio_init();
+            }
         }
         if (len > 0) {
             return spi1_poll_transfer(nullptr, send, len, recv, len,
