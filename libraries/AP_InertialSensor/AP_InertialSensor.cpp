@@ -1934,6 +1934,28 @@ void AP_InertialSensor::update(void)
             }
         }
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        // RTT porting: error counts are monotonically increasing in ArduPilot
+        // but SPI transient issues (bus hangs, DMA timeouts) can cause
+        // check_next_register() failures that accumulate error counts.
+        // Since error counts never decrease, once elevated they cause the
+        // relative health comparison below to permanently mark sensors unhealthy
+        // even after the underlying SPI issue is fixed.
+        // Fix: decay error counts for sensors that are successfully publishing
+        // data. This allows error counts to drain back to startup_error_count
+        // levels after transient issues are resolved.
+        // Decay rate: ~400Hz drain vs ~20Hz register check failures means
+        // error counts will trend downward even with occasional failures.
+        for (uint8_t i=0; i<INS_MAX_INSTANCES; i++) {
+            if (_gyro_healthy[i] && _gyro_error_count[i] > 0) {
+                _gyro_error_count[i]--;
+            }
+            if (_accel_healthy[i] && _accel_error_count[i] > 0) {
+                _accel_error_count[i]--;
+            }
+        }
+#endif
+
         for (uint8_t i=0; i<INS_MAX_INSTANCES; i++) {
             if (_accel_error_count[i] < _accel_startup_error_count[i]) {
                 _accel_startup_error_count[i] = _accel_error_count[i];

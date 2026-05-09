@@ -214,6 +214,13 @@ void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
 
     scheduler->init();
 
+    /*
+     * Init GPIO output pins (sensor power rails, etc.) BEFORE any
+     * SPI/I2C device communication.  This powers on VDD_3V3_SENSORS
+     * and other rails so IMU/Baro/USD card etc. respond on the bus.
+     */
+    hal.gpio->init();
+
     hal.serial(0)->begin(SERIAL0_BAUD);
     hal.analogin->init();
 

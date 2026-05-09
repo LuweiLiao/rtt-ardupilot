@@ -46,6 +46,98 @@ GPIO::IRQState GPIO::_irq_state[RTT_GPIO_MAX_IRQ] = {};
 
 void GPIO::init()
 {
+    /*
+     * Power-on sensor rails and other output GPIOs with INIT=1 from hwdef.h.
+     * This MUST run before any SPI/I2C sensor communication.
+     *
+     * Uses the _VALUE macros (precomputed integer pin numbers) available
+     * from hwdef.h.  _PIN macros use GET_PIN() which requires BSP headers
+     * not always in the include chain from AP_HAL code.
+     */
+    struct gpio_init_entry {
+        rt_base_t pin;
+        uint8_t   init_value;  /* 0=LOW, 1=HIGH */
+    };
+    static const gpio_init_entry init_list[] = {
+#ifdef HAL_GPIO_VDD_3V3_SENSORS_EN_VALUE
+        { HAL_GPIO_VDD_3V3_SENSORS_EN_VALUE,
+#ifdef HAL_GPIO_VDD_3V3_SENSORS_EN_INIT
+          HAL_GPIO_VDD_3V3_SENSORS_EN_INIT
+#else
+          1
+#endif
+        },
+#endif
+#ifdef HAL_GPIO_VDD_5V_RC_EN_VALUE
+        { HAL_GPIO_VDD_5V_RC_EN_VALUE,
+#ifdef HAL_GPIO_VDD_5V_RC_EN_INIT
+          HAL_GPIO_VDD_5V_RC_EN_INIT
+#else
+          1
+#endif
+        },
+#endif
+#ifdef HAL_GPIO_VDD_3V3_SD_CARD_EN_VALUE
+        { HAL_GPIO_VDD_3V3_SD_CARD_EN_VALUE,
+#ifdef HAL_GPIO_VDD_3V3_SD_CARD_EN_INIT
+          HAL_GPIO_VDD_3V3_SD_CARD_EN_INIT
+#else
+          1
+#endif
+        },
+#endif
+#ifdef HAL_GPIO_VDD_5V_WIFI_EN_VALUE
+        { HAL_GPIO_VDD_5V_WIFI_EN_VALUE,
+#ifdef HAL_GPIO_VDD_5V_WIFI_EN_INIT
+          HAL_GPIO_VDD_5V_WIFI_EN_INIT
+#else
+          1
+#endif
+        },
+#endif
+#ifdef HAL_GPIO_SPEKTRUM_PWR_VALUE
+        { HAL_GPIO_SPEKTRUM_PWR_VALUE,
+#ifdef HAL_GPIO_SPEKTRUM_PWR_INIT
+          HAL_GPIO_SPEKTRUM_PWR_INIT
+#else
+          1
+#endif
+        },
+#endif
+#ifdef HAL_GPIO_nVDD_5V_HIPOWER_EN_VALUE
+        { HAL_GPIO_nVDD_5V_HIPOWER_EN_VALUE,
+#ifdef HAL_GPIO_nVDD_5V_HIPOWER_EN_INIT
+          HAL_GPIO_nVDD_5V_HIPOWER_EN_INIT
+#else
+          1
+#endif
+        },
+#endif
+#ifdef HAL_GPIO_nVDD_5V_PERIPH_EN_VALUE
+        { HAL_GPIO_nVDD_5V_PERIPH_EN_VALUE,
+#ifdef HAL_GPIO_nVDD_5V_PERIPH_EN_INIT
+          HAL_GPIO_nVDD_5V_PERIPH_EN_INIT
+#else
+          1
+#endif
+        },
+#endif
+#ifdef HAL_GPIO_nSPI5_RESET_EXTERNAL1_VALUE
+        { HAL_GPIO_nSPI5_RESET_EXTERNAL1_VALUE,
+#ifdef HAL_GPIO_nSPI5_RESET_EXTERNAL1_INIT
+          HAL_GPIO_nSPI5_RESET_EXTERNAL1_INIT
+#else
+          1
+#endif
+        },
+#endif
+    };
+
+    for (const auto &e : init_list) {
+        rt_pin_mode(e.pin, PIN_MODE_OUTPUT);
+        rt_pin_write(e.pin, e.init_value ? PIN_HIGH : PIN_LOW);
+    }
+
     /* RGB LED GPIO (PH10/11/12) MODER is set lazily in write() on first use.
      * Cannot set it here because TIM12 HAL_GPIO_Init (stm32f7xx_hal_msp.c)
      * does read-modify-write on GPIOH->MODER AFTER this point, clobbering
