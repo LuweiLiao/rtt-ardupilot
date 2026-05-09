@@ -48,21 +48,34 @@ uint32_t Util::get_millis() const
     // Use 64-bit intermediate to avoid uint32_t overflow when
     // RT_TICK_PER_SECOND > 1000.  With 10kHz ticks the naive
     // (tick * 1000) overflows after ~429 seconds.
+#if RT_TICK_PER_SECOND == 1000
+    return (uint32_t)rt_tick_get();
+#else
     const rt_tick_t tick = rt_tick_get();
     return (uint32_t)((uint64_t)tick * 1000ULL / RT_TICK_PER_SECOND);
+#endif
 }
 
 uint64_t Util::get_micros64() const
 {
     _dwt_init();
+
+#if RT_TICK_PER_SECOND == 1000
+    const uint32_t tick_period_us = 1000U;
+#else
     const uint32_t tick_period_us = 1000000U / RT_TICK_PER_SECOND;
+#endif
 
     rt_base_t level = rt_hw_interrupt_disable();
     rt_tick_t tick = rt_tick_get();
     uint32_t cyc = DWT_CYCCNT;
     rt_hw_interrupt_enable(level);
 
+#if RT_TICK_PER_SECOND == 1000
+    uint64_t tick_us = (uint64_t)tick * 1000ULL;
+#else
     uint64_t tick_us = (uint64_t)tick * 1000000ULL / RT_TICK_PER_SECOND;
+#endif
     uint32_t sub_us = (cyc / _cpu_freq_mhz) % tick_period_us;
     return tick_us + sub_us;
 }
