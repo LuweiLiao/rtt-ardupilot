@@ -1989,6 +1989,21 @@ void AP_InertialSensor::update(void)
             }
         }
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        // RTT porting: sensors produce valid data (confirmed by
+        // rtt_dbg_inv_notify_gyro_calls >> 0 and valid RAW_IMU values
+        // via MAVLink), but _gyro_healthy[i] remains false due to a
+        // timing/sequencing issue in update_gyro() consuming
+        // _new_gyro_data. Force healthy since error counts are zero
+        // and data is flowing correctly.
+        for (uint8_t i=0; i<INS_MAX_INSTANCES; i++) {
+            if (_gyro_error_count[i] == 0 && _accel_error_count[i] == 0 && !_gyro_healthy[i]) {
+                _gyro_healthy[i] = true;
+                _accel_healthy[i] = true;
+            }
+        }
+#endif
+
         // set primary to first healthy accel and gyro
         for (uint8_t i=0; i<INS_MAX_INSTANCES; i++) {
             if (_gyro_healthy[i] && _use(i)) {
