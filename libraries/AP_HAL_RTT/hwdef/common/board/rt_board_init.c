@@ -225,7 +225,7 @@ void rt_hw_board_init(void)
 
     rt_hw_pin_init();
 
-    /* USART skip: rt_hw_usart_init() not implemented in STM32 drv_usart.c */
+    rt_hw_usart_init();
 
 #ifdef RT_USING_HEAP
     rt_system_heap_init(HEAP_BEGIN, HEAP_END);
