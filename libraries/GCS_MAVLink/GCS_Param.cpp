@@ -351,6 +351,11 @@ void GCS_MAVLINK::handle_param_set(const mavlink_message_t &msg)
         logger->Write_Parameter(key, vp->cast_to_float(var_type));
     }
 #endif
+
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    // RTT: direct send — the async IO pipeline is broken on RTT
+    send_parameter_value(key, var_type, vp->cast_to_float(var_type));
+#endif
 }
 
 void GCS_MAVLINK::send_parameter_value(const char *param_name, ap_var_type param_type, float param_value)
