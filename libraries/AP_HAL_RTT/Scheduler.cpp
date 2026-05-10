@@ -91,9 +91,11 @@ void Scheduler::_timer_thread_entry(void *arg)
 
         sched->_run_timers();
 
-        if (sched->in_expected_delay()) {
-            sched->watchdog_pat();
-        }
+        /* Feed IWDG every ms unconditionally — ChibiOS _timer_thread
+         * does NOT gate pat() on in_expected_delay().
+         * IWDG timeout is 2s, 1ms pat is well within safety margin.
+         * Safe even before IWDG is started (0xAAAA to KR when off = no-op). */
+        sched->watchdog_pat();
     }
 }
 
@@ -586,19 +588,22 @@ void Scheduler::set_system_initialized()
     }
     _initialized = true;
 
-    /* Start IWDG now that the system is fully initialized and the main loop is running.
-     * The watchdog_pat() in the timer thread will keep it fed every ms.
-     * Timeout ~10s (prescaler /256, reload 1250, LSI 32kHz).
-     * Note: once started, IWDG cannot be stopped. GDB halt will trigger reset
-     * after timeout — use "monitor reset halt" quickly or disable for deep debug.
-     *
-     * TODO: Disabled (#if 0) — IWDG caused boot loops because watchdog_pat() only runs in
-     * timer thread which may not be scheduled fast enough during init. Re-enable
-     * after verifying timer thread priority and pat timing. */
-#if 0
-    ap_rtt_iwdg_init();
+    /* Start IWDG (Independent Watchdog) — ChibiOS-style, mirrors
+     * stm32_watchdog_init() in watchdog.c:
+     *   PR=3 (prescaler /32), RLR=2047 → timeout ≈ 2s at LSI 32kHz
+     *   KR=0x5555 unlock → write PR/RLR → KR=0xCCCC start
+     * Called here (after setup() completes, before main loop) so threads,
+     * interrupts, and system clock are all running — safe to configure IWDG.
+     * Note: bootloader does NOT start IWDG on CUAV V5, so this is the
+     * only IWDG init in the system. */
+#define IWDG_KR    (*(volatile uint32_t *)0x40003000)
+#define IWDG_PR    (*(volatile uint32_t *)0x40003004)
+#define IWDG_RLR   (*(volatile uint32_t *)0x40003008)
+    IWDG_KR = 0x5555;
+    IWDG_PR = 3;         // prescaler /32
+    IWDG_RLR = 2047;     // ~2s timeout
+    IWDG_KR = 0xCCCC;    // start IWDG
     _iwdg_started = true;
-#endif
 }
 
 /* ----------------------------------------------------------------

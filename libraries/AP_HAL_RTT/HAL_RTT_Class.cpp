@@ -25,6 +25,7 @@
 #include "I2CDeviceManager.h"
 #include <AP_HAL/OpticalFlow.h>
 #include "Flash.h"
+#include <stm32f7xx.h>
 #if defined(RT_USING_FINSH) && defined(MSH_USING_BUILT_IN_COMMANDS)
 #include <finsh.h>
 #endif
@@ -206,6 +207,11 @@ static void _main_loop_entry(void* arg)
 void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
 {
     rtt_dbg_hal_run_called = 0xAAAAAAAA;
+
+    /* Clear sticky reset flags (RCC_CSR RMVF) — mirrors ChibiOS __late_init()
+     * stm32_watchdog_clear_reason(). Prevents was_watchdog_reset() from
+     * falsely returning true from a previous boot's RCC_CSR residue. */
+    RCC->CSR |= RCC_CSR_RMVF;
 
     (void)argc;
     (void)argv;
