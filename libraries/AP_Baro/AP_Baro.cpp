@@ -694,7 +694,7 @@ void AP_Baro::init(void)
 #endif
     if (_num_drivers == 0 || _num_sensors == 0 || drivers[0] == nullptr) {
         // RTT bring-up: don't fatal on missing baro
-        rt_kprintf("[BARO] WARNING: no barometer driver found (num_drivers=%u num_sensors=%u)\n",
+        DEV_PRINTF("no barometer driver found (num_drivers=%u num_sensors=%u)\n",
                    (unsigned)_num_drivers, (unsigned)_num_sensors);
     }
 #endif

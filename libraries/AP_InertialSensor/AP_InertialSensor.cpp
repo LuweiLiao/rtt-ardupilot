@@ -30,7 +30,6 @@
 #include "AP_InertialSensor_LSM9DS1.h"
 #include "AP_InertialSensor_Invensense.h"
 #include "AP_InertialSensor_SITL.h"
-#include "AP_InertialSensor_RST.h"
 #include "AP_InertialSensor_BMI055.h"
 #include "AP_InertialSensor_BMI088.h"
 #include "AP_InertialSensor_Invensensev2.h"
@@ -55,11 +54,6 @@
 #endif
 
 extern const AP_HAL::HAL& hal;
-
-volatile uint32_t rtt_dbg_ins_wait_counter = 0;
-volatile uint32_t rtt_dbg_ins_gyro_available_mask = 0;
-volatile uint32_t rtt_dbg_ins_accel_available_mask = 0;
-volatile uint32_t rtt_dbg_ins_wait_counter_limit = 0;
 
 
 
@@ -873,7 +867,7 @@ void AP_InertialSensor::_start_backends()
         _backends[i]->start();
     }
 
-#if !AP_INERTIALSENSOR_ALLOW_NO_SENSORS
+#if AP_INERTIALSENSOR_ALLOW_NO_SENSORS
     if (_gyro_count == 0 || _accel_count == 0) {
         AP_HAL::panic("INS needs at least 1 gyro and 1 accel");
     }
@@ -971,13 +965,7 @@ AP_InertialSensor::init(uint16_t loop_rate)
 
     // calibrate gyros unless gyro calibration has been disabled
     if (gyro_calibration_timing() != GYRO_CAL_NEVER && _gyro_count > 0) {
-        // Skip gyro calibration for RTT bringup - too slow during init
-        // init_gyro();
-        // Mark gyros as calibrated so init can proceed
-        for (uint8_t i = 0; i < _gyro_count; i++) {
-            _gyro_cal_ok[i] = true;
-        }
-        AP_Notify::flags.gyro_calibrated = true;
+        init_gyro();
     }
 
     _sample_period_usec = 1000*1000UL / _loop_rate;
@@ -1060,7 +1048,9 @@ AP_InertialSensor::init(uint16_t loop_rate)
             {
                 AP_Motors *motors = AP::motors();
                 if (motors != nullptr) {
-                    notch.num_dynamic_notches = __builtin_popcount(motors->get_motor_mask());
+                    // Always have at least one notch, this allows the filter to alocate and then be expanded at runtime if the number of motors is changed
+                    // Never have more than INS_MAX_NOTCHES
+                    notch.num_dynamic_notches = MAX(MIN(__builtin_popcount(motors->get_motor_mask()), INS_MAX_NOTCHES), 1);
                 }
             }
             // avoid harmonics unless actually configured by the user
@@ -1143,7 +1133,10 @@ AP_InertialSensor::detect_backends(void)
 
     _backends_detected = true;
 
-#if defined(HAL_CHIBIOS_ARCH_CUBE) && INS_MAX_INSTANCES > 2
+#if AP_INERTIALSENSOR_FORCE_ENABLE_NONISOLATED_INSTANCE
+#if INS_MAX_INSTANCES < 3
+#error AP_INERTIALSENSOR_FORCE_ENABLE_NONISOLATED_INSTANCE is not relevant for < 3 IMUs
+#endif
     // special case for Cubes, where the IMUs on the isolated
     // board could fail on some boards. If the user has INS_USE=1,
     // INS_USE2=1 and INS_USE3=0 then force INS_USE3 to 1. This is
@@ -1495,7 +1488,7 @@ bool AP_InertialSensor::pre_arm_check_gyro_backend_rate_hz(char* fail_msg, uint1
         }
         const auto rate_hz = _backends[i]->get_gyro_backend_rate_hz();
         if (rate_hz < threshold && (AP_HAL::Device::devid_get_devtype(_gyro_id(i)) != AP_InertialSensor_Backend::DEVTYPE_SERIAL)) {
-            hal.util->snprintf(fail_msg, fail_msg_len, "Gyro %d rate %dHz < loop ratex1.8 %dHz",
+            hal.util->snprintf(fail_msg, fail_msg_len, "Gyro %d rate %dHz < loop rate*1.8 %dHz",
                                i, int(rate_hz), int(threshold));
             return false;
         }
@@ -1755,7 +1748,7 @@ AP_InertialSensor::_init_gyro()
 
     // we try to get a good calibration estimate for up to 30 seconds
     // if the gyros are stable, we should get it in 1 second
-    for (int16_t j = 0; j <= 3*4 && num_converged < num_gyros; j++) {
+    for (int16_t j = 0; j <= 30*4 && num_converged < num_gyros; j++) {
         Vector3f gyro_sum[INS_MAX_INSTANCES], gyro_avg[INS_MAX_INSTANCES], gyro_diff[INS_MAX_INSTANCES];
         Vector3f accel_start;
         float diff_norm[INS_MAX_INSTANCES];
@@ -1934,28 +1927,6 @@ void AP_InertialSensor::update(void)
             }
         }
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-        // RTT porting: error counts are monotonically increasing in ArduPilot
-        // but SPI transient issues (bus hangs, DMA timeouts) can cause
-        // check_next_register() failures that accumulate error counts.
-        // Since error counts never decrease, once elevated they cause the
-        // relative health comparison below to permanently mark sensors unhealthy
-        // even after the underlying SPI issue is fixed.
-        // Fix: decay error counts for sensors that are successfully publishing
-        // data. This allows error counts to drain back to startup_error_count
-        // levels after transient issues are resolved.
-        // Decay rate: ~400Hz drain vs ~20Hz register check failures means
-        // error counts will trend downward even with occasional failures.
-        for (uint8_t i=0; i<INS_MAX_INSTANCES; i++) {
-            if (_gyro_healthy[i] && _gyro_error_count[i] > 0) {
-                _gyro_error_count[i]--;
-            }
-            if (_accel_healthy[i] && _accel_error_count[i] > 0) {
-                _accel_error_count[i]--;
-            }
-        }
-#endif
-
         for (uint8_t i=0; i<INS_MAX_INSTANCES; i++) {
             if (_accel_error_count[i] < _accel_startup_error_count[i]) {
                 _accel_startup_error_count[i] = _accel_error_count[i];
@@ -1988,21 +1959,6 @@ void AP_InertialSensor::update(void)
                 _accel_healthy[i] = false;
             }
         }
-
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-        // RTT porting: sensors produce valid data (confirmed by
-        // rtt_dbg_inv_notify_gyro_calls >> 0 and valid RAW_IMU values
-        // via MAVLink), but _gyro_healthy[i] remains false due to a
-        // timing/sequencing issue in update_gyro() consuming
-        // _new_gyro_data. Force healthy since error counts are zero
-        // and data is flowing correctly.
-        for (uint8_t i=0; i<INS_MAX_INSTANCES; i++) {
-            if (_gyro_error_count[i] == 0 && _accel_error_count[i] == 0 && !_gyro_healthy[i]) {
-                _gyro_healthy[i] = true;
-                _accel_healthy[i] = true;
-            }
-        }
-#endif
 
         // set primary to first healthy accel and gyro
         for (uint8_t i=0; i<INS_MAX_INSTANCES; i++) {
@@ -2065,15 +2021,6 @@ void AP_InertialSensor::wait_for_sample(void)
     if (_have_sample) {
         // the user has called wait_for_sample() again without
         // consuming the sample with update()
-        return;
-    }
-
-    // With no IMU backends, just delay for the sample period and return
-    if (_gyro_count == 0 && _accel_count == 0) {
-        hal.scheduler->delay_microseconds(_sample_period_usec);
-        _delta_time = _sample_period_usec * 1.0e-6f;
-        _last_sample_usec = AP_HAL::micros();
-        _have_sample = true;
         return;
     }
 
@@ -2152,11 +2099,6 @@ check_sample:
                     }
                 }
             }
-
-            rtt_dbg_ins_wait_counter = wait_counter;
-            rtt_dbg_ins_gyro_available_mask = gyro_available_mask;
-            rtt_dbg_ins_accel_available_mask = accel_available_mask;
-            rtt_dbg_ins_wait_counter_limit = wait_counter_limit;
 
             // we wait for up to 1/3 of the loop time to get all of the required
             // accel and gyro samples. After that we accept at least

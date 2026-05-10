@@ -43,7 +43,12 @@
 #define CONFIG_USB_DWC2_TX2_FIFO_SIZE (64 / 4)
 #define CONFIG_USB_DWC2_TX3_FIFO_SIZE (64 / 4)
 
-#define CONFIG_USBDEV_SERIAL_TX_BUFSIZE 4096
+/* Raised from 4K to 32K so PARAM_REQUEST_LIST (~10KB of PARAM_VALUE burst)
+ * fits without filling the CherryUSB ring buffer. The old 4K buffer would
+ * fill, rt_device_write would return 0, and after 500 failed drain ticks
+ * (500 ms) the entire write buffer would be cleared — dropping parameter
+ * data mid-transfer, causing QGC to time out and disconnect. */
+#define CONFIG_USBDEV_SERIAL_TX_BUFSIZE 32768
 #define CONFIG_USBDEV_SERIAL_RX_BUFSIZE 4096
 
 /* USB Host (required by usbh_core.h included from glue) */

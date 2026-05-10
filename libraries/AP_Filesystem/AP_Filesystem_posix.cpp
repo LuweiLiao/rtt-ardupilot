@@ -26,10 +26,6 @@
 
 #if defined(__APPLE__) || defined(__OpenBSD__)
 #include <sys/mount.h>
-#elif CONFIG_HAL_BOARD == HAL_BOARD_RTT
-#if AP_FILESYSTEM_POSIX_HAVE_STATFS
-#include <sys/statfs.h>
-#endif
 #elif CONFIG_HAL_BOARD != HAL_BOARD_QURT
 #include <sys/vfs.h>
 #endif
@@ -39,22 +35,6 @@
 #endif
 
 extern const AP_HAL::HAL& hal;
-
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-extern "C" {
-struct ap_rtt_stat_compat {
-    uint16_t st_mode;
-    uint32_t st_size;
-    uint32_t st_atime;
-    uint32_t st_mtime;
-    uint32_t st_ctime;
-    uint32_t st_blksize;
-    uint32_t st_blocks;
-};
-
-int ap_rtt_posix_stat(const char *pathname, struct ap_rtt_stat_compat *out);
-}
-#endif
 
 /*
   map a filename so operations are relative to the current directory if needed
@@ -97,7 +77,6 @@ int AP_Filesystem_Posix::open(const char *fname, int flags, bool allow_absolute_
     if (! allow_absolute_paths) {
         fname = map_filename(fname);
     }
-#if CONFIG_HAL_BOARD != HAL_BOARD_RTT
     struct stat st;
     if (::stat(fname, &st) == 0 &&
         ((st.st_mode & S_IFMT) != S_IFREG && (st.st_mode & S_IFMT) != S_IFLNK)) {
@@ -107,14 +86,9 @@ int AP_Filesystem_Posix::open(const char *fname, int flags, bool allow_absolute_
         }
         return -1;
     }
-#endif
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-    int open_flags = flags;
-#else
-    int open_flags = flags | O_CLOEXEC;
-#endif
-    auto ret = ::open(fname, open_flags, 0644);
+    // we automatically add O_CLOEXEC as we always want it for ArduPilot FS usage
+    auto ret = ::open(fname, flags | O_CLOEXEC, 0644);
     if (!allow_absolute_paths) {
         map_filename_free(fname);
     }
@@ -161,27 +135,7 @@ int AP_Filesystem_Posix::stat(const char *pathname, struct stat *stbuf)
 {
     FS_CHECK_ALLOWED(-1);
     pathname = map_filename(pathname);
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-    extern volatile uint32_t ftp_dbg_state;
-    ftp_dbg_state = 3400;
-    ap_rtt_stat_compat compat{};
-    const auto ret = ap_rtt_posix_stat(pathname, &compat);
-    if (ret == 0 && stbuf != nullptr) {
-        *stbuf = {};
-        stbuf->st_mode = compat.st_mode;
-        stbuf->st_size = compat.st_size;
-        stbuf->st_atime = compat.st_atime;
-        stbuf->st_mtime = compat.st_mtime;
-        stbuf->st_ctime = compat.st_ctime;
-        stbuf->st_blksize = compat.st_blksize;
-        stbuf->st_blocks = compat.st_blocks;
-    }
-#else
     auto ret = ::stat(pathname, stbuf);
-#endif
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-    ftp_dbg_state = 3401;
-#endif
     map_filename_free(pathname);
     return ret;
 }
@@ -254,9 +208,6 @@ int64_t AP_Filesystem_Posix::disk_free(const char *path)
     }
     map_filename_free(path);
     return (((int64_t)stats.f_bavail) * stats.f_bsize);
-#elif CONFIG_HAL_BOARD == HAL_BOARD_RTT
-    (void)path;
-    return -1;
 #else
     return -1;
 #endif
@@ -275,9 +226,6 @@ int64_t AP_Filesystem_Posix::disk_space(const char *path)
     }
     map_filename_free(path);
     return (((int64_t)stats.f_blocks) * stats.f_bsize);
-#elif CONFIG_HAL_BOARD == HAL_BOARD_RTT
-    (void)path;
-    return -1;
 #else
     return -1;
 #endif

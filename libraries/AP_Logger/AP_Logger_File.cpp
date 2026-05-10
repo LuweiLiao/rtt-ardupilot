@@ -758,20 +758,6 @@ void AP_Logger_File::PrepForArming_start_logging()
  */
 void AP_Logger_File::start_new_log(void)
 {
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-    // RTT: check if SD card is actually mounted before attempting
-    // any file I/O.  Without this guard, ::open() can block
-    // indefinitely in the SDIO driver when the card is absent or
-    // the filesystem is not yet ready, stalling the IO thread and
-    // triggering the 50-second watchdog.
-    extern volatile int rtt_sd_mount_result;
-    if (rtt_sd_mount_result != 0) {
-        // SD not ready yet — return silently; periodic_1Hz will
-        // retry once the card is mounted.
-        return;
-    }
-#endif
-
     if (recent_open_error()) {
         // we have previously failed to open a file - don't try again
         // to prevent us trying to open files while in flight
@@ -853,10 +839,6 @@ void AP_Logger_File::start_new_log(void)
                      _write_filename, strerror(saved_errno));
             DEV_PRINTF("Log open fail for %s - %s\n",
                                 _write_filename, strerror(saved_errno));
-            // RTT debug: send STATUSTEXT so we can see errno via MAVLink
-            char _dbgmsg[64];
-            snprintf(_dbgmsg, sizeof(_dbgmsg), "LOG open fail errno=%d %s", saved_errno, strerror(saved_errno));
-            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "%s", _dbgmsg);
         }
         return;
     }
@@ -864,7 +846,6 @@ void AP_Logger_File::start_new_log(void)
     _open_error_ms = 0;
     _write_offset = 0;
     _writebuf.clear();
-    _have_ever_opened = true;
     write_fd_semaphore.give();
 
     // now update lastlog.txt with the new log number
@@ -1089,14 +1070,11 @@ bool AP_Logger_File::logging_failed() const
         return true;
     }
     if (recent_open_error()) {
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-        if (!_have_ever_opened) {
-            return false;
-        }
-#endif
         return true;
     }
     if (!io_thread_alive()) {
+        // No heartbeat in a second.  IO thread is dead?! Very Not
+        // Good.
         return true;
     }
     if (_last_write_failed) {

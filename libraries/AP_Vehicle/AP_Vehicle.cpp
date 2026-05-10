@@ -579,21 +579,6 @@ void AP_Vehicle::loop()
         _last_internal_errors = new_internal_errors;
     }
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-    {
-        static uint32_t _rtt_loop_count = 0;
-        static uint32_t _rtt_last_report = 0;
-        _rtt_loop_count++;
-        uint32_t now = AP_HAL::millis();
-        if (now - _rtt_last_report >= 5000) {
-            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Loop: %u/s timeavail=%u",
-                (unsigned)(_rtt_loop_count * 1000 / (now - _rtt_last_report)),
-                (unsigned)AP::scheduler().time_available_usec());
-            _rtt_loop_count = 0;
-            _rtt_last_report = now;
-        }
-    }
-#endif
 }
 
 #if AP_SCHEDULER_ENABLED

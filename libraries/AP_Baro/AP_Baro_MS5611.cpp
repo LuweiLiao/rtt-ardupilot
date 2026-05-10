@@ -134,13 +134,10 @@ bool AP_Baro_MS5837::_init()
 bool AP_Baro_MS56XX::_init()
 {
     if (!_dev) {
-        rt_kprintf("[BARO] _init: no device!\n");
         return false;
     }
 
-    rt_kprintf("[BARO] _init: taking semaphore for bus %u\n", _dev->bus_num());
     _dev->get_semaphore()->take_blocking();
-    rt_kprintf("[BARO] _init: semaphore taken, sending reset\n");
 
     // high retries for init
     _dev->set_retries(10);
@@ -152,7 +149,6 @@ bool AP_Baro_MS56XX::_init()
 
     if (!_read_prom(prom)) {
         _dev->get_semaphore()->give();
-        rt_kprintf("[BARO] _init: PROM read failed!\n");
         return false;
     }
 

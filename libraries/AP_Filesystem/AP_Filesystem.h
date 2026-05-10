@@ -28,13 +28,13 @@
 #define MAX_NAME_LEN 255
 #endif
 
-#if (CONFIG_HAL_BOARD == HAL_BOARD_CHIBIOS) || (CONFIG_HAL_BOARD == HAL_BOARD_ESP32) || (CONFIG_HAL_BOARD == HAL_BOARD_RTT && !AP_FILESYSTEM_POSIX_ENABLED)
+#if (CONFIG_HAL_BOARD == HAL_BOARD_CHIBIOS) || (CONFIG_HAL_BOARD == HAL_BOARD_ESP32) || (CONFIG_HAL_BOARD == HAL_BOARD_RTT)
 #define DT_REG 0
 #define DT_DIR 1
 #define DT_LNK 10
 #endif
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_CHIBIOS
+#if CONFIG_HAL_BOARD == HAL_BOARD_CHIBIOS || (CONFIG_HAL_BOARD == HAL_BOARD_RTT && !AP_FILESYSTEM_POSIX_ENABLED)
 #if AP_FILESYSTEM_FATFS_ENABLED
 #include "AP_Filesystem_FATFS.h"
 #endif
@@ -47,21 +47,13 @@ struct dirent {
    uint8_t d_type;
 };
 
-#endif // HAL_BOARD_CHIBIOS
-
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && !AP_FILESYSTEM_POSIX_ENABLED
-/* RTT without POSIX FS: minimal dirent matching ChibiOS layout */
-struct dirent {
-   char    d_name[MAX_NAME_LEN]; /* filename */
-   uint8_t d_type;
-};
-#endif // HAL_BOARD_RTT && !POSIX_ENABLED
+#endif // HAL_BOARD_CHIBIOS || RTT_NOPOSIX
 
 #if CONFIG_HAL_BOARD == HAL_BOARD_RTT && AP_FILESYSTEM_POSIX_ENABLED
 /*
  * Force ArduPilot C++ units to use the RT-Thread DFS stat layout instead of
- * the toolchain newlib one. Otherwise AP-side `struct stat` can mismatch the
- * C DFS implementation and corrupt adjacent stack data when `stat()` fills it.
+ * the toolchain newlib one. Otherwise `struct stat` on the C side can mismatch
+ * the C++ side and corrupt stack data when stat() fills it.
  */
 #if defined(__GNUC__)
 #pragma GCC diagnostic push

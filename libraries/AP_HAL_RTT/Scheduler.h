@@ -43,7 +43,7 @@
 #define APM_RTT_MAIN_PRIORITY     5    // below timer/SPI, above RCIN/I2C
 #define APM_RTT_RCIN_PRIORITY     6    // RC protocol processing
 #define APM_RTT_I2C_PRIORITY      7    // I2C bus
-#define APM_RTT_UART_PRIORITY     14   // low priority (ChibiOS: 60) — DMA TX, non-blocking
+#define APM_RTT_UART_PRIORITY     6    // raised from 14: must preempt main(5) to drain USB CDC in background
 #define APM_RTT_LED_PRIORITY      14   // same as UART
 #define APM_RTT_STORAGE_PRIORITY  16   // (ChibiOS: 59)
 #define APM_RTT_IO_PRIORITY       18   // lowest HAL worker (ChibiOS: 58)

@@ -51,6 +51,10 @@
 #ifndef HAL_BARO_MS5611_SPI_EXT_NAME
 #define HAL_BARO_MS5611_SPI_EXT_NAME "ms5611_ext"
 #endif
+/* Allow baro-less boot (bringup phase) */
+#ifndef HAL_BARO_ALLOW_INIT_NO_BARO
+#define HAL_BARO_ALLOW_INIT_NO_BARO
+#endif
 
 #define HAL_CPU_CLASS HAL_CPU_CLASS_150
 #define HAL_MEM_CLASS HAL_MEM_CLASS_192

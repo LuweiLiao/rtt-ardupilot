@@ -31,18 +31,6 @@
 
 extern const AP_HAL::HAL& hal;
 
-// RTT debug variables for tracking IMU data flow
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-volatile uint32_t rtt_dbg_inv_poll_data_calls = 0;
-volatile uint32_t rtt_dbg_inv_read_fifo_calls = 0;
-volatile uint32_t rtt_dbg_inv_fifo_samples_read = 0;
-volatile uint32_t rtt_dbg_inv_accumulate_calls = 0;
-volatile uint32_t rtt_dbg_inv_notify_accel_calls = 0;
-volatile uint32_t rtt_dbg_inv_notify_gyro_calls = 0;
-volatile uint32_t rtt_dbg_inv_fifo_count_zero = 0;
-volatile uint32_t rtt_dbg_inv_block_read_fail = 0;
-#endif
-
 // need the Linux GPIO header for BBB_P8_14
 #if CONFIG_HAL_BOARD == HAL_BOARD_LINUX
 #include <AP_HAL_Linux/GPIO.h>
@@ -536,9 +524,6 @@ bool AP_InertialSensor_Invensense::_data_ready()
  */
 void AP_InertialSensor_Invensense::_poll_data()
 {
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-    rtt_dbg_inv_poll_data_calls++;
-#endif
     _read_fifo();
 
 #if INVENSENSE_DEBUG_REG_CHANGE
@@ -592,10 +577,6 @@ void AP_InertialSensor_Invensense::_check_register_change(void)
 
 bool AP_InertialSensor_Invensense::_accumulate(uint8_t *samples, uint8_t n_samples)
 {
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-    rtt_dbg_inv_accumulate_calls++;
-    rtt_dbg_inv_fifo_samples_read += n_samples;
-#endif
     for (uint8_t i = 0; i < n_samples; i++) {
         const uint8_t *data = samples + MPU_SAMPLE_SIZE * i;
         Vector3f accel, gyro;
@@ -604,7 +585,7 @@ bool AP_InertialSensor_Invensense::_accumulate(uint8_t *samples, uint8_t n_sampl
 #if INVENSENSE_EXT_SYNC_ENABLE
         fsync_set = (int16_val(data, 2) & 1U) != 0;
 #endif
-
+        
         accel = Vector3f(int16_val(data, 1),
                          int16_val(data, 0),
                          -int16_val(data, 2));
@@ -624,7 +605,7 @@ bool AP_InertialSensor_Invensense::_accumulate(uint8_t *samples, uint8_t n_sampl
             }
         }
         float temp = t2 * temp_sensitivity + temp_zero;
-
+        
         gyro = Vector3f(int16_val(data, 5),
                         int16_val(data, 4),
                         -int16_val(data, 6));
@@ -633,10 +614,6 @@ bool AP_InertialSensor_Invensense::_accumulate(uint8_t *samples, uint8_t n_sampl
         _rotate_and_correct_accel(accel_instance, accel);
         _rotate_and_correct_gyro(gyro_instance, gyro);
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-        rtt_dbg_inv_notify_accel_calls++;
-        rtt_dbg_inv_notify_gyro_calls++;
-#endif
         _notify_new_accel_raw_sample(accel_instance, accel, 0, fsync_set);
         _notify_new_gyro_raw_sample(gyro_instance, gyro);
 
@@ -741,18 +718,12 @@ bool AP_InertialSensor_Invensense::_accumulate_sensor_rate_sampling(uint8_t *sam
 
 void AP_InertialSensor_Invensense::_read_fifo()
 {
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-    rtt_dbg_inv_read_fifo_calls++;
-#endif
     uint8_t n_samples;
     uint16_t bytes_read;
     uint8_t *rx = _fifo_buffer;
     bool need_reset = false;
 
     if (!_block_read(MPUREG_FIFO_COUNTH, rx, 2)) {
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-        rtt_dbg_inv_block_read_fail++;
-#endif
         goto check_registers;
     }
 
@@ -761,9 +732,6 @@ void AP_InertialSensor_Invensense::_read_fifo()
 
     if (n_samples == 0) {
         /* Not enough data in FIFO */
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-        rtt_dbg_inv_fifo_count_zero++;
-#endif
         goto check_registers;
     }
 
@@ -870,11 +838,6 @@ check_registers:
 */
 bool AP_InertialSensor_Invensense::_check_raw_temp(int16_t t2)
 {
-    // RTT TEMP: Disable temperature check during bring-up to verify
-    // if FIFO resets are causing slow main loop (~1Hz instead of 400Hz)
-    // TODO: Re-enable after verifying main loop rate is fixed
-    return true;
-#if 0
     if (abs(t2 - _raw_temp) < 400) {
         // cached copy OK
         return true;
@@ -883,8 +846,7 @@ bool AP_InertialSensor_Invensense::_check_raw_temp(int16_t t2)
     if (_block_read(MPUREG_TEMP_OUT_H, trx, 2)) {
         _raw_temp = int16_val(trx, 0);
     }
-    return (abs(t2 - _raw_temp) < 4000);
-#endif
+    return (abs(t2 - _raw_temp) < 800);
 }
 
 bool AP_InertialSensor_Invensense::_block_read(uint8_t reg, uint8_t *buf,
@@ -995,16 +957,9 @@ void AP_InertialSensor_Invensense::_set_filter_register(void)
 /*
   check whoami for sensor type
  */
-volatile uint32_t rtt_dbg_whoami_val = 0xDE;
-volatile uint32_t rtt_dbg_whoami_calls = 0;
-
 bool AP_InertialSensor_Invensense::_check_whoami(void)
 {
     uint8_t whoami = _register_read(MPUREG_WHOAMI);
-    rtt_dbg_whoami_val = whoami;
-    rtt_dbg_whoami_calls++;
-    rt_kprintf("[Invensense] whoami=0x%02X (call %u)\n",
-               (unsigned)whoami, (unsigned)rtt_dbg_whoami_calls);
     switch (whoami) {
     case MPU_WHOAMI_6000:
         _mpu_type = Invensense_MPU6000;
