@@ -45,6 +45,9 @@ static void _adc_init_once(void)
     // ADC common prescaler: PCLK2/4
     ADC123_COMMON->CCR = (ADC123_COMMON->CCR & ~(3U << 16)) | (1U << 16);
 
+    // Enable temperature sensor and Vrefint for ADC channels 10/11
+    ADC123_COMMON->CCR |= ADC_CCR_TSVREFE;
+
     // Disable ADC1 and configure CR1
     ADC1->CR2 = 0;
     ADC1->CR1 = 0;  // 12-bit, no scan
@@ -82,6 +85,13 @@ static uint32_t _adc_read(uint8_t ch)
 
     // Clear all status flags, then start conversion
     ADC1->SR = 0;
+
+    // If ADC is still busy from prior conversion (STRP stuck), reset and restart
+    if (ADC1->SR & ADC_SR_STRT) {
+        ADC1->CR2 &= ~ADC_CR2_ADON;   // disable to clear STRP
+        __NOP(); __NOP(); __NOP();
+        ADC1->CR2 = ADC_CR2_ADON | ADC_CR2_EOCS;  // re-enable without SWSTART
+    }
     ADC1->CR2 |= ADC_CR2_SWSTART;
 
     // Poll EOC with simple counter timeout (~0.5ms at 216MHz)

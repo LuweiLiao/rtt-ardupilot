@@ -141,7 +141,7 @@ PH8  I2C3_SDA I2C3 AF4
 # ---- IOMCU UART (UART8 PE0/PE1) ----
 PE0  UART8_RX  UART8 AF8
 PE1  UART8_TX  UART8 AF8
-# IOMCU_UART UART8    # disabled - no SBUS receiver for dev testing
+IOMCU_UART UART8    # enabled - re-initialize IOMCU for L0 baseline
 
 # ---- SPI device table ----
 # SPIDEV name      bus   devid    cs_pin        mode    lowspeed  highspeed

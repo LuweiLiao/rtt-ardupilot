@@ -218,6 +218,8 @@ private:
     // IOMCU thread
     thread_t *thread_ctx;
 
+    struct rt_event iomcu_event;
+
     eventmask_t initial_event_mask;
 
     // time when we last read various pages
@@ -234,6 +236,9 @@ private:
 
     // have we forced the safety off?
     bool safety_forced_off;
+
+    // track IOMCU init retry count
+    uint8_t init_fail_count;
 
     // was safety off on last status?
     bool last_safety_off;
