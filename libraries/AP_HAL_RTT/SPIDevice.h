@@ -50,7 +50,6 @@ private:
 
     RTT_SPIDesc &_desc;
     struct rt_spi_device *_dev;
-    Semaphore _sem;
     DeviceBus *_bus;
     bool _config_dirty = true;
     bool _bus_locked = false;

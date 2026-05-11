@@ -5,7 +5,14 @@
 #if AP_INERTIALSENSOR_ENABLED
 
 #include <AP_Common/AP_Common.h>
+#ifdef __has_include
+#if __has_include(<AP_HAL_RTT/RTT_debug.h>)
+#include <AP_HAL_RTT/RTT_debug.h>
+#endif
+#endif
+
 #include <AP_HAL/AP_HAL.h>
+extern volatile uint32_t rtt_dbg_setup_stage;
 #include <AP_HAL/I2CDevice.h>
 #include <AP_HAL/SPIDevice.h>
 #include <AP_HAL/DSP.h>
@@ -861,9 +868,12 @@ bool AP_InertialSensor::register_accel(uint8_t &instance, uint16_t raw_sample_ra
 void AP_InertialSensor::_start_backends()
 
 {
+    rtt_dbg_setup_stage = 671;
     detect_backends();
+    rtt_dbg_setup_stage = 672;
 
     for (uint8_t i = 0; i < _backend_count; i++) {
+        rtt_dbg_setup_stage = 680 + i;
         _backends[i]->start();
     }
 

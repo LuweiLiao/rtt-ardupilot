@@ -55,10 +55,13 @@ Scheduler::Scheduler()
 }
 
 /* ----------------------------------------------------------------
- *  DWT-based busy-wait for short delays (< 100 µs).
- *  Safe: does not block round-robin timeslice for any meaningful
- *  duration.  The previous deadlock was caused by 100+ µs
- *  busy-waits preventing DeviceBus threads from running.
+ *  DWT-based busy-wait for short delays (≤ 200 µs).
+ *  Safe for brief intervals: does not materially starve
+ *  lower-priority threads. Earlier deadlocks were caused by
+ *  multi-hundred-µs busy-waits preventing DeviceBus (IOC, UART)
+ *  threads from running.  The 200 µs threshold was chosen
+ *  by comparing ChibiOS (1 MHz timer, no busy-wait at all)
+ *  against RTT (1 kHz, must busy-wait for sub-tick).
  * ---------------------------------------------------------------- */
 extern "C" uint32_t SystemCoreClock;
 
@@ -70,11 +73,7 @@ void Scheduler::_delay_microseconds_dwt(uint16_t us)
     const uint32_t cycles = us * (SystemCoreClock / 1000000U);
     const uint32_t start = DWT_CYCCNT_REG;
     while ((DWT_CYCCNT_REG - start) < cycles) {
-        /* DSB memory barrier: STM32F7 D-Cache can cache the DWT_CYCCNT
-         * read, causing an infinite busy-loop. Without DSB the read may
-         * return a stale cached value and the loop spins forever.
-         * See: Cortex-M7 r1p0 TRM §7.11 — DWT reads are not memory-
-         * mapped and are affected by D-Cache coherency. */
+        /* spin */
         asm volatile("dsb" ::: "memory");
     }
 }
@@ -439,26 +438,37 @@ void Scheduler::delay_microseconds(uint16_t us)
         return;
     }
 
+    /*
+     * Hybrid delay strategy informed by ChibiOS comparison
+     * (t_62fa1d88 research handoff):
+     *
+     *   us ≤ 200 µs  →  DWT busy-wait + DSB  (short, acceptable CPU hog)
+     *   us > 200 µs  →  rt_thread_delay()     (yield CPU to lower-priority threads)
+     *
+     * ChibiOS uses a 1 MHz system timer (1 tick = 1 µs) so it never needs
+     * busy-wait — all delays go through chThdSleep().  RTT uses a 1 kHz
+     * timer (1 tick = 1000 µs), so sub-tick delays must either busy-wait
+     * or round up to 1 tick.  The 200 µs threshold balances precision
+     * against scheduler fairness: short sensor delays (SPI tH, register
+     * write settles, etc.) are kept cycle-accurate, while longer delays
+     * yield so that IO / storage / UART threads can drain their work queues.
+     *
+     * Unlike the previous implementation we do NOT busy-wait a sub-tick
+     * remainder after rt_thread_delay() — that would re-hog the CPU right
+     * after yielding, defeating the purpose.  ChibiOS doesn't do it either.
+     */
     const uint32_t tick_us = 1000000U / RT_TICK_PER_SECOND;
-    if (tick_us == 0 || us < tick_us) {
+
+    if (us <= 200U) {
         _delay_microseconds_dwt(us);
         return;
     }
 
-    const rt_tick_t whole_ticks = us / tick_us;
-    const uint32_t remainder_us = us % tick_us;
-
-    if (whole_ticks > 0) {
-        /* Single sleep instead of per-tick loop: gives lower-priority threads
-         * (IO at prio 18, storage) a continuous window to drain work queues.
-         * The per-tick loop woke the main thread every 100us, preempting the
-         * IO thread before it could finish AP_Param::save_io_handler(). */
-        rt_thread_delay(whole_ticks);
-    }
-
-    if (remainder_us > 0) {
-        _delay_microseconds_dwt(remainder_us);
-    }
+    /* ≥200 µs: yield CPU.  us < tick_us (i.e. 201-999µs) rounds up to 1
+     * tick (1000 µs), which is a necessary compromise given RTT's coarse
+     * 1 kHz system timer.  The caller always has a micros64-based backup
+     * for precise elapsed-time checks. */
+    rt_thread_delay(MAX(1U, us / tick_us));
 }
 
 /* ----------------------------------------------------------------

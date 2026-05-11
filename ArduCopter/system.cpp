@@ -62,31 +62,38 @@ void Copter::init_ardupilot()
     // must be before rc init to not override initial switch position
     surface_tracking.init((SurfaceTracking::Surface)copter.g2.surftrak_mode.get());
 #endif
+    rtt_dbg_setup_stage = 621;
 
     allocate_motors();
+    rtt_dbg_setup_stage = 622;
 
     // initialise rc channels including setting mode
     rc().convert_options(RC_Channel::AUX_FUNC::ARMDISARM_UNUSED, RC_Channel::AUX_FUNC::ARMDISARM_AIRMODE);
 
     rc().init();
+    rtt_dbg_setup_stage = 623;
 
     // sets up motors and output to escs
     init_rc_out();
+    rtt_dbg_setup_stage = 624;
 
     // check if we should enter esc calibration mode
     esc_calibration_startup_check();
+    rtt_dbg_setup_stage = 625;
 
     // motors initialised so parameters can be sent
     ap.initialised_params = true;
 #if AP_RELAY_ENABLED
     relay.init();
 #endif
+    rtt_dbg_setup_stage = 626;
 
     /*
      *  setup the 'main loop is dead' check. Note that this relies on
      *  the RC library being initialised.
      */
     hal.scheduler->register_timer_failsafe(failsafe_check_static, 1000);
+    rtt_dbg_setup_stage = 627;
 
     // Do GPS init
     gps.set_log_gps_bit(MASK_LOG_GPS);
@@ -222,6 +229,7 @@ void Copter::startup_INS_ground()
     rtt_dbg_setup_stage = 662;
 
     // Warm up and calibrate gyro offsets
+    rtt_dbg_setup_stage = 670;
     ins.init(scheduler.get_loop_rate_hz());
     rtt_dbg_setup_stage = 663;
 

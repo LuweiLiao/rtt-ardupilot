@@ -28,7 +28,7 @@ public:
     void assert_owner(void);
 
 private:
-    struct rt_mutex _mtx_obj;
+    struct ::rt_mutex _mtx_obj;
     bool _mtx_inited;
     void _ensure_mtx();
 };

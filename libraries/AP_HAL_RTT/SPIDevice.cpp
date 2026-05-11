@@ -21,8 +21,11 @@
  * Pinout (CUAV V5, from hwdef.dat):
  *   PG11=SCK(AF5), PA6=MISO(AF5), PD7=MOSI(AF5)
  *   PF2=ICM20689_CS, PF3=ICM20602_CS, PF4=BMI055_GYRO_CS */
+static bool _spi1_gpio_init_done = false;
 static void _spi1_gpio_init(void)
 {
+    if (_spi1_gpio_init_done) return;
+
     /* Enable GPIO clocks */
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIODEN |
                     RCC_AHB1ENR_GPIOFEN | RCC_AHB1ENR_GPIOGEN;
@@ -51,6 +54,8 @@ static void _spi1_gpio_init(void)
     /* PG10 BMI055 accel CS (spi14, cs_pin=106): OUTPUT, INITIAL STATE HIGH */
     GPIOG->MODER = (GPIOG->MODER & ~(3U << 20)) | (1U << 20);
     GPIOG->BSRR = (1U << 10);                                 /* set PG10 HIGH */
+
+    _spi1_gpio_init_done = true;
 }
 
 /* STM32F7 SPI4 GPIO pin configuration (register-level).
@@ -402,10 +407,10 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
         }
         if (send_len > 0 || recv_len > 0) {
             bool need_sem = !_cs_held;
-            if (need_sem && !_sem.take(HAL_SEMAPHORE_BLOCK_FOREVER)) return false;
+            if (need_sem && !_bus->semaphore.take(HAL_SEMAPHORE_BLOCK_FOREVER)) return false;
             bool ok = spi1_poll_transfer(nullptr, send, send_len, recv, recv_len,
                                          !_cs_held, !_cs_held, bus_to_spi(_desc.bus), _cs_pin);
-            if (!_cs_held && need_sem) _sem.give();
+            if (!_cs_held && need_sem) _bus->semaphore.give();
             return ok;
         }
         return true;
@@ -414,9 +419,9 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
     if (_dev == nullptr) return false;
 
     bool need_sem = !_cs_held;
-    if (need_sem && !_sem.take(HAL_SEMAPHORE_BLOCK_FOREVER)) return false;
+    if (need_sem && !_bus->semaphore.take(HAL_SEMAPHORE_BLOCK_FOREVER)) return false;
     if (!_cs_held && !_lock_bus()) {
-        if (need_sem) { _sem.give(); }
+        if (need_sem) { _bus->semaphore.give(); }
         return false;
     }
 
@@ -436,7 +441,7 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
             buf = (uint8_t *)rt_malloc_align(total_len, 32);
             if (buf == nullptr) {
                 if (!_cs_held) { _unlock_bus(); }
-                if (need_sem) _sem.give();
+                if (need_sem) _bus->semaphore.give();
                 return false;
             }
             heap = true;
@@ -471,7 +476,7 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
             rxbuf = (uint8_t *)rt_malloc_align(send_len, 32);
             if (rxbuf == nullptr) {
                 if (!_cs_held) { _unlock_bus(); }
-                if (need_sem) { _sem.give(); }
+                if (need_sem) { _bus->semaphore.give(); }
                 return false;
             }
             heap = true;
@@ -509,7 +514,7 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
     }
 
     if (!_cs_held) { _unlock_bus(); }
-    if (need_sem) { _sem.give(); }
+    if (need_sem) { _bus->semaphore.give(); }
     return ok;
 }
 
@@ -549,7 +554,7 @@ bool SPIDevice::set_chip_select(bool set)
         if (_cs_held) {
             return true;
         }
-        if (!_sem.take(HAL_SEMAPHORE_BLOCK_FOREVER)) {
+        if (!_bus->semaphore.take(HAL_SEMAPHORE_BLOCK_FOREVER)) {
             return false;
         }
         _cs_held = true;
@@ -558,7 +563,7 @@ bool SPIDevice::set_chip_select(bool set)
 
     if (_cs_held) {
         _cs_held = false;
-        _sem.give();
+        _bus->semaphore.give();
     }
     return true;
 }
@@ -588,11 +593,11 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
     }
 
     bool need_sem = !_cs_held;
-    if (need_sem && !_sem.take(HAL_SEMAPHORE_BLOCK_FOREVER)) {
+    if (need_sem && !_bus->semaphore.take(HAL_SEMAPHORE_BLOCK_FOREVER)) {
         return false;
     }
     if (!_cs_held && !_lock_bus()) {
-        if (need_sem) { _sem.give(); }
+        if (need_sem) { _bus->semaphore.give(); }
         return false;
     }
 
@@ -613,7 +618,7 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
             txbuf = (uint8_t *)rt_malloc_align(len, 32);
             if (txbuf == nullptr) {
                 if (!_cs_held) { _unlock_bus(); }
-                if (need_sem) { _sem.give(); }
+                if (need_sem) { _bus->semaphore.give(); }
                 return false;
             }
             rxbuf = txbuf;
@@ -640,13 +645,18 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
 
     if (heap) { rt_free_align(txbuf); }
     if (!_cs_held) { _unlock_bus(); }
-    if (need_sem) { _sem.give(); }
+    if (need_sem) { _bus->semaphore.give(); }
     return ok;
 }
 
 AP_HAL::Semaphore *SPIDevice::get_semaphore()
 {
-    return &_sem;
+    // Return the bus-level semaphore, matching ChibiOS semantics.
+    // This ensures WITH_SEMAPHORE(_dev->get_semaphore()) holds the bus lock,
+    // preventing the DeviceBus thread from dispatching periodic callbacks
+    // (e.g. ICM20689 _poll_data) concurrently with transfers on the same bus.
+    // Ref: AP_HAL_ChibiOS/SPIDevice.cpp:336-339
+    return &_bus->semaphore;
 }
 
 AP_HAL::Device::PeriodicHandle SPIDevice::register_periodic_callback(

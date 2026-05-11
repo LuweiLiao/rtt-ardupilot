@@ -53,37 +53,72 @@ bool I2CDevice::transfer(const uint8_t *send, uint32_t send_len,
                         uint8_t *recv, uint32_t recv_len)
 {
     if (_bus == nullptr) return false;
-    if (!_sem.take(HAL_SEMAPHORE_BLOCK_FOREVER)) return false;
+
+    /*
+     * Avoid recursive semaphore acquisition: only take _sem if the
+     * current thread does not already own it.
+     *
+     * The IST8310 driver (and other callers) acquire the device
+     * semaphore via take_blocking() before calling write_register()
+     * / read_registers(), which in turn call transfer().  Without
+     * this check, transfer() would take _sem again via
+     * rt_mutex_take() — recursive but architecturally unclean and
+     * confuses hold-count tracking.
+     */
+    bool sem_taken = false;
+    if (!_sem.check_owner()) {
+        if (!_sem.take(HAL_SEMAPHORE_BLOCK_FOREVER)) return false;
+        sem_taken = true;
+    }
 
 #ifdef RT_USING_I2C
     bool ok = false;
-    for (uint8_t attempt = 0; attempt <= _retries; attempt++) {
-        rt_tick_t tick = rt_tick_from_millisecond(_timeout_ms > 0 ? _timeout_ms : 4);
-        if (rt_i2c_bus_lock(_bus, tick) != RT_EOK) {
-            continue;
-        }
 
-        bool xfer_ok = true;
-        if (send_len > 0 && send != nullptr) {
-            rt_ssize_t n = rt_i2c_master_send(_bus, _address, RT_I2C_WR, send, send_len);
-            if (n != (rt_ssize_t)send_len) xfer_ok = false;
-        }
-        if (xfer_ok && recv_len > 0 && recv != nullptr) {
-            rt_ssize_t n = rt_i2c_master_recv(_bus, _address, RT_I2C_RD, recv, recv_len);
-            if (n != (rt_ssize_t)recv_len) xfer_ok = false;
-        }
-        rt_i2c_bus_unlock(_bus);
+    /*
+     * Build a multi-message transfer array.
+     *
+     * When both send and recv are provided, the bit-bang driver
+     * (i2c_bit_xfer in dev_i2c_bit_ops.c) automatically inserts a
+     * RESTART between messages — matching the ChibiOS combined-
+     * transaction semantics.  Using rt_i2c_transfer() directly also
+     * lets it handle bus locking internally (see dev_i2c_core.c:79),
+     * eliminating the redundant rt_i2c_bus_lock/unlock that was
+     * locking the same bus->lock twice (recursive but wasteful).
+     */
+    struct rt_i2c_msg msgs[2];
+    rt_uint32_t num = 0;
 
-        if (xfer_ok) {
-            ok = true;
-            break;
+    if (send_len > 0 && send != nullptr) {
+        msgs[num].addr  = _address;
+        msgs[num].flags = RT_I2C_WR;
+        msgs[num].len   = send_len;
+        msgs[num].buf   = (rt_uint8_t *)send;
+        num++;
+    }
+    if (recv_len > 0 && recv != nullptr) {
+        msgs[num].addr  = _address;
+        msgs[num].flags = RT_I2C_RD;
+        msgs[num].len   = recv_len;
+        msgs[num].buf   = recv;
+        num++;
+    }
+
+    if (num > 0) {
+        for (uint8_t attempt = 0; attempt <= _retries; attempt++) {
+            rt_ssize_t n = rt_i2c_transfer(_bus, msgs, num);
+            if (n == (rt_ssize_t)num) {
+                ok = true;
+                break;
+            }
         }
     }
 #else
     bool ok = false;
 #endif
 
-    _sem.give();
+    if (sem_taken) {
+        _sem.give();
+    }
     return ok;
 }
 

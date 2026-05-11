@@ -46,7 +46,7 @@ void DeviceBus::_bus_thread_entry(void *arg)
                 while (now >= callback->next_usec) {
                     callback->next_usec += callback->period_usec;
                 }
-                if (!binfo->semaphore.take(10)) {
+                if (!binfo->semaphore.take(HAL_SEMAPHORE_BLOCK_FOREVER)) {
                     continue;
                 }
                 callback->cb();
