@@ -70,7 +70,12 @@ void Scheduler::_delay_microseconds_dwt(uint16_t us)
     const uint32_t cycles = us * (SystemCoreClock / 1000000U);
     const uint32_t start = DWT_CYCCNT_REG;
     while ((DWT_CYCCNT_REG - start) < cycles) {
-        /* spin */
+        /* DSB memory barrier: STM32F7 D-Cache can cache the DWT_CYCCNT
+         * read, causing an infinite busy-loop. Without DSB the read may
+         * return a stale cached value and the loop spins forever.
+         * See: Cortex-M7 r1p0 TRM §7.11 — DWT reads are not memory-
+         * mapped and are affected by D-Cache coherency. */
+        asm volatile("dsb" ::: "memory");
     }
 }
 
