@@ -139,9 +139,9 @@ PH7  I2C3_SCL I2C3 AF4
 PH8  I2C3_SDA I2C3 AF4
 
 # ---- IOMCU UART (UART8 PE0/PE1) ----
-PE0  UART8_RX  UART8 AF8
-PE1  UART8_TX  UART8 AF8
-IOMCU_UART UART8    # enabled - re-initialize IOMCU for L0 baseline
+# IOMCU_UART UART8    # disabled for root-cause verification (RP1)
+# PE0  UART8_RX  UART8 AF8
+# PE1  UART8_TX  UART8 AF8
 
 # ---- SPI device table ----
 # SPIDEV name      bus   devid    cs_pin        mode    lowspeed  highspeed
@@ -155,8 +155,12 @@ SPIDEV ms5611      SPI4  DEVID1   MS5611_CS     MODE3  20*MHZ    20*MHZ
 # ---- Sensor probe lists ----
 IMU Invensense SPI:icm20689 ROTATION_NONE
 IMU Invensense SPI:icm20602 ROTATION_NONE
-IMU BMI055 SPI:bmi055_a SPI:bmi055_g ROTATION_ROLL_180_YAW_90
-IMU BMI088 SPI:bmi055_a SPI:bmi055_g ROTATION_ROLL_180_YAW_90
+# BMI055/BMI088 disabled temporarily — SPI start() hangs at boot (setup_stage ~682).
+# ChibiOS CUAVv5 does NOT have BMI055 in its probe list (fmuv5 uses ICM20689 + ICM20602 only).
+# These bmi055_a/bmi055_g SPIDEV entries are kept for reference; re-enable when the
+# BMI055 SPI interaction is fixed.
+#IMU BMI055 SPI:bmi055_a SPI:bmi055_g ROTATION_ROLL_180_YAW_90
+#IMU BMI088 SPI:bmi055_a SPI:bmi055_g ROTATION_ROLL_180_YAW_90
 
 BARO MS5611 SPI:ms5611
 
@@ -180,6 +184,7 @@ PF15 I2C4_SDA  I2C4  AF4
 PF14 I2C4_SCL  I2C4  AF4
 # IST8310 on I2C3 (bus 0) at 0x0E, internal, match ChibiOS fmuv5 ROTATION
 define HAL_MAG_PROBE_LIST PROBE_MAG_I2C(IST8310, 0, 0x0E, false, ROTATION_ROLL_180_YAW_90)
+define HAL_COMPASS_ALLOW_INIT_NO_MAG 1
 define HAL_COMPASS_AUTO_ROT_DEFAULT 2
 
 # MCU-specific defines for RT-Thread BSP and STM32 HAL
