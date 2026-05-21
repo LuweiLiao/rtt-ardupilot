@@ -123,6 +123,25 @@ def _copy_bin_to_build(ap_root, target, bsp_deploy_abspath):
         print('Copy rtthread.bin to build: %s' % e, file=sys.stderr)
 
 
+def _verify_bin_integrity(ap_root, bsp_deploy_abspath):
+    """Verify the built rtthread.bin has a valid Reset_Handler literal pool.
+    Catches ELF vs .bin mismatch caused by objcopy/Load segment alignment issues.
+    """
+    bin_path = os.path.join(bsp_deploy_abspath, 'rtthread.bin')
+    elf_path = os.path.join(bsp_deploy_abspath, 'rt-thread.elf')
+    if not os.path.isfile(bin_path) or not os.path.isfile(elf_path):
+        print('verify: bin/elf not yet available, skipping', file=sys.stderr)
+        return
+    script = os.path.join(ap_root, 'Tools', 'scripts', 'rtt_verify_bin.py')
+    if not os.path.isfile(script):
+        print('rtt_verify_bin.py not found at %s, skipping binary verification' % script, file=sys.stderr)
+        return
+    ret = subprocess.call([sys.executable, script, bin_path, elf_path], cwd=ap_root)
+    if ret != 0:
+        print('ERROR: Binary integrity check FAILED — see above for details.', file=sys.stderr)
+        Exit(ret)
+
+
 # --- When valid --target: deploy then scons in BSP (or scons -c for clean) ---
 target = GetOption('target')
 canonical_target = _normalize_target(target)
@@ -183,6 +202,9 @@ if canonical_target:
     ret = _run_rtt_build(ap_root, canonical_target, bsp_deploy_abspath, scons_args, test_name=test_name)
     if ret != 0:
         Exit(ret)
+    # 3.5) Post-build: verify rtthread.bin integrity (Reset_Handler literal pool)
+    if not is_clean and not test_name:
+        _verify_bin_integrity(ap_root, bsp_deploy_abspath)
     # 4) If build (not clean), optionally copy rtthread.bin to build/rtt_<target>/
     if not is_clean:
         _copy_bin_to_build(ap_root, canonical_target, bsp_deploy_abspath)
