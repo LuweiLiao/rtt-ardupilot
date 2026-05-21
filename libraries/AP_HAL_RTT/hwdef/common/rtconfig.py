@@ -58,14 +58,23 @@ if PLATFORM == 'gcc':
 
     CXXFLAGS = CFLAGS + ' -Woverloaded-virtual -fno-exceptions -fno-rtti'
 
-    POST_ACTION = OBJCPY + ' -O binary $TARGET rtthread.bin\n' + SIZE + ' $TARGET \n'
+    # POST_ACTION runs after linking: objcopy to bin, size, then set_app_descriptor
+    _cwd = os.getcwd()
+    _src_root = os.path.normpath(os.path.join(_cwd, '../../..'))
+    _set_ap_desc = os.path.normpath(os.path.join(_src_root,
+        'libraries/AP_HAL_RTT/scripts/set_app_descriptor.py'))
+    POST_ACTION = (
+        OBJCPY + ' -O binary $TARGET rtthread.bin\\n' +
+        SIZE + ' $TARGET \\n' +
+        'python3 ' + _set_ap_desc + ' $TARGET rtthread.bin ' + _src_root + '\\n'
+    )
 
     # module setting
     M_CFLAGS = CFLAGS + ' -mlong-calls -fPIC '
     M_CXXFLAGS = CXXFLAGS + ' -mlong-calls -fPIC'
     M_LFLAGS = DEVICE + CXXFLAGS + ' -Wl,--gc-sections,-z,max-page-size=0x4' +\
                                     ' -shared -fPIC -nostartfiles -static-libgcc'
-    M_POST_ACTION = STRIP + ' -R .hash $TARGET\n' + SIZE + ' $TARGET \n'
+    M_POST_ACTION = STRIP + ' -R .hash $TARGET\\n' + SIZE + ' $TARGET \\n'
 
 elif PLATFORM == 'armcc':
     # toolchains
@@ -96,7 +105,7 @@ elif PLATFORM == 'armcc':
     CXXFLAGS = CFLAGS 
     CFLAGS += ' -std=c99'
     
-    POST_ACTION = 'fromelf --bin $TARGET --output rtthread.bin \nfromelf -z $TARGET'
+    POST_ACTION = 'fromelf --bin $TARGET --output rtthread.bin \\nfromelf -z $TARGET'
 
 elif PLATFORM == 'armclang':
     # toolchains
@@ -115,7 +124,7 @@ elif PLATFORM == 'armclang':
     AFLAGS = DEVICE + ' --apcs=interwork '
     LFLAGS = DEVICE + ' --info sizes --info totals --info unused --info veneers '
     LFLAGS += ' --list rt-thread.map '
-    LFLAGS += r' --strict --scatter "board\linker_scripts\link.sct" '
+    LFLAGS += r' --strict --scatter "board\\linker_scripts\\link.sct" '
     CFLAGS += ' -I' + EXEC_PATH + '/ARM/ARMCLANG/include'
     LFLAGS += ' --libpath=' + EXEC_PATH + '/ARM/ARMCLANG/lib'
 
@@ -130,7 +139,7 @@ elif PLATFORM == 'armclang':
     CXXFLAGS = CFLAGS
     CFLAGS += ' -std=c99'
 
-    POST_ACTION = 'fromelf --bin $TARGET --output rtthread.bin \nfromelf -z $TARGET'
+    POST_ACTION = 'fromelf --bin $TARGET --output rtthread.bin \\nfromelf -z $TARGET'
 
 elif PLATFORM == 'iccarm':
     # toolchains

@@ -78,6 +78,25 @@
 #ifndef HAL_OS_FATFS_IO
 #define HAL_OS_FATFS_IO 0
 #endif
+
+/*
+ * RTT provides POSIX-compatible file operations through its DFS VFS.
+ * Enable POSIX filesystem backend so AP_Filesystem can access the SD card
+ * which is mounted at "/" by BSP's sd_card_mount_sync().
+ */
+#ifndef AP_FILESYSTEM_POSIX_ENABLED
+#define AP_FILESYSTEM_POSIX_ENABLED 1
+#endif
+#ifndef AP_FILESYSTEM_POSIX_HAVE_FSYNC
+#define AP_FILESYSTEM_POSIX_HAVE_FSYNC 1
+#endif
+#ifndef AP_FILESYSTEM_POSIX_HAVE_STATFS
+#define AP_FILESYSTEM_POSIX_HAVE_STATFS 1
+#endif
+#ifndef AP_FILESYSTEM_POSIX_HAVE_UTIME
+#define AP_FILESYSTEM_POSIX_HAVE_UTIME 0
+#endif
+
 #ifndef AP_SIM_ENABLED
 #define AP_SIM_ENABLED 0
 #endif

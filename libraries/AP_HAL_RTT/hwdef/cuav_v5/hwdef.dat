@@ -126,6 +126,7 @@ PA4  SPARE2_ADC1         ADC1    SCALE(1)
 # USB CDC baudrate (virtual serial — actual speed is USB full-speed, but ArduPilot uses this for MAVLink bandwidth calc)
 define DEFAULT_SERIAL0_BAUD 921600
 
+define AP_CHECK_FIRMWARE_ENABLED 1
 # Battery monitor pin assignments (channel index in AnalogIn)
 define HAL_BATT_VOLT_PIN 0
 define HAL_BATT_CURR_PIN 1

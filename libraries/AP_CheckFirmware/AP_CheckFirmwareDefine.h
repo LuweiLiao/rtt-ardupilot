@@ -9,7 +9,7 @@
  */
 extern const app_descriptor_t app_descriptor;
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_CHIBIOS
+#if CONFIG_HAL_BOARD == HAL_BOARD_CHIBIOS || CONFIG_HAL_BOARD == HAL_BOARD_RTT
 const app_descriptor_t app_descriptor __attribute__((section(".app_descriptor"))) = {
 #else
 const app_descriptor_t app_descriptor = {
