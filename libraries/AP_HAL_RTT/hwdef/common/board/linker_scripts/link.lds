@@ -19,6 +19,8 @@ SECTIONS
         . = ALIGN(4);
         _stext = .;
         KEEP(*(.isr_vector))            /* Startup code */
+        KEEP(*(.apsec_data))
+        KEEP(*(.app_descriptor))
 
         . = ALIGN(4);
         *(.text)                        /* remaining code */

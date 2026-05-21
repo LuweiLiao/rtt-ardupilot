@@ -64,9 +64,9 @@ if PLATFORM == 'gcc':
     _set_ap_desc = os.path.normpath(os.path.join(_src_root,
         'libraries/AP_HAL_RTT/scripts/set_app_descriptor.py'))
     POST_ACTION = (
-        OBJCPY + ' -O binary $TARGET rtthread.bin\\n' +
-        SIZE + ' $TARGET \\n' +
-        'python3 ' + _set_ap_desc + ' $TARGET rtthread.bin ' + _src_root + '\\n'
+        OBJCPY + ' -O binary $TARGET rtthread.bin\n' +
+        SIZE + ' $TARGET \n' +
+        'python3 ' + _set_ap_desc + ' $TARGET rtthread.bin ' + _src_root + '\n'
     )
 
     # module setting
@@ -74,7 +74,7 @@ if PLATFORM == 'gcc':
     M_CXXFLAGS = CXXFLAGS + ' -mlong-calls -fPIC'
     M_LFLAGS = DEVICE + CXXFLAGS + ' -Wl,--gc-sections,-z,max-page-size=0x4' +\
                                     ' -shared -fPIC -nostartfiles -static-libgcc'
-    M_POST_ACTION = STRIP + ' -R .hash $TARGET\\n' + SIZE + ' $TARGET \\n'
+    M_POST_ACTION = STRIP + ' -R .hash $TARGET\\n' + SIZE + ' $TARGET \n'
 
 elif PLATFORM == 'armcc':
     # toolchains
