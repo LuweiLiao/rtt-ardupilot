@@ -20,4 +20,6 @@ class RCOutput;
 class Storage;
 class AnalogIn;
 class Flash;
+class SoftSigReaderInt;
+class CANIface;
 }  // namespace RTT
