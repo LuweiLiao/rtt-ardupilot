@@ -22,4 +22,5 @@ class AnalogIn;
 class Flash;
 class SoftSigReaderInt;
 class CANIface;
+class DSP;
 }  // namespace RTT

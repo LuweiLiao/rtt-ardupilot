@@ -418,7 +418,7 @@ static int sd_card_mount_sync(void)
 
     /* Card not ready yet — spawn background retry thread */
     rt_thread_t th = rt_thread_create("sdmnt", _sd_mount_thread,
-                                      RT_NULL, 2048,
+                                      RT_NULL, 1024,
                                       RT_THREAD_PRIORITY_MAX - 2, 20);
     if (th) rt_thread_startup(th);
     return 0;

@@ -49,6 +49,14 @@
 #define APM_RTT_IO_PRIORITY       18   // lowest HAL worker (ChibiOS: 58)
 #define APM_RTT_SCRIPTING_PRIORITY 30  // lowest
 
+/* Priority for setup() phase — mirrors ChibiOS APM_STARTUP_PRIORITY (= 10).
+ * Dropping main thread priority during setup allows timer/SPI (4), UART (6),
+ * and storage (16) threads to preempt freely, preventing sensor init stalls
+ * and IOMCU upload timeouts.
+ * ChibiOS ref: HAL_ChibiOS_Class.cpp:265, 317
+ */
+#define APM_RTT_STARTUP_PRIORITY  15
+
 class RTT::Scheduler : public AP_HAL::Scheduler
 {
 public:

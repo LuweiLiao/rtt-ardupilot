@@ -23,8 +23,12 @@
 #endif
 #include "SPIDeviceManager.h"
 #include "I2CDeviceManager.h"
+#include "WSPIDevice.h"
 #include <AP_HAL/OpticalFlow.h>
 #include "Flash.h"
+#if HAL_WITH_DSP
+#include "DSP.h"
+#endif
 #include <stm32f7xx.h>
 #if defined(RT_USING_FINSH) && defined(MSH_USING_BUILT_IN_COMMANDS)
 #include <finsh.h>
@@ -66,6 +70,7 @@ static RTT::UARTDriver serial9Driver(9);
 
 static RTT::I2CDeviceManager i2cDeviceManager;
 static RTT::SPIDeviceManager spiDeviceManager;
+static RTT::WSPIDeviceManager wspiDeviceManager;
 static RTT::AnalogIn analogIn;
 static RTT::Storage storageDriver;
 static RTT::GPIO gpioDriver;
@@ -76,6 +81,9 @@ static RTT::Scheduler schedulerInstance;
 static RTT::Util utilInstance;
 static RTT::OpticalFlowStub opticalFlowDriver;
 static RTT::Flash flashDriver;
+#if HAL_WITH_DSP
+static RTT::DSP dspDriver;
+#endif
 #if HAL_WITH_IO_MCU
 // IOMCU UART — maps to HAL_UART_IOMCU_IDX=7 (UART8)
 // This driver is NOT in the HAL serial array, so Scheduler must tick it
@@ -105,7 +113,7 @@ HAL_RTT::HAL_RTT() :
         &serial9Driver,
         &i2cDeviceManager,
         &spiDeviceManager,
-        nullptr,
+        &wspiDeviceManager,
         &analogIn,
         &storageDriver,
         &cons,
@@ -116,6 +124,9 @@ HAL_RTT::HAL_RTT() :
         &utilInstance,
         &opticalFlowDriver,
         &flashDriver,
+#if HAL_WITH_DSP
+        &dspDriver,
+#endif
 #if AP_SIM_ENABLED && CONFIG_HAL_BOARD != HAL_BOARD_SITL
         &xsimstate,
 #endif
@@ -167,8 +178,49 @@ static void _main_loop_entry(void* arg)
 
     main_loop_arg* a = (main_loop_arg*)arg;
     a->sched->set_main_thread_id(rt_thread_self());
+
+    /*
+     * ChibiOS setup priority discipline — mirrors HAL_ChibiOS_Class.cpp:265, 317:
+     *
+     *   1. Set main priority          → APM_MAIN_PRIORITY (=5)
+     *      (ChibiOS: chThdSetPriority(APM_MAIN_PRIORITY), L236)
+     *   2. Drop to startup priority   → APM_RTT_STARTUP_PRIORITY (=15)
+     *      (ChibiOS: hal_chibios_set_priority(APM_STARTUP_PRIORITY), L265)
+     *   3. Signal hal_initialized     → timer/SPI threads start running
+     *      (ChibiOS: schedulerInstance.hal_initialized(), L273)
+     *   4. Run setup() at low priority  → sensor init loops get CPU time
+     *   5. Restore main thread priority → APM_MAIN_PRIORITY (=5)
+     *      (ChibiOS: chThdSetPriority(APM_MAIN_PRIORITY), L317)
+     *
+     * Dropping priority during setup lets timer (4), SPI (4), UART (6)
+     * and other service threads preempt the main init, preventing sensor
+     * read timeouts and IOMCU upload stalls.
+     */
+    {
+        rt_thread_t self = rt_thread_self();
+        rt_uint8_t main_prio = (rt_uint8_t)APM_RTT_MAIN_PRIORITY;
+        rt_thread_control(self, RT_THREAD_CTRL_CHANGE_PRIORITY, &main_prio);
+    }
+
+    /* Drop to startup priority — below timer/SPI(4), UART(6), above IO(18) */
+    {
+        rt_thread_t self = rt_thread_self();
+        rt_uint8_t startup_prio = (rt_uint8_t)APM_RTT_STARTUP_PRIORITY;
+        rt_thread_control(self, RT_THREAD_CTRL_CHANGE_PRIORITY, &startup_prio);
+    }
+
+    /* Signal hal_initialized — timer/SPI/UART threads can now run freely */
+    a->sched->hal_initialized();
+
     a->callbacks->setup();
     a->sched->set_system_initialized();
+
+    /* Restore main priority for the main loop */
+    {
+        rt_thread_t self = rt_thread_self();
+        rt_uint8_t main_prio = (rt_uint8_t)APM_RTT_MAIN_PRIORITY;
+        rt_thread_control(self, RT_THREAD_CTRL_CHANGE_PRIORITY, &main_prio);
+    }
 
     rtt_dbg_hal_run_called = 0x11111111;  /* Second magic number after setup */
 

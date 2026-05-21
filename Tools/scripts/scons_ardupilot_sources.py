@@ -176,6 +176,11 @@ def _collect_cpppath(ap_root, bsp_dir, rtt_root, build_root, board="rtt_pixhawk6
         if os.path.isdir(d):
             paths.append(d)
 
+    # CMSIS-DSP include path (for arm_math.h used by AP_HAL_RTT/DSP.h)
+    _cmsis_dsp = os.path.join(ap_root, 'libraries', 'AP_GyroFFT', 'CMSIS_5', 'include')
+    if os.path.isdir(_cmsis_dsp):
+        paths.append(_cmsis_dsp)
+
     if board == 'rtt_cuav_v5':
         # F7 BSP: packages from pkgs --update
         paths.append(os.path.join(bsp_dir, 'packages', 'stm32f7_hal_driver-latest', 'Inc'))
@@ -189,6 +194,14 @@ def _collect_cpppath(ap_root, bsp_dir, rtt_root, build_root, board="rtt_pixhawk6
         paths.append(os.path.join(bsp_dir, 'packages', 'stm32h7_cmsis_driver-latest', 'Include'))
         paths.append(os.path.join(bsp_dir, 'packages', 'CMSIS-Core-latest', 'Include'))
         paths.append(os.path.join(bsp_dir, 'packages', 'stm32h7_cmsis_driver-latest', 'Include'))
+    # DroneCAN/libcanard include path (needed by AP_DroneCAN/AP_Canard_iface.h)
+    dronecan_dir = os.path.join(ap_root, 'modules', 'DroneCAN', 'libcanard')
+    if os.path.isdir(dronecan_dir):
+        paths.append(dronecan_dir)
+    # DroneCAN generated headers (dronecan_msgs.h etc.)
+    dronecan_gen = os.path.join(ap_root, 'build', board, 'dronecan-gen', 'include')
+    if os.path.isdir(dronecan_gen):
+        paths.append(dronecan_gen)
     return paths
 
 
@@ -231,6 +244,8 @@ def _collect_defines_f7():
         'AP_BUILD_TARGET_NAME="arducopter"',
         'FRAME_CONFIG=MULTICOPTER_FRAME',
         'AP_DDS_ENABLED=0',
+        'HAL_NUM_CAN_IFACES=0',
+        'DRONECAN_CXX_WRAPPERS=1',
     ]
 
 

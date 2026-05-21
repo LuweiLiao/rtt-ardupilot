@@ -112,9 +112,13 @@
 #ifndef HAL_WITH_DSP
 #define HAL_WITH_DSP 0
 #endif
-/* GyroFFT requires DSP; disable when HAL_WITH_DSP is 0 to avoid missing AP_HAL::DSP::FrequencyPeak */
+/* GyroFFT requires DSP; explicitly disable when HAL_WITH_DSP is 0,
+ * otherwise AP_HAL_Boards.h default (HAL_PROGRAM_SIZE_LIMIT_KB > 1024)
+ * re-enables it on large-flash boards like CUAV V5 (2MB) */
+#if !HAL_WITH_DSP
 #ifndef HAL_GYROFFT_ENABLED
 #define HAL_GYROFFT_ENABLED 0
+#endif
 #endif
 #ifndef HAL_CANFD_SUPPORTED
 #define HAL_CANFD_SUPPORTED 0

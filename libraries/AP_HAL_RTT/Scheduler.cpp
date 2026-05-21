@@ -73,8 +73,13 @@ void Scheduler::_delay_microseconds_dwt(uint16_t us)
     const uint32_t cycles = us * (SystemCoreClock / 1000000U);
     const uint32_t start = DWT_CYCCNT_REG;
     while ((DWT_CYCCNT_REG - start) < cycles) {
-        /* spin */
-        asm volatile("dsb" ::: "memory");
+        /* spin — compiler barrier only, no DSB.
+         * DSB stalls the ~14-cycle pipeline on every iteration
+         * without improving wall-clock timing (which is governed
+         * by the unsigned CYCCNT delta).  Removing DSB lets
+         * pending interrupts fire between loop iterations,
+         * improving interrupt latency during busy-wait. */
+        asm volatile("" ::: "memory");
     }
 }
 
@@ -321,8 +326,8 @@ bool Scheduler::thread_create(AP_HAL::MemberProc proc, const char* name,
 
     const uint8_t rtt_prio = calculate_thread_priority(base, priority);
 
-    if (stack_size < 2048) {
-        stack_size = 2048;
+    if (stack_size < 1024) {
+        stack_size = 1024;
     }
 
     rt_thread_t th = rt_thread_create(name, _thread_create_trampoline,
@@ -361,7 +366,7 @@ void Scheduler::init()
 {
     _monitor_thread_ctx = rt_thread_create("ap_mon",
                                            _monitor_thread_entry,
-                                           this, 2048,
+                                           this, 1024,
                                            APM_RTT_MONITOR_PRIORITY, 20);
     if (_monitor_thread_ctx) rt_thread_startup(_monitor_thread_ctx);
 
@@ -373,13 +378,13 @@ void Scheduler::init()
 
     _rcout_thread_ctx = rt_thread_create("ap_rcout",
                                          _rcout_thread_entry,
-                                         this, 2048,
+                                         this, 512,
                                          APM_RTT_RCOUT_PRIORITY, 20);
     if (_rcout_thread_ctx) rt_thread_startup(_rcout_thread_ctx);
 
     _rcin_thread_ctx = rt_thread_create("ap_rcin",
                                         _rcin_thread_entry,
-                                        this, 2048,
+                                        this, 1024,
                                         APM_RTT_RCIN_PRIORITY, 20);
     if (_rcin_thread_ctx) rt_thread_startup(_rcin_thread_ctx);
 
@@ -401,11 +406,14 @@ void Scheduler::init()
                                            APM_RTT_STORAGE_PRIORITY, 20);
     if (_storage_thread_ctx) rt_thread_startup(_storage_thread_ctx);
 
-    _hal_initialized = true;
-
-    /* IWDG will be started in set_system_initialized() after setup() completes */
+    /* _hal_initialized is set in _main_loop_entry() after the main
+     * thread drops to startup priority — mirrors ChibiOS behaviour:
+     * schedulerInstance.hal_initialized() is called at L273 of
+     * HAL_ChibiOS_Class.cpp, after hal_chibios_set_priority(APM_STARTUP_PRIORITY)
+     * at L265.  This ensures timer/SPI/UART threads only start running
+     * AFTER the main thread is at low priority, preventing them from
+     * starving the init process. */
 }
-
 /* ----------------------------------------------------------------
  *  delay / delay_microseconds — hybrid strategy
  *
@@ -489,26 +497,13 @@ void Scheduler::delay_microseconds_boost(uint16_t us)
         _called_boost = true;
     }
     /*
-     * Hybrid sleep — same strategy as delay_microseconds():
-     *   1) Sleep whole ticks (yields CPU so bus threads can run)
-     *   2) DWT busy-wait sub-tick remainder (avoids 100µs→1tick inflation)
-     *
-     * Previous ceiling-rounding added up to 100µs overhead per
-     * wait_for_sample() call (~15% of main loop budget at 400 Hz).
+     * Delegate to delay_microseconds() — matches ChibiOS pattern where
+     * delay_microseconds_boost() just boosts priority then calls the
+     * regular delay function.  This fixes the sub-tick bug where
+     * us < tick_us used rt_thread_delay(1), inflating e.g. 100 µs to
+     * 1000 µs and adding ~900 µs jitter per wait_for_sample() call.
      */
-    const uint32_t tick_us = 1000000U / RT_TICK_PER_SECOND;
-    if (us < tick_us) {
-        rt_thread_delay(1);
-        return;
-    }
-    const rt_tick_t whole_ticks = us / tick_us;
-    const uint32_t remainder_us = us % tick_us;
-    if (whole_ticks > 0) {
-        rt_thread_delay(whole_ticks);
-    }
-    if (remainder_us > 0) {
-        _delay_microseconds_dwt(remainder_us);
-    }
+    delay_microseconds(us);
 }
 
 bool Scheduler::check_called_boost(void)

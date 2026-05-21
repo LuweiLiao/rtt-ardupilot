@@ -95,7 +95,188 @@ static void _spi4_gpio_init(void)
 
     _spi4_gpio_init_done = true;
 }
-#endif
+/* ─────────────────────────────────────── SPI DMA transfer mode ─── */
+
+/* DMA stream mapping for register-level SPI buses.
+ * SPI1: RX=DMA2_Stream2 CH3, TX=DMA2_Stream5 CH3
+ * SPI4: RX=DMA2_Stream0 CH4, TX=DMA2_Stream1 CH4
+ *
+ * ChibiOS reference (spi_lld_exchange, hal_spi_lld.c:597-626):
+ *   Configures RX + TX DMA streams with MINC, TCIE, TEIE, enables both.
+ *   Completion signaled via TCIF ISR → _spi_isr_code().
+ *
+ * RTT approach: poll DMA EN bit (hardware clears EN on completion).
+ *   No ISR needed since we are in thread context and can spin.
+ *   Small transfers (≤ DMA_THRESHOLD bytes) use register polling
+ *   to avoid DMA setup overhead.
+ */
+#define SPI_DMA_THRESHOLD   8
+
+struct spi_dma_desc {
+    DMA_Stream_TypeDef *rx_stream;
+    uint32_t            ch_rx;   /* channel number 0-7 */
+    DMA_Stream_TypeDef *tx_stream;
+    uint32_t            ch_tx;
+};
+
+/* bus index = AP bus number (1-based) */
+static const struct spi_dma_desc _spi_dma_tbl[] = {
+    {NULL, 0, NULL, 0},                    /* bus 0 */
+    {DMA2_Stream2, 3, DMA2_Stream5, 3},    /* bus 1 = SPI1 */
+    {NULL, 0, NULL, 0},                    /* bus 2 = SPI2 (RTT framework) */
+    {NULL, 0, NULL, 0},                    /* bus 3 = SPI3 (RTT framework) */
+    {DMA2_Stream0, 4, DMA2_Stream1, 4},    /* bus 4 = SPI4 */
+};
+
+static bool _spi_dma_clock_ok = false;
+static void _spi_dma_clock_init(void)
+{
+    if (_spi_dma_clock_ok) return;
+    RCC->AHB1ENR |= RCC_AHB1ENR_DMA2EN;
+    (void)RCC->AHB1ENR;
+    _spi_dma_clock_ok = true;
+}
+
+/* Disable a DMA stream and wait for EN to clear. */
+static void _dma_stream_disable(DMA_Stream_TypeDef *s)
+{
+    s->CR &= ~DMA_SxCR_EN;
+    uint32_t tout = 10000;
+    while ((s->CR & DMA_SxCR_EN) && --tout) { __NOP(); }
+}
+
+static void _spi_dma_abort(const struct spi_dma_desc *dma, SPI_TypeDef *spi)
+{
+    if (dma->rx_stream) _dma_stream_disable(dma->rx_stream);
+    if (dma->tx_stream) _dma_stream_disable(dma->tx_stream);
+    spi->CR2 &= ~(SPI_CR2_TXDMAEN | SPI_CR2_RXDMAEN);
+    __DSB();
+}
+
+/* Full-duplex DMA transfer for register-level SPI buses.
+ *
+ * @param spi   SPI peripheral register base
+ * @param bus   AP bus number (1 = SPI1, 4 = SPI4)
+ * @param send  TX data (nullptr = send 0xFF, but still requires valid memory for DMA)
+ * @param recv  RX buffer (nullptr = discard received bytes)
+ * @param len   number of bytes
+ * @return      true on success
+ *
+ * ChibiOS reference: spi_lld_exchange() at hal_spi_lld.c:597-626
+ *   dmaStreamSetMemory0 + dmaStreamSetTransactionSize + dmaStreamSetMode + dmaStreamEnable
+ */
+static bool _spi_dma_xfer(SPI_TypeDef *spi, uint8_t bus,
+                           const uint8_t *send, uint8_t *recv, uint32_t len)
+{
+    if (bus >= ARRAY_SIZE(_spi_dma_tbl)) return false;
+    const struct spi_dma_desc *dma = &_spi_dma_tbl[bus];
+    if (dma->rx_stream == NULL || dma->tx_stream == NULL) return false;
+
+    /* Small transfers: register polling avoids DMA setup latency */
+    if (len <= SPI_DMA_THRESHOLD) {
+        for (uint32_t i = 0; i < len; i++) {
+            uint32_t tout = 100000;
+            while (!(spi->SR & SPI_SR_TXE) && --tout) { __NOP(); }
+            if (tout == 0) return false;
+            *((__IO uint8_t *)&spi->DR) = send ? send[i] : 0xFF;
+            tout = 100000;
+            while (!(spi->SR & SPI_SR_RXNE) && --tout) { __NOP(); }
+            if (tout == 0) return false;
+            if (recv) recv[i] = *((__IO uint8_t *)&spi->DR);
+            else (void)*((__IO uint8_t *)&spi->DR);
+        }
+        uint32_t tout = 10000;
+        while ((spi->SR & SPI_SR_BSY) && --tout) { __NOP(); }
+        return true;
+    }
+
+    _spi_dma_clock_init();
+
+    /* Prepare usable buffers — DMA needs valid memory addresses */
+    uint32_t rx_scratch = 0;
+    uint8_t *rx_buf = recv ? recv : (uint8_t *)&rx_scratch;
+
+    /* ── Set up RX stream: PERIPH → MEM, 8-bit, increment MEM addr ── */
+    _dma_stream_disable(dma->rx_stream);
+    dma->rx_stream->PAR  = (uint32_t)&spi->DR;
+    dma->rx_stream->M0AR = (uint32_t)rx_buf;
+    dma->rx_stream->NDTR = len;
+    dma->rx_stream->FCR  = 0;
+    dma->rx_stream->CR   = (dma->ch_rx << DMA_SxCR_CHSEL_Pos)
+                           | DMA_SxCR_MINC
+                           | DMA_SxCR_TCIE
+                           | DMA_SxCR_TEIE;
+
+    /* ── Set up TX stream: MEM → PERIPH, 8-bit, increment MEM addr ── */
+    _dma_stream_disable(dma->tx_stream);
+    dma->tx_stream->PAR  = (uint32_t)&spi->DR;
+    dma->tx_stream->M0AR = (uint32_t)(send ? send : rx_buf);
+    dma->tx_stream->NDTR = len;
+    dma->tx_stream->FCR  = 0;
+    dma->tx_stream->CR   = (dma->ch_tx << DMA_SxCR_CHSEL_Pos)
+                           | DMA_SxCR_MINC
+                           | DMA_SxCR_TCIE
+                           | DMA_SxCR_TEIE
+                           | DMA_SxCR_DIR_0;
+
+    /* Ensure PSIZE=00(8-bit), MSIZE=00(8-bit) */
+    dma->rx_stream->CR &= ~(DMA_SxCR_PSIZE_Msk | DMA_SxCR_MSIZE_Msk);
+    dma->tx_stream->CR &= ~(DMA_SxCR_PSIZE_Msk | DMA_SxCR_MSIZE_Msk);
+
+    /* Clear stale interrupt flags — use CMSIS bit definitions.
+     * Stream 0-3 → LIFCR, Stream 4-7 → HIFCR.
+     * Each stream's TCIF flag is at pos 5 + stream_in_group * 6. */
+    {
+        /* CTCIF bit positions for LIFCR streams 0-3 */
+        static const uint32_t lifcr_ctcif[] = {
+            DMA_LIFCR_CTCIF0, DMA_LIFCR_CTCIF1,
+            DMA_LIFCR_CTCIF2, DMA_LIFCR_CTCIF3,
+        };
+        /* CTCIF bit positions for HIFCR streams 4-7 */
+        static const uint32_t hifcr_ctcif[] = {
+            DMA_HIFCR_CTCIF4, DMA_HIFCR_CTCIF5,
+            DMA_HIFCR_CTCIF6, DMA_HIFCR_CTCIF7,
+        };
+        uint32_t rx_idx = ((uint32_t)dma->rx_stream - (uint32_t)DMA2) / 0x18U;
+        uint32_t tx_idx = ((uint32_t)dma->tx_stream - (uint32_t)DMA2) / 0x18U;
+        if (rx_idx < 4U) DMA2->LIFCR = lifcr_ctcif[rx_idx];
+        else             DMA2->HIFCR = hifcr_ctcif[rx_idx - 4U];
+        if (tx_idx < 4U) DMA2->LIFCR = lifcr_ctcif[tx_idx];
+        else             DMA2->HIFCR = hifcr_ctcif[tx_idx - 4U];
+    }
+
+    __DSB();
+
+    /* Enable RX stream first (then TX) — ChibiOS convention */
+    dma->rx_stream->CR |= DMA_SxCR_EN;
+    dma->tx_stream->CR |= DMA_SxCR_EN;
+    __DSB();
+
+    /* Enable SPI DMA requests: SPI fetches TX from DMA and writes RX to DMA */
+    spi->CR2 |= SPI_CR2_TXDMAEN | SPI_CR2_RXDMAEN;
+    __DSB();
+
+    /* Poll for completion — hardware clears EN when the stream finishes.
+     * Timeout: 20ms + 32us/byte (same as ChibiOS SPIDevice.cpp). */
+    uint32_t timeout = 20000U + len * 32U;
+    while (timeout--) {
+        if (!(dma->rx_stream->CR & DMA_SxCR_EN) &&
+            !(dma->tx_stream->CR & DMA_SxCR_EN)) {
+            spi->CR2 &= ~(SPI_CR2_TXDMAEN | SPI_CR2_RXDMAEN);
+            /* Wait for BSY — last byte may still be shifting in */
+            uint32_t bsy = 10000;
+            while ((spi->SR & SPI_SR_BSY) && --bsy) { __NOP(); }
+            return true;
+        }
+        __NOP();
+    }
+
+    /* Timeout — abort DMA + SPI */
+    _spi_dma_abort(dma, spi);
+    return false;
+}
+
+#endif /* SOC_SERIES_STM32F7 */
 
 using namespace RTT;
 
@@ -408,8 +589,22 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
         if (send_len > 0 || recv_len > 0) {
             bool need_sem = !_cs_held;
             if (need_sem && !_bus->semaphore.take(HAL_SEMAPHORE_BLOCK_FOREVER)) return false;
-            bool ok = spi1_poll_transfer(nullptr, send, send_len, recv, recv_len,
-                                         !_cs_held, !_cs_held, bus_to_spi(_desc.bus), _cs_pin);
+            bool ok = false;
+
+            /* ── Full-duplex case (send == recv, same len): try DMA ── */
+            const bool fullduplex = (send_len > 0 && recv_len > 0 &&
+                                     send == recv && send_len == recv_len);
+
+            if (fullduplex) {
+                ok = _spi_dma_xfer(bus_to_spi(_desc.bus), _desc.bus,
+                                   send, recv, send_len);
+            } else {
+                /* ── Half-duplex (write then read): use bounce buffer, poll ── */
+                ok = spi1_poll_transfer(nullptr, send, send_len, recv, recv_len,
+                                        !_cs_held, !_cs_held,
+                                        bus_to_spi(_desc.bus), _cs_pin);
+            }
+
             if (!_cs_held && need_sem) _bus->semaphore.give();
             return ok;
         }
@@ -585,8 +780,8 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
             }
         }
         if (len > 0) {
-            return spi1_poll_transfer(nullptr, send, len, recv, len,
-                                      !_cs_held, !_cs_held, bus_to_spi(_desc.bus), _cs_pin);
+            return _spi_dma_xfer(bus_to_spi(_desc.bus), _desc.bus,
+                                 send, recv, len);
         }
 #endif
         return false;

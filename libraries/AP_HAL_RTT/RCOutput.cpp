@@ -65,8 +65,13 @@ void RCOutput::init()
 
 #if HAL_WITH_IO_MCU
     if (AP_BoardConfig::io_enabled()) {
+        // with IOMCU the local (FMU) channels start at 8
+        chan_offset = 8;
         iomcu_enabled = true;
         iomcu.init();
+    }
+    if (AP_BoardConfig::io_dshot()) {
+        iomcu_dshot = true;
     }
 #endif
     // Register safety_update as a timer process at 10 Hz

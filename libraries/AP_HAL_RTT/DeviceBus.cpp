@@ -8,6 +8,11 @@
  * Bus-level exclusive access: each DeviceBus has its own Semaphore,
  * taken before each callback dispatch.
  *
+ * API aligned with AP_HAL_ChibiOS/Device.cpp:
+ *  - bouncebuffer_setup / bouncebuffer_finish (DMA-safe buffer abstraction)
+ *  - hal_device tracking on the bus
+ *  - thread-context guard on adjust_timer()
+ *
  * Max 8 buses supported (MAX_BUSES).  Stacks allocated on demand.
  */
 
@@ -26,7 +31,8 @@ DeviceBus *DeviceBus::_buses[MAX_BUSES] = {};
 /* ------------------------------------------------------------------
  *  Per-bus thread: static thread objects, heap-allocated stacks
  *  Threads are started lazily on first register_periodic_callback.
- *  Each stack is rt_malloc'd on demand (8 KB) and never freed.
+ *  Each stack is rt_malloc'd on demand (1 KB, matching ChibiOS
+ *  HAL_DEVICE_THREAD_STACK) and never freed.
  * ------------------------------------------------------------------ */
 static struct rt_thread _bus_thread_objs[DeviceBus::MAX_BUSES];
 static char *_bus_thread_stacks[DeviceBus::MAX_BUSES] = {nullptr};
@@ -106,10 +112,11 @@ DeviceBus *DeviceBus::get_bus(uint8_t bus_num, uint8_t thread_priority)
 AP_HAL::Device::PeriodicHandle DeviceBus::register_periodic_callback(
     uint32_t period_usec, AP_HAL::Device::PeriodicCb cb, AP_HAL::Device *hal_device)
 {
-    // rt_kprintf("DeviceBus: register_periodic_callback period=%u, device=%p\n", period_usec, hal_device);
-
     if (!_thread_started) {
         _thread_started = true;
+
+        /* Store the hal_device for future reference (ChibiOS API compat) */
+        _hal_device = hal_device;
 
         char name[RT_NAME_MAX];
         if (hal_device != nullptr) {
@@ -161,6 +168,10 @@ AP_HAL::Device::PeriodicHandle DeviceBus::register_periodic_callback(
                        _bus_thread_entry, this,
                        _bus_thread_stacks[slot], BUS_STACK_SIZE,
                        prio, 20);
+
+        /* Store the thread handle for adjust_timer() ownership check */
+        _thread = &_bus_thread_objs[slot];
+
         rt_thread_startup(&_bus_thread_objs[slot]);
         _bus_thread_inited[slot] = true;
     }
@@ -183,10 +194,112 @@ bool DeviceBus::adjust_timer(AP_HAL::Device::PeriodicHandle h, uint32_t period_u
     if (h == nullptr) {
         return false;
     }
+
+    /*
+     * Thread-context guard: only allow adjustment from within the bus
+     * thread itself, to prevent races with the callback dispatch loop.
+     * Matches ChibiOS semantics (chThdGetSelfX() != thread_ctx).
+     */
+    if (rt_thread_self() != _thread) {
+        return false;
+    }
+
     auto *ci = (callback_info *)h;
     ci->period_usec = period_usec;
     ci->next_usec = AP_HAL::micros64() + period_usec;
     return true;
+}
+
+/* ------------------------------------------------------------------
+ *  Bounce buffer support (DMA-safe transfers)
+ *
+ *  RTT implementation: always allocate a 32-byte-aligned buffer
+ *  via rt_malloc_align, copy data in/out.  This is less sophisticated
+ *  than ChibiOS (which checks mem_is_dma_safe and uses pre-allocated
+ *  pools), but functionally correct for STM32F7/H7 unified memory.
+ *
+ *  API matches AP_HAL_ChibiOS DeviceBus::bouncebuffer_setup / finish.
+ * ------------------------------------------------------------------ */
+
+/*
+ * Ensure a bounce buffer of at least 'size' bytes exists.
+ * Allocates via rt_malloc_align(32) for DMA-safe alignment.
+ * Returns true on success.
+ */
+bool DeviceBus::_bouncebuffer_ensure(rtt_bouncebuffer_t *&bb, uint32_t size)
+{
+    if (bb == nullptr) {
+        bb = (rtt_bouncebuffer_t *)rt_malloc(sizeof(rtt_bouncebuffer_t));
+        if (bb == nullptr) {
+            return false;
+        }
+        memset(bb, 0, sizeof(*bb));
+    }
+
+    if (bb->size < size || bb->dma_buf == nullptr) {
+        if (bb->dma_buf != nullptr) {
+            rt_free_align(bb->dma_buf);
+        }
+        bb->dma_buf = (uint8_t *)rt_malloc_align(size, 32);
+        if (bb->dma_buf == nullptr) {
+            bb->size = 0;
+            return false;
+        }
+        bb->size = size;
+    }
+
+    return true;
+}
+
+void DeviceBus::_bouncebuffer_release(rtt_bouncebuffer_t *bb)
+{
+    if (bb != nullptr) {
+        bb->busy = false;
+    }
+}
+
+bool DeviceBus::bouncebuffer_setup(const uint8_t *&buf_tx, uint16_t tx_len,
+                                   uint8_t *&buf_rx, uint16_t rx_len)
+{
+    if (buf_rx != nullptr && rx_len > 0) {
+        if (!_bouncebuffer_ensure(_bounce_buffer_rx, rx_len)) {
+            return false;
+        }
+        _bounce_buffer_rx->orig_buf = buf_rx;
+        _bounce_buffer_rx->busy = true;
+        buf_rx = _bounce_buffer_rx->dma_buf;
+    }
+
+    if (buf_tx != nullptr && tx_len > 0) {
+        if (!_bouncebuffer_ensure(_bounce_buffer_tx, tx_len)) {
+            if (buf_rx != nullptr) {
+                _bounce_buffer_rx->busy = false;
+            }
+            return false;
+        }
+        _bounce_buffer_tx->orig_buf = const_cast<uint8_t *>(buf_tx);
+        _bounce_buffer_tx->busy = true;
+        memcpy(_bounce_buffer_tx->dma_buf, buf_tx, tx_len);
+        buf_tx = _bounce_buffer_tx->dma_buf;
+    }
+
+    return true;
+}
+
+void DeviceBus::bouncebuffer_finish(const uint8_t *buf_tx, uint8_t *buf_rx, uint16_t rx_len)
+{
+    if (buf_rx != nullptr && _bounce_buffer_rx != nullptr && _bounce_buffer_rx->busy) {
+        if (_bounce_buffer_rx->orig_buf != nullptr && rx_len > 0) {
+            memcpy(_bounce_buffer_rx->orig_buf, _bounce_buffer_rx->dma_buf, rx_len);
+        }
+        _bounce_buffer_rx->busy = false;
+        _bounce_buffer_rx->orig_buf = nullptr;
+    }
+
+    if (buf_tx != nullptr && _bounce_buffer_tx != nullptr && _bounce_buffer_tx->busy) {
+        _bounce_buffer_tx->busy = false;
+        _bounce_buffer_tx->orig_buf = nullptr;
+    }
 }
 
 } // namespace RTT
