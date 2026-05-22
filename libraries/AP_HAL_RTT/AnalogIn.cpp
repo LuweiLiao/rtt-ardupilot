@@ -14,9 +14,9 @@
 namespace RTT
 {
 
-// Logical channel index → ADC1 channel number
-// CUAV V5: PA0(0),PA1(1),PA2(2),PA3(3),PA4(4),PB0(8),PC0(10),PC1(11),PC4(14)
-static const uint8_t _ch_map[9] = {0, 1, 2, 3, 4, 8, 10, 11, 14};
+// Logical (hwdef index) → ADC1 channel number
+// hwdef order: PA0(0),PA1(1),PA2(2),PA3(3),PB0(8),PC0(10),PC1(11),PC4(14),PA4(4)
+static const uint8_t _ch_map[9] = {0, 1, 2, 3, 8, 10, 11, 14, 4};
 #define VDD_5V_SENS_INDEX 6  // _ch_map[6] = ch10 = PC0 VDD_5V_SENS ×2 divider
 
 static bool _adc_inited = false;

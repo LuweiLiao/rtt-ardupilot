@@ -4,11 +4,15 @@
  * System ID from STM32 UID registers.
  * available_memory from RT-Thread heap stats.
  * thread_info lists all RT-Thread threads with stack usage.
+ *
+ * Reference: AP_HAL_ChibiOS/Util.cpp — structure and API align with
+ * the ChibiOS HAL implementation at every function boundary.
  */
 
 #include "AP_HAL_RTT/Util.h"
 #include "RCOutput.h"
 #include <AP_Common/ExpandingString.h>
+#include <AP_Math/AP_Math.h>          /* for MIN(), get_random16() fallback */
 #include <rtthread.h>
 #include <stdio.h>
 #include <stm32f7xx.h>
@@ -97,9 +101,10 @@ bool Util::get_system_id(char buf[50])
 
 bool Util::get_system_id_unformatted(uint8_t buf[], uint8_t &len)
 {
-    len = 12;
+    /* Clamp to caller's buffer size (ChibiOS ref: line 356) */
+    len = MIN(12, len);
     const uint8_t *uid = (const uint8_t *)STM32_UID_BASE;
-    for (uint8_t i = 0; i < 12; i++) {
+    for (uint8_t i = 0; i < len; i++) {
         buf[i] = uid[i];
     }
     return true;
@@ -168,12 +173,13 @@ enum AP_HAL::Util::safety_state Util::safety_switch_state(void)
 }
 
 /* ---------------------------------------------------------------
- *  Tone Alarm — stub until PWM buzzer pin is configured
+ *  Tone Alarm — stub until PWM buzzer pin is configured.
+ *  Returns false: no tone alarm hardware available (ChibiOS ref: line 128-134)
  * --------------------------------------------------------------- */
 bool Util::toneAlarm_init(uint8_t types)
 {
     (void)types;
-    return true;
+    return false;
 }
 
 void Util::toneAlarm_set_buzzer_tone(float frequency, float volume, uint32_t duration_ms)
@@ -185,43 +191,64 @@ void Util::toneAlarm_set_buzzer_tone(float frequency, float volume, uint32_t dur
 
 /* ---------------------------------------------------------------
  *  Watchdog
+ *  Cache reset reason at first call (ChibiOS ref: watchdog.c:104-117)
  * --------------------------------------------------------------- */
+static uint32_t _watchdog_reset_reason;
+
+static void _watchdog_save_reason(void)
+{
+    if (_watchdog_reset_reason == 0) {
+        _watchdog_reset_reason = RCC->CSR;
+    }
+}
+
 bool Util::was_watchdog_reset() const
 {
-    /* RCC_CSR flags: bit 29 = IWDGRSTF, bit 28 = WWDGRSTF */
-    uint32_t csr = RCC->CSR;
-    if (csr & (RCC_CSR_IWDGRSTF | RCC_CSR_WWDGRSTF)) {
-        return true;
-    }
-    return false;
+    _watchdog_save_reason();
+    /* bit 29 = IWDGRSTF, bit 28 = WWDGRSTF */
+    return (_watchdog_reset_reason & (RCC_CSR_IWDGRSTF | RCC_CSR_WWDGRSTF)) != 0;
 }
 
 /* ---------------------------------------------------------------
  *  Random values
  *  STM32F767 has a true RNG at RCC->AHB2ENR bit 6.
  *  Falls back to pseudo-random if RNG not ready.
+ *  Reference: ChibiOS stm32_util.c:498-564, Util.cpp:681-708
  * --------------------------------------------------------------- */
-#define RCC_AHB2ENR (*(volatile uint32_t *)0x40023834)
-#define RNG_CR      (*(volatile uint32_t *)0x50060800)
-#define RNG_SR      (*(volatile uint32_t *)0x50060804)
-#define RNG_DR      (*(volatile uint32_t *)0x50060808)
+#ifndef RNG
+#error "get_random_vals requires RNG peripheral (STM32F7)"
+#endif
 
 bool Util::get_random_vals(uint8_t* data, size_t size)
 {
-    RCC_AHB2ENR |= (1U << 6);
-    RNG_CR |= (1U << 2);
+    /* Enable RNG clock */
+    RCC->AHB2ENR |= RCC_AHB2ENR_RNGEN;
+    __DSB();  /* ensure clock is stable before accessing RNG registers */
 
-    for (size_t i = 0; i < size; ) {
+    RNG->CR |= RNG_CR_RNGEN;
+    __DSB();
+
+    size_t filled = 0;
+
+    while (filled < size) {
         uint32_t timeout = 10000;
-        while (!(RNG_SR & 1U) && timeout > 0) {
+        while ((!(RNG->SR & RNG_SR_DRDY)) && timeout > 0) {
             timeout--;
         }
         if (timeout == 0) {
-            return false;
+            /* HW RNG failed — fill remainder with software PRNG
+               (ChibiOS ref: Util.cpp:685-703) */
+            while (filled < size) {
+                uint16_t val = get_random16();
+                for (uint8_t j = 0; j < 2 && filled < size; j++, filled++) {
+                    data[filled] = (uint8_t)(val >> (j * 8));
+                }
+            }
+            return true;
         }
-        uint32_t val = RNG_DR;
-        for (uint8_t j = 0; j < 4 && i < size; j++, i++) {
-            data[i] = (uint8_t)(val >> (j * 8));
+        uint32_t val = RNG->DR;
+        for (uint8_t j = 0; j < 4 && filled < size; j++, filled++) {
+            data[filled] = (uint8_t)(val >> (j * 8));
         }
     }
     return true;
@@ -229,10 +256,14 @@ bool Util::get_random_vals(uint8_t* data, size_t size)
 
 /* ---------------------------------------------------------------
  *  Armed state
+ *  Reference: ChibiOS Util.cpp:811-817
  * --------------------------------------------------------------- */
 void Util::set_soft_armed(const bool b)
 {
     AP_HAL::Util::set_soft_armed(b);
+#ifdef HAL_GPIO_PIN_nARMED
+    palWriteLine(HAL_GPIO_PIN_nARMED, !b);
+#endif
 }
 
 void Util::thread_info(ExpandingString& str)
