@@ -129,7 +129,6 @@ static bool _qspi_wait_tcf(QUADSPI_TypeDef *qspi)
 static bool _qspi_command(QUADSPI_TypeDef *qspi,
                           const AP_HAL::Device::CommandHeader *cmdp)
 {
-    (void)cmdp;
     /* The ChibiOS workaround for D1 (command-only with no address/alt)
      * uses ABR to send the command.  For simplicity, we always set DLR=0
      * and write CCR.  The hardware handles the rest. */
