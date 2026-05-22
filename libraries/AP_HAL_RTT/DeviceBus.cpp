@@ -251,13 +251,6 @@ bool DeviceBus::_bouncebuffer_ensure(rtt_bouncebuffer_t *&bb, uint32_t size)
     return true;
 }
 
-void DeviceBus::_bouncebuffer_release(rtt_bouncebuffer_t *bb)
-{
-    if (bb != nullptr) {
-        bb->busy = false;
-    }
-}
-
 bool DeviceBus::bouncebuffer_setup(const uint8_t *&buf_tx, uint16_t tx_len,
                                    uint8_t *&buf_rx, uint16_t rx_len)
 {

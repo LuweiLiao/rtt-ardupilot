@@ -1,9 +1,9 @@
 /*
- * AP_HAL_RTT — DeviceBus: per-bus callback threads with static allocation
+ * AP_HAL_RTT — DeviceBus: per-bus callback threads with heap-allocated stacks
  *
  * One thread per physical bus (SPI1, SPI2, SPI4, I2C…).  Each thread uses
- * a static stack buffer (rt_thread_init, no heap) to avoid heap exhaustion
- * from rt_thread_create.
+ * a static rt_thread object with a heap-allocated stack (rt_malloc) to avoid
+ * BSS footprint from static stack arrays.  Lazy allocation on first use.
  *
  * API aligned with AP_HAL_ChibiOS/Device.h: bouncebuffer support,
  * hal_device tracking, thread-context guard on adjust_timer().
@@ -82,7 +82,6 @@ private:
 
     // internal bounce buffer helpers
     static bool _bouncebuffer_ensure(rtt_bouncebuffer_t *&bb, uint32_t size);
-    static void _bouncebuffer_release(rtt_bouncebuffer_t *bb);
 };
 
 } // namespace RTT

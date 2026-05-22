@@ -58,6 +58,9 @@
 #include <string.h>
 #include <errno.h>
 
+/* include our own header for compiler signature checking */
+#include "sdcard.h"
+
 #include <AP_BoardConfig/AP_BoardConfig.h>
 
 extern const AP_HAL::HAL& hal;
@@ -119,6 +122,16 @@ static rt_device_t _find_sd_dev(void)
  *   The board init code (sd_card_mount_sync / sdcard_port.c) may have
  *   already mounted the card.  Detect this by checking whether the
  *   mount point directory is non-empty.
+ *
+ * KNOWN GAP (M2): sd_slowdown from AP_BoardConfig::get_sdcard_slowdown()
+ * is NOT applied because RTT's drv_sdio.c initializes the SDMMC clock
+ * once during board init.  Changing the clock speed would require
+ * stopping and restarting the SDIO driver.
+ *
+ * KNOWN GAP (L1): No semaphore/mutex guards the init sequence.
+ * ChibiOS uses WITH_SEMAPHORE(sem) at sdcard.cpp:59.  On RTT the
+ * init sequence is short and typically single-threaded, but callers
+ * from AP_Filesystem_FATFS (background thread) could race.
  */
 bool sdcard_init(void)
 {
@@ -200,6 +213,19 @@ bool sdcard_init(void)
  * Called before remount with a different speed, or at shutdown.
  *
  * ChibiOS Reference: sdcard.cpp:161-185
+ *
+ * KNOWN GAP (M3): This function only unmounts the filesystem and powers
+ * the card via GPIO.  It does NOT stop the SDIO peripheral (no call to
+ * rt_device_control(RT_DEVICE_CTRL_CLOSE, ...)).  This means the SDMMC
+ * hardware remains configured after stop.  If a full hardware reset is
+ * needed (e.g. after a card error), the BSP's drv_sdio.c would need
+ * additional stop/reinit logic.
+ *
+ * KNOWN GAP (M2): The sd_slowdown parameter (BRD_SD_SLOWDOWN) is not
+ * plumbed through to the RTT BSP's SDMMC clock configuration.  On
+ * ChibiOS the SDMMC clock is scaled via sdcStart() with a slowdown
+ * factor; on RTT the clock is set once by drv_sdio.c at init time and
+ * cannot be changed without stopping and restarting the driver.
  */
 void sdcard_stop(void)
 {
