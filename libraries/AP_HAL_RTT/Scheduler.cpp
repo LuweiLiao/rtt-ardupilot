@@ -100,11 +100,20 @@ void Scheduler::_timer_thread_entry(void *arg)
 
         sched->_run_timers();
 
-        /* Feed IWDG every ms unconditionally — ChibiOS _timer_thread
-         * does NOT gate pat() on in_expected_delay().
-         * IWDG timeout is 2s, 1ms pat is well within safety margin.
+        /* Feed IWDG only during expected delays — mirrors ChibiOS
+         * _timer_thread at Scheduler.cpp:366-368:
+         *   if (sched->in_expected_delay()) {
+         *       sched->watchdog_pat();
+         *   }
+         * During normal operation the main loop calls watchdog_pat()
+         * at the end of each iteration (HAL_RTT_Class.cpp:247).  If the
+         * timer thread pats unconditionally it keeps last_watchdog_pat_ms
+         * constantly updated, which defeats the monitor thread's 500ms
+         * stuck-detection check at Scheduler.cpp:263.
          * Safe even before IWDG is started (0xAAAA to KR when off = no-op). */
-        sched->watchdog_pat();
+        if (sched->in_expected_delay()) {
+            sched->watchdog_pat();
+        }
     }
 }
 
