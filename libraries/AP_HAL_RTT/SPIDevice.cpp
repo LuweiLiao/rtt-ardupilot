@@ -8,6 +8,7 @@
 #include <cstring>
 #include <rtthread.h>
 #include <drivers/dev_spi.h>
+#include "Scheduler.h"  /* APM_RTT_SPI_PRIORITY for DeviceBus thread */
 
 #ifdef SOC_SERIES_STM32F7
 #include <stm32f7xx.h>
@@ -111,6 +112,19 @@ static void _spi4_gpio_init(void)
  *   to avoid DMA setup overhead.
  */
 #define SPI_DMA_THRESHOLD   8
+
+/* Dynamic BR for register-level SPI1 path.  Updated by set_speed().
+ * ChibiOS reference: derive_freq_flag_bus(), SPIDevice.cpp:259-281.
+ * SPI1 PCLK2 = 108MHz on STM32F767 @ 216MHz SYSCLK.
+ * BR = divider exponent: actual_freq = PCLK2 / 2^(BR+1).
+ * Target speeds from hwdef.dat: ICM20689 low=2MHz high=8MHz.
+ *   BR=3 → /16 = 6.75MHz (high speed)
+ *   BR=5 → /64 = 1.6875MHz (low speed, < 2MHz target)
+ */
+#ifndef SPI1_PCLK2_HZ
+#define SPI1_PCLK2_HZ 108000000U
+#endif
+static uint32_t _spi_reg_br = SPI_CR1_BR_0 | SPI_CR1_BR_1;  /* BR=3 = default HIGH */
 
 struct spi_dma_desc {
     DMA_Stream_TypeDef *rx_stream;
@@ -383,34 +397,44 @@ static bool spi1_poll_transfer(struct rt_spi_device *dev,
     if (send_len > 0) memcpy(buf, send, send_len);
     if (!fullduplex && recv_len > 0) memset(buf + send_len, 0, recv_len);
 
-    /* Assert CS via GPIO BSRR */
-    if (cs_take) {
-        rt_base_t cs = (cs_pin != 0) ? cs_pin : dev->cs_pin;
-        uint32_t port_idx = cs >> 4;
-        uint32_t pin = cs & 0xF;
-        volatile uint32_t *bsrr = (volatile uint32_t *)(0x40020000U + port_idx * 0x400U + 0x18U);
-        *bsrr = 1U << (pin + 16);
-    }
-
     /*
+     * Configure SPI before asserting CS — matches ChibiOS spiStart() convention.
+     *
+     * ChibiOS (SPIDevice.cpp:397-420): acquire_bus() calls spiStart() to configure
+     * CR1 + enable SPE BEFORE CS is asserted.  The original RTT code did the
+     * opposite — CS assertion before SPE toggle — creating a glitch on SCK
+     * (MODE3 idle-HIGH → GPIO input → AF output) that confuses the IMU slave
+     * during its first byte of the transaction.
+     *
      * Only re-initialize SPI on standalone transactions (cs_take == true).
-     * When CS is held across calls (ICM20689 multi-part read: send addr
-     * then read data), mid-transaction SPE toggle creates a clock glitch
-     * that confuses the IMU slave, causing RXNE never to set.
-     * Ref: ICM20689 112-byte full-duplex read hang.
+     * When CS is held across calls (ICM20689 multi-part burst read), cs_take=false
+     * and we reuse the existing CR1/CR2/SPE configuration — no glitch.
+     *
+     * BR is fixed at BR_0|BR_1 (=BR=3, /16 = 6.75MHz) for now, matching
+     * ChibiOS SPEED_HIGH.  SPEED_LOW (2MHz → BR=5, /64) requires dynamic BR
+     * selection (ChibiOS: derive_freq_flag, SPIDevice.cpp:259-281).
      */
     if (cs_take) {
         CLEAR_BIT(spi->CR1, SPI_CR1_SPE);
 
         spi->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI |
                    SPI_CR1_CPOL | SPI_CR1_CPHA |
-                   SPI_CR1_BR_0 | SPI_CR1_BR_1;  /* /16 */
+                   _spi_reg_br;
         spi->CR2 = SPI_CR2_DS_0 | SPI_CR2_DS_1 | SPI_CR2_DS_2 | SPI_CR2_FRXTH;
         SET_BIT(spi->CR1, SPI_CR1_SPE);
 
-        /* Flush stale FIFO */
+        /* Flush stale FIFO — SPI is now running, CS still HIGH */
         while (spi->SR & SPI_SR_RXNE) { (void)*((__IO uint8_t *)&spi->DR); }
         (void)spi->SR;
+    }
+
+    /* Assert CS via GPIO BSRR — SPI is fully configured and running */
+    if (cs_take) {
+        rt_base_t cs = (cs_pin != 0) ? cs_pin : dev->cs_pin;
+        uint32_t port_idx = cs >> 4;
+        uint32_t pin = cs & 0xF;
+        volatile uint32_t *bsrr = (volatile uint32_t *)(0x40020000U + port_idx * 0x400U + 0x18U);
+        *bsrr = 1U << (pin + 16);
     }
 
     for (uint32_t i = 0; i < total_len; i++) {
@@ -490,7 +514,7 @@ SPIDevice::SPIDevice(RTT_SPIDesc &desc)
     : AP_HAL::SPIDevice()
     , _desc(desc)
     , _dev(nullptr)
-    , _bus(DeviceBus::get_bus(desc.bus, 0))
+    , _bus(DeviceBus::get_bus(desc.bus, APM_RTT_SPI_PRIORITY))
     , _cs_pin(0)
 {
     set_device_bus(desc.bus);
@@ -546,7 +570,23 @@ void SPIDevice::_unlock_bus()
 bool SPIDevice::set_speed(AP_HAL::Device::Speed speed)
 {
 #ifdef SOC_SERIES_STM32F7
-    if (_dev == nullptr) return true; /* register-level polling, speed configured per-transfer */
+    if (_dev == nullptr) {
+        /* Register-level path: update BR for spi1_poll_transfer().
+         * Matches ChibiOS derive_freq_flag() semantics — find the lowest
+         * divider that brings clock below target frequency. */
+        uint32_t target_hz = (speed == AP_HAL::Device::SPEED_HIGH)
+                             ? _desc.highspeed : _desc.lowspeed;
+        if (target_hz == 0) target_hz = 8000000U;
+        /* ChibiOS: derive_freq_flag_bus() starts from bus_clocks/2 and halves.
+         * SPI1_CLOCK = STM32_PCLK2 = 108MHz.  bus_clocks[0]/2 = 54MHz.
+         * For target=2MHz: 54M→27M→13.5M→6.75M→3.375M→1.6875M → i=5 → BR=5
+         * For target=8MHz: 54M→27M→13.5M→6.75M            → i=3 → BR=3 */
+        uint32_t clk = SPI1_PCLK2_HZ / 2U;
+        uint32_t i = 0;
+        while (clk > target_hz && i < 7) { clk >>= 1U; i++; }
+        _spi_reg_br = i * SPI_CR1_BR_0;
+        return true;
+    }
 #endif
     if (_dev == nullptr) return false;
     const uint32_t target_hz =
@@ -718,6 +758,35 @@ bool SPIDevice::set_chip_select(bool set)
 #ifdef SOC_SERIES_STM32F7
     if (_dev == nullptr) {
         if (set && !_cs_held) {
+            /* Align with ChibiOS: take bus semaphore before asserting CS.
+             * This prevents the DeviceBus thread from dispatching periodic
+             * callbacks (e.g. _poll_data()) while CS is held during a
+             * burst read, which would cause bus contention and data
+             * corruption.  ChibiOS ref: SPIDevice.h:set_chip_select().
+             *
+             * The semaphore is released in set_chip_select(false). */
+            if (!_bus->semaphore.take(HAL_SEMAPHORE_BLOCK_FOREVER)) {
+                return false;
+            }
+            /* Configure SPI registers (CR1/CR2/SPE) BEFORE asserting CS.
+             * When cs_take=false, spi1_poll_transfer() skips SPI config
+             * entirely, relying on the caller to have configured it via
+             * set_chip_select(true) — matching the ChibiOS contract where
+             * acquire_bus() calls spiStart() to init CR1+SPE before CS. */
+            {
+                SPI_TypeDef *spi = bus_to_spi(_desc.bus);
+                CLEAR_BIT(spi->CR1, SPI_CR1_SPE);
+                spi->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI |
+                           SPI_CR1_CPOL | SPI_CR1_CPHA |
+                           _spi_reg_br;
+                spi->CR2 = SPI_CR2_DS_0 | SPI_CR2_DS_1 | SPI_CR2_DS_2 |
+                           SPI_CR2_FRXTH;
+                SET_BIT(spi->CR1, SPI_CR1_SPE);
+                while (spi->SR & SPI_SR_RXNE) {
+                    (void)*(volatile uint8_t *)&spi->DR;
+                }
+                (void)spi->SR;
+            }
             /* Actually assert CS via GPIO BSRR — callers (Invensense IMU
              * driver) expect the pin to be driven LOW (active) after
              * set_chip_select(true) so that subsequent transfer() /
@@ -736,6 +805,12 @@ bool SPIDevice::set_chip_select(bool set)
                 volatile uint32_t *bsrr = (volatile uint32_t *)(0x40020000U + port_idx * 0x400U + 0x18U);
                 *bsrr = 1U << (pin + 16);  /* BR = drive LOW */
             }
+        } else if (!set && _cs_held) {
+            /* Release bus semaphore when CS is de-asserted.
+             * Aligns with ChibiOS set_chip_select(false). */
+            _cs_held = false;
+            _bus->semaphore.give();
+            return true;
         }
         _cs_held = set;
         return true;

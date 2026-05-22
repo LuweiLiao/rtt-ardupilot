@@ -497,12 +497,20 @@ void Scheduler::delay_microseconds_boost(uint16_t us)
         _called_boost = true;
     }
     /*
-     * Delegate to delay_microseconds() — matches ChibiOS pattern where
-     * delay_microseconds_boost() just boosts priority then calls the
-     * regular delay function.  This fixes the sub-tick bug where
-     * us < tick_us used rt_thread_delay(1), inflating e.g. 100 µs to
-     * 1000 µs and adding ~900 µs jitter per wait_for_sample() call.
+     * When boosted, yield to let DeviceBus threads (prio below boost)
+     * dispatch IMU periodic callbacks (_poll_data) so FIFO data
+     * accumulates.  Without this yield the DWT busy-wait loop in
+     * delay_microseconds() starves all lower-priority threads,
+     * wait_for_sample() never sees new data and the main loop hangs.
+     *
+     * ChibiOS delay_microseconds(100) -> chThdSleep(100) always yields.
+     * RTT DWT busy-wait does not, so we need an explicit yield here.
      */
+    if (in_main_thread() && _priority_boosted) {
+        rt_thread_delay(1);
+        _called_boost = true;
+        return;
+    }
     delay_microseconds(us);
 }
 
