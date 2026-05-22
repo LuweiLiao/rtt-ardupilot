@@ -14,8 +14,10 @@
 namespace RTT
 {
 
-// Logical channel 0-7 → ADC1 channel number
-static const uint8_t _ch_map[8] = {0, 1, 2, 3, 8, 10, 11, 14};
+// Logical channel index → ADC1 channel number
+// CUAV V5: PA0(0),PA1(1),PA2(2),PA3(3),PA4(4),PB0(8),PC0(10),PC1(11),PC4(14)
+static const uint8_t _ch_map[9] = {0, 1, 2, 3, 4, 8, 10, 11, 14};
+#define VDD_5V_SENS_INDEX 6  // _ch_map[6] = ch10 = PC0 VDD_5V_SENS ×2 divider
 
 static bool _adc_inited = false;
 
@@ -33,7 +35,7 @@ static void _adc_init_once(void)
     (void)RCC->AHB1ENR;
 
     // Configure ADC pins as analog
-    GPIOA->MODER |= 0xFF;        // PA0-3 analog (BATT/BATT2 VOLTAGE/CURRENT)
+    GPIOA->MODER |= 0x3FF;       // PA0-4 analog (BATT/BATT2 VOLTAGE/CURRENT, SPARE2)
     GPIOB->MODER |= 0x3;         // PB0 analog (RSSI)
     GPIOC->MODER |= 0x30F;       // PC0,PC1,PC4 analog (VDD_5V/3V3/SPARE)
 
@@ -128,7 +130,14 @@ void AnalogIn::init() {
 AP_HAL::AnalogSource* AnalogIn::channel(int16_t n) {
     init();
     if (n < 0 || n >= RTT_ANALOG_MAX_CHANNELS) return nullptr;
-    _sources[n].set_scale((n == 10 || n == 11) ? 2.0f : 1.0f);
+    // Set scaling based on hardware voltage divider from hwdef
+    // ADC ch10 (PC0 VDD_5V_SENS) and ch11 (PC1 SCALED_V3V3) have ×2 divider
+    // (Index n is the logical channel index, not the ADC channel number)
+    if ((uint8_t)n < ARRAY_SIZE(_ch_map) && (_ch_map[n] == 10 || _ch_map[n] == 11)) {
+        _sources[n].set_scale(2.0f);
+    } else {
+        _sources[n].set_scale(1.0f);
+    }
     IGNORE_RETURN(_sources[n].set_pin(n));
     return &_sources[n];
 }
@@ -141,8 +150,8 @@ void AnalogIn::_timer_tick()
 {
     if (!_initialized) return;
 
-    // Read all 8 mapped channels
-    for (uint8_t i = 0; i < 8; i++) {
+    // Read all mapped channels
+    for (uint8_t i = 0; i < ARRAY_SIZE(_ch_map); i++) {
         uint32_t raw = _adc_read(_ch_map[i]);
         if (i < RTT_ANALOG_MAX_CHANNELS) {
             _sources[i]._add_sample((float)raw);
@@ -153,9 +162,9 @@ void AnalogIn::_timer_tick()
     // Debug removed: ADC STATUS rt_kprintf pollutes MAVLink over CDC.
     // Use GDB to inspect rtt_adc_timeout_count / rtt_adc_last_raw if needed.
 
-    // Board voltage: ch_map[5]=ch10 (PC0) already read above, use _sources[5]
-    // _sources[5] scale is set to 2.0 in channel() for ch10/11
-    float vdd = _sources[5].read_latest() * (3.3f / 4096.0f) * 2.0f;
+    // Board voltage: _ch_map[VDD_5V_SENS_INDEX]=ch10 (PC0) already read above
+    // scale=2.0 is applied manually here; channel() applies it via _scale
+    float vdd = _sources[VDD_5V_SENS_INDEX].read_latest() * (3.3f / 4096.0f) * 2.0f;
     if (vdd > 0.5f) {
         _board_voltage = vdd;
     }
