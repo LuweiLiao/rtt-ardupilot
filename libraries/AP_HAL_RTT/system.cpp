@@ -1,11 +1,20 @@
 /*
  * AP_HAL_RTT — system functions (aligned with ChibiOS)
- * Provides AP_HAL::millis / micros64 / panic / millis16 / micros16.
+ * ChibiOS reference: libraries/AP_HAL_ChibiOS/system.cpp
+ *
+ * Provides AP_HAL::init / panic / millis / micros64 / millis16 / micros16.
  * millis/micros64 delegate to Util which uses DWT CYCCNT for sub-tick precision.
+ * millis64 derived from micros64/1000 to ensure 64-bit range (no wrap at 2^32).
+ *
+ * RT-Thread provides its own HardFault_Handler (via context_gcc.S), so we
+ * only supply weak fallback handlers for BusFault/UsageFault/MemManage.
+ * NMI_Handler comes from board CubeMX stm32f7xx_it.c.
+ * __cxa_pure_virtual / __dso_handle come from RT-Thread cxx_crt/cxx_crt_init.c.
  */
 
 #include <AP_HAL/AP_HAL.h>
 #include <AP_HAL/system.h>
+#include <AP_InternalError/AP_InternalError.h>
 #include "AP_HAL_RTT/Util.h"
 #include <rtthread.h>
 #include <stdarg.h>
@@ -16,8 +25,18 @@ extern const AP_HAL::HAL& hal;
 
 namespace AP_HAL {
 
+// ChibiOS ref: system.cpp:323-325
+void init()
+{
+}
+
+// ChibiOS ref: system.cpp:327-348 (with INTERNAL_ERROR + repeated-print loop)
+// RTT simplification: prints once, records internal error, then halts.
+// Cannot replicate the full chThdSleep-based print loop because RTT
+// scheduler cannot yield in panic state without risk of re-entering panic.
 void panic(const char *errormsg, ...)
 {
+    INTERNAL_ERROR(AP_InternalError::error_t::panic);
     char buf[128];
     va_list ap;
     va_start(ap, errormsg);
@@ -32,31 +51,41 @@ void panic(const char *errormsg, ...)
     }
 }
 
+// ChibiOS ref: system.cpp:375-378 (hrt_millis32)
+// Delegates to Util::get_millis() which derives from rt_tick_get()
 uint32_t millis()
 {
     return ((const RTT::Util*)hal.util)->get_millis();
 }
 
+// ChibiOS ref: system.cpp:350-362 (hrt_micros32 / st_lld_get_counter)
+// Derives from micros64() to share the DWT-based implementation.
 uint32_t micros()
 {
     return (uint32_t)(micros64() & 0xFFFFFFFFU);
 }
 
+// ChibiOS ref: system.cpp:390-393 (hrt_millis64)
+// IMPORTANT: derived from micros64()/1000, NOT from 32-bit millis(),
+// to ensure the 64-bit value does not wrap at 2^32 ms (~49.7 days).
 uint64_t millis64()
 {
-    return (uint64_t)millis();
+    return micros64() / 1000;
 }
 
+// ChibiOS ref: system.cpp:385-388 (hrt_micros64)
 uint64_t micros64()
 {
     return ((const RTT::Util*)hal.util)->get_micros64();
 }
 
+// ChibiOS ref: system.cpp:380-383 (hrt_millis32 & 0xFFFF)
 uint16_t millis16()
 {
     return (uint16_t)(millis() & 0xFFFF);
 }
 
+// ChibiOS ref: system.cpp:364-373 (st_lld_get_counter & 0xFFFF)
 uint16_t micros16()
 {
     return (uint16_t)(micros() & 0xFFFF);
@@ -67,7 +96,10 @@ uint16_t micros16()
 /* ----------------------------------------------------------------
  *  Fault handlers — RT-Thread context_gcc.S owns HardFault_Handler
  *  (it saves context for rt_hw_hard_fault_exception).
- *  We provide weak handlers for the remaining faults.
+ *
+ *  We provide weak handlers for the remaining faults as fallback;
+ *  CubeMX stm32f7xx_it.c provides the primary definitions.
+ *  ChibiOS ref: system.cpp:88-250 (full HardFault/BusFault/UsageFault/MemManage)
  * ---------------------------------------------------------------- */
 extern "C" {
 

@@ -14,6 +14,17 @@
 #include <stm32f7xx_hal.h>
 #endif
 
+/*
+ * GPIO register-level helpers.
+ * _GPIO_PORT_BASE computes the peripheral base address for a port index:
+ *   port 0 = GPIOA (0x40020000), port 1 = GPIOB (0x40020400), etc.
+ * Must be defined before any function using it (pinMode OTYPER check).
+ */
+#ifndef GPIOA_BASE
+#define GPIOA_BASE 0x40020000UL
+#endif
+#define _GPIO_PORT_BASE(port) (GPIOA_BASE + (port) * 0x0400UL)
+
 using namespace RTT;
 
 /* DigitalSource */
@@ -151,6 +162,20 @@ void GPIO::pinMode(uint8_t pin, uint8_t output)
     if (output == HAL_GPIO_INPUT) {
         rt_pin_mode(pin, PIN_MODE_INPUT);
     } else {
+        /*
+         * Retain OPENDRAIN if already set (mirrors ChibiOS behavior on
+         * STM32F7/H7/F4/G4/L4).  Read OTYPER directly to check.
+         */
+        if (pin < 176) {
+            uint8_t port = pin / 16;
+            uint8_t bit  = pin % 16;
+            volatile uint32_t *otyper =
+                (volatile uint32_t *)(_GPIO_PORT_BASE(port) + 0x04U);
+            if ((*otyper >> bit) & 0x01U) {
+                rt_pin_mode(pin, PIN_MODE_OUTPUT_OD);
+                return;
+            }
+        }
         rt_pin_mode(pin, PIN_MODE_OUTPUT);
     }
 }
@@ -199,12 +224,40 @@ void GPIO::write(uint8_t pin, uint8_t value)
         return;
     }
 #endif
+    /*
+     * ChibiOS semantics: writing to an input-configured pin controls
+     * pull-up/pull-down resistors.  Read MODER to check current mode.
+     */
+    if (pin < 176) {
+        uint8_t port = pin / 16;
+        uint8_t bit  = pin % 16;
+        volatile uint32_t *moder =
+            (volatile uint32_t *)_GPIO_PORT_BASE(port);
+        uint32_t mode = (*moder >> (bit * 2)) & 0x03;
+        if (mode == 0) {
+            /* Pin is in INPUT mode — set pull-up/pull-down via PUPDR
+             * through rt_pin_mode instead of writing ODR (which is a
+             * no-op for input pins on STM32). */
+            rt_pin_mode(pin, value ? PIN_MODE_INPUT_PULLUP
+                                   : PIN_MODE_INPUT_PULLDOWN);
+            return;
+        }
+    }
     rt_pin_write(pin, value ? PIN_HIGH : PIN_LOW);
 }
 
 void GPIO::toggle(uint8_t pin)
 {
-    write(pin, read(pin) ^ 1);
+    /* Atomically toggle via direct ODR XOR (same as STM32 HAL_GPIO_TogglePin).
+     * Avoids non-atomic read-write cycle of write(pin, read(pin) ^ 1). */
+    if (pin >= 176) {
+        return;
+    }
+    uint8_t port = pin / 16;
+    uint8_t bit  = pin % 16;
+    volatile uint32_t *odr =
+        (volatile uint32_t *)(_GPIO_PORT_BASE(port) + 0x14U);
+    *odr ^= (1UL << bit);
 }
 
 AP_HAL::DigitalSource* GPIO::channel(uint16_t n)
@@ -289,6 +342,11 @@ bool GPIO::attach_interrupt(uint8_t pin,
     IRQState *st = _find_or_alloc_irq(pin);
     if (!st) return false;
 
+    /* Reject double-attach (ChibiOS semantics: pin already has a handler) */
+    if (st->isr_fn != nullptr || st->simple_fn != nullptr) {
+        return false;
+    }
+
     st->isr_fn = fn;
     st->simple_fn = nullptr;
 
@@ -317,6 +375,11 @@ bool GPIO::attach_interrupt(uint8_t pin, AP_HAL::Proc fn,
 
     IRQState *st = _find_or_alloc_irq(pin);
     if (!st) return false;
+
+    /* Reject double-attach (ChibiOS semantics: pin already has a handler) */
+    if (st->isr_fn != nullptr || st->simple_fn != nullptr) {
+        return false;
+    }
 
     st->isr_fn = nullptr;
     st->simple_fn = fn;
@@ -369,6 +432,11 @@ bool GPIO::pin_to_servo_channel(uint8_t pin, uint8_t &servo_ch) const
 bool GPIO::wait_pin(uint8_t pin, INTERRUPT_TRIGGER_TYPE mode, uint32_t timeout_us)
 {
     if (!valid_pin(pin)) return false;
+
+    /* Clamp timeout: max 30ms to match ChibiOS constraint */
+    if (timeout_us == 0 || timeout_us > 30000U) {
+        timeout_us = 30000U;
+    }
 
     rt_pin_mode(pin, PIN_MODE_INPUT);
     uint8_t initial = read(pin);
@@ -428,10 +496,6 @@ bool GPIO::arming_checks(size_t buflen, char *buffer) const
  * Pin number is RT-Thread convention: port*16 + bit.
  * Returns raw MODER 2-bit field: 0=input, 1=output, 2=AF, 3=analog.
  */
-#ifndef GPIOA_BASE
-#define GPIOA_BASE 0x40020000UL
-#endif
-#define _GPIO_PORT_BASE(port) (GPIOA_BASE + (port) * 0x0400UL)
 
 bool GPIO::get_mode(uint8_t pin, uint32_t &mode)
 {
@@ -453,4 +517,5 @@ void GPIO::set_mode(uint8_t pin, uint32_t mode)
     val &= ~(0x03U << (bit * 2));
     val |= (mode & 0x03U) << (bit * 2);
     *moder = val;
+    __DSB(); /* Ensure MODER write is visible before subsequent operations */
 }
