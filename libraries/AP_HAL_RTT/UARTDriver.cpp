@@ -671,8 +671,12 @@ bool UARTDriver::set_CTS_pin(bool high)
 uint64_t UARTDriver::receive_time_constraint_us(uint16_t nbytes)
 {
     uint64_t last_receive_us = AP_HAL::micros64();
-    if (_baudrate > 0) {
-        last_receive_us += ((uint64_t)nbytes * 1000000ULL * 10) / _baudrate;
+    /* Align with ChibiOS UARTDriver.cpp:1527 — subtract transport time to
+     * estimate the EARLIEST arrival time of a multi-byte packet (constraint,
+     * not exact time). Do not estimate for USB (no meaningful baudrate). */
+    if (_baudrate > 0 && !_is_usb) {
+        const uint32_t transport_time_us = (1000000UL * 10UL / _baudrate) * (nbytes + _readbuf.available());
+        last_receive_us -= transport_time_us;
     }
     return last_receive_us;
 }
