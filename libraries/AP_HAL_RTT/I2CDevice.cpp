@@ -117,6 +117,10 @@ static rt_ssize_t _i2c3_master_xfer(struct rt_i2c_bus_device *bus,
 {
     (void)bus;
 
+    /* Track I2C transactions (ChibiOS compat for persistent_data) */
+    extern const AP_HAL::HAL& hal;
+    hal.util->persistent_data.i2c_count++;
+
     /* Wait for bus not busy before first transaction */
     uint32_t timeout = I2C_TIMEOUT_MAX;
     while ((I2C3->ISR & I2C_ISR_BUSY) && --timeout) { __NOP(); }
@@ -150,38 +154,44 @@ static rt_ssize_t _i2c3_master_xfer(struct rt_i2c_bus_device *bus,
         I2C3->CR2 = cr2;
 
         if (msg->flags & RT_I2C_RD) {
-            /* Receive */
+            /* Receive — poll RXNE, NACKF, BERR, OVR */
             while (remaining > 0) {
                 timeout = I2C_TIMEOUT_MAX;
-                while (!(I2C3->ISR & I2C_ISR_RXNE) && --timeout) { __NOP(); }
+                while (!(I2C3->ISR & (I2C_ISR_RXNE |
+                                      I2C_ISR_NACKF |
+                                      I2C_ISR_BERR  |
+                                      I2C_ISR_OVR)) && --timeout) { __NOP(); }
                 if (timeout == 0) {
+                    I2C3->CR2 |= I2C_CR2_STOP;
+                    return -1;
+                }
+                if (I2C3->ISR & (I2C_ISR_NACKF | I2C_ISR_BERR | I2C_ISR_OVR)) {
+                    I2C3->ICR = I2C_ICR_NACKCF | I2C_ICR_BERRCF | I2C_ICR_OVRCF;
                     I2C3->CR2 |= I2C_CR2_STOP;
                     return -1;
                 }
                 *buf++ = (uint8_t)I2C3->RXDR;
                 remaining--;
-                if (I2C3->ISR & I2C_ISR_NACKF) {
-                    I2C3->ICR = I2C_ICR_NACKCF;
+            }
+        } else {
+            /* Transmit — poll TXIS, NACKF, BERR, OVR */
+            while (remaining > 0) {
+                timeout = I2C_TIMEOUT_MAX;
+                while (!(I2C3->ISR & (I2C_ISR_TXIS |
+                                      I2C_ISR_NACKF |
+                                      I2C_ISR_BERR  |
+                                      I2C_ISR_OVR)) && --timeout) { __NOP(); }
+                if (timeout == 0) {
                     I2C3->CR2 |= I2C_CR2_STOP;
                     return -1;
                 }
-            }
-        } else {
-            /* Transmit */
-            while (remaining > 0) {
-                timeout = I2C_TIMEOUT_MAX;
-                while (!(I2C3->ISR & I2C_ISR_TXIS) && --timeout) { __NOP(); }
-                if (timeout == 0) {
+                if (I2C3->ISR & (I2C_ISR_NACKF | I2C_ISR_BERR | I2C_ISR_OVR)) {
+                    I2C3->ICR = I2C_ICR_NACKCF | I2C_ICR_BERRCF | I2C_ICR_OVRCF;
                     I2C3->CR2 |= I2C_CR2_STOP;
                     return -1;
                 }
                 I2C3->TXDR = *buf++;
                 remaining--;
-                if (I2C3->ISR & I2C_ISR_NACKF) {
-                    I2C3->ICR = I2C_ICR_NACKCF;
-                    I2C3->CR2 |= I2C_CR2_STOP;
-                    return -1;
-                }
             }
         }
 
@@ -212,12 +222,12 @@ I2CDevice::I2CDevice(uint8_t bus, uint8_t address, uint32_t bus_clock,
     : AP_HAL::I2CDevice()
     , _bus(nullptr)
     , _address(address)
+    , _busnum(bus)
     , _bus_clock(bus_clock)
     , _timeout_ms(timeout_ms)
     , _split(false)
     , _bus_dev(DeviceBus::get_bus(bus, 0))
 {
-    (void)use_smbus;
     set_device_bus(bus);
     set_device_address(address);
 
@@ -225,12 +235,32 @@ I2CDevice::I2CDevice(uint8_t bus, uint8_t address, uint32_t bus_clock,
     /* Bus 0 = I2C3 on CUAV V5. Register hardware I2C3 if not yet done. */
     if (bus == 0) {
         _i2c3_register();
+
+        /*
+         * Apply bus_clock to I2C3 TIMINGR.
+         * ChibiOS reference selects between 100kHz/400kHz TIMINGR
+         * based on requested clock (HAL_I2C_F7_100_TIMINGR / _400_TIMINGR).
+         */
+        if (_bus_clock > 100000) {
+            I2C3->TIMINGR = 0x6000030D;  /* 400 kHz (STMCubeMX, PCLK1=54 MHz) */
+        } else {
+            I2C3->TIMINGR = 0x30812E3E;  /* 100 kHz (default, already set by _i2c3_hw_init) */
+        }
+
+        /* Apply SMBus host enable if requested (ChibiOS compat: I2C_CR1_SMBHEN) */
+        if (use_smbus) {
+            I2C3->CR1 |= I2C_CR1_SMBHEN;
+        } else {
+            I2C3->CR1 &= ~I2C_CR1_SMBHEN;
+        }
     }
 #endif
 
     if (bus < HAL_RTT_I2C_BUS_COUNT) {
         _bus = rt_i2c_bus_device_find(_i2c_bus_names[bus]);
     }
+
+    (void)use_smbus;
 }
 
 I2CDevice::~I2CDevice()
@@ -239,8 +269,24 @@ I2CDevice::~I2CDevice()
 
 bool I2CDevice::set_speed(AP_HAL::Device::Speed speed)
 {
+    if (_bus == nullptr) {
+        return false;
+    }
+
+#if defined(HAL_MCU_STM32F7XX) || defined(SOC_SERIES_STM32F7)
+    /* Reconfigure I2C3 TIMINGR based on requested speed */
+    if (_busnum == 0 && (I2C3->CR1 & I2C_CR1_PE)) {
+        if (speed == AP_HAL::Device::SPEED_HIGH) {
+            I2C3->TIMINGR = 0x6000030D;  /* 400 kHz */
+        } else {
+            I2C3->TIMINGR = 0x30812E3E;  /* 100 kHz */
+        }
+    }
+#else
     (void)speed;
-    return _bus != nullptr;
+#endif
+
+    return true;
 }
 
 bool I2CDevice::transfer(const uint8_t *send, uint32_t send_len,
@@ -349,7 +395,15 @@ bool I2CDevice::adjust_periodic_callback(AP_HAL::Device::PeriodicHandle h, uint3
 
 /*
  * clear_bus — toggle SCL up to 9 times to recover a stuck I2C bus.
- * CMSIS register-level implementation for I2C3.
+ * CMSIS register-level implementation for I2C3 (bus 0, PH7/PH8).
+ * Only bus 0 is supported because CUAV V5 only has I2C3 physically wired;
+ * buses 1-3 (i2c1/i2c2/i2c4) are registered with RT-Thread but have no
+ * physical pins defined in hwdef.dat.
+ *
+ * D-Cache note: this function touches GPIO registers directly (non-cached
+ * peripheral memory on STM32F7). No D-Cache maintenance needed for PIO
+ * register access. If DMA is added in the future, bounce buffers or
+ * cache clean/invalidate will be required (see DeviceBus::bouncebuffer_*).
  */
 void I2CDevice::clear_bus(uint8_t busidx)
 {

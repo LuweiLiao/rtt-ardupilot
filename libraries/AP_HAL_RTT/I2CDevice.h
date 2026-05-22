@@ -43,6 +43,7 @@ public:
 private:
     struct rt_i2c_bus_device *_bus;
     uint8_t _address;
+    uint8_t _busnum;
     uint8_t _retries = 2;
     uint32_t _bus_clock;
     uint32_t _timeout_ms;
