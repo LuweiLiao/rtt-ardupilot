@@ -208,9 +208,18 @@ static bool _spi_dma_xfer(SPI_TypeDef *spi, uint8_t bus,
 
     _spi_dma_clock_init();
 
+    /* Static dummy 0xFF buffer for receive-only DMA transfers.
+     * When send == nullptr, the TX DMA must send 0xFF (not recv buffer
+     * contents) so that the SPI MOSI line drives idle-high.  DMA needs
+     * a valid memory address even if the data is a dummy pattern.
+     * ChibiOS reference: the SPI LLD's dummytx buffer provides 0xFF. */
+    static const uint32_t _dma_dummy_tx_16[4] = {0xFFFFFFFF, 0xFFFFFFFF,
+                                                  0xFFFFFFFF, 0xFFFFFFFF};
+
     /* Prepare usable buffers — DMA needs valid memory addresses */
     uint32_t rx_scratch = 0;
     uint8_t *rx_buf = recv ? recv : (uint8_t *)&rx_scratch;
+    const uint8_t *tx_buf = send ? send : (const uint8_t *)_dma_dummy_tx_16;
 
     /* ── Set up RX stream: PERIPH → MEM, 8-bit, increment MEM addr ── */
     _dma_stream_disable(dma->rx_stream);
@@ -226,7 +235,7 @@ static bool _spi_dma_xfer(SPI_TypeDef *spi, uint8_t bus,
     /* ── Set up TX stream: MEM → PERIPH, 8-bit, increment MEM addr ── */
     _dma_stream_disable(dma->tx_stream);
     dma->tx_stream->PAR  = (uint32_t)&spi->DR;
-    dma->tx_stream->M0AR = (uint32_t)(send ? send : rx_buf);
+    dma->tx_stream->M0AR = (uint32_t)tx_buf;
     dma->tx_stream->NDTR = len;
     dma->tx_stream->FCR  = 0;
     dma->tx_stream->CR   = (dma->ch_tx << DMA_SxCR_CHSEL_Pos)
@@ -278,7 +287,45 @@ static bool _spi_dma_xfer(SPI_TypeDef *spi, uint8_t bus,
     while (timeout--) {
         if (!(dma->rx_stream->CR & DMA_SxCR_EN) &&
             !(dma->tx_stream->CR & DMA_SxCR_EN)) {
+            /* Disable SPI DMA requests before checking error flags */
             spi->CR2 &= ~(SPI_CR2_TXDMAEN | SPI_CR2_RXDMAEN);
+            /* Check DMA error flags — TEIF in LISR/HISR.
+             * Each stream has a TEIF at pos 3 + stream_in_group * 6.
+             * Streams 0-3 in LISR, streams 4-7 in HISR. */
+            bool err = false;
+            {
+                static const uint32_t lisr_teif[] = {
+                    DMA_LISR_TEIF0, DMA_LISR_TEIF1,
+                    DMA_LISR_TEIF2, DMA_LISR_TEIF3,
+                };
+                static const uint32_t hisr_teif[] = {
+                    DMA_HISR_TEIF4, DMA_HISR_TEIF5,
+                    DMA_HISR_TEIF6, DMA_HISR_TEIF7,
+                };
+                uint32_t rx_idx = ((uint32_t)dma->rx_stream - (uint32_t)DMA2) / 0x18U;
+                uint32_t tx_idx = ((uint32_t)dma->tx_stream - (uint32_t)DMA2) / 0x18U;
+                if (rx_idx < 4U) {
+                    if (DMA2->LISR & lisr_teif[rx_idx]) { err = true; }
+                } else {
+                    if (DMA2->HISR & hisr_teif[rx_idx - 4U]) { err = true; }
+                }
+                if (tx_idx < 4U) {
+                    if (DMA2->LISR & lisr_teif[tx_idx]) { err = true; }
+                } else {
+                    if (DMA2->HISR & hisr_teif[tx_idx - 4U]) { err = true; }
+                }
+                if (err) {
+                    /* Clear error flags and abort */
+                    if (rx_idx < 4U) DMA2->LIFCR = lisr_teif[rx_idx];
+                    else             DMA2->HIFCR = hisr_teif[rx_idx - 4U];
+                    if (tx_idx < 4U) DMA2->LIFCR = lisr_teif[tx_idx];
+                    else             DMA2->HIFCR = hisr_teif[tx_idx - 4U];
+                }
+            }
+            if (err) {
+                _spi_dma_abort(dma, spi);
+                return false;
+            }
             /* Wait for BSY — last byte may still be shifting in */
             uint32_t bsy = 10000;
             while ((spi->SR & SPI_SR_BSY) && --bsy) { __NOP(); }
@@ -911,7 +958,7 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
     msg.cs_release = cs_release ? 1U : 0U;
     msg.next = RT_NULL;
 
-    rtt_dbg_spi_xfer_count += 2;
+    rtt_dbg_spi_xfer_count++;
     struct rt_spi_message *ret = rt_spi_transfer_message(_dev, &msg);
     ok = (ret == RT_NULL);
     if (ok && send == recv) {

@@ -45,8 +45,6 @@ public:
 private:
     bool _lock_bus();
     void _unlock_bus();
-    bool _xfer_locked(const void *send, void *recv, uint32_t len,
-                      bool cs_take, bool cs_release);
 
     RTT_SPIDesc &_desc;
     struct rt_spi_device *_dev;
