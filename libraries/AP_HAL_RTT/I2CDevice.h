@@ -47,7 +47,6 @@ private:
     uint32_t _bus_clock;
     uint32_t _timeout_ms;
     bool _split;
-    Semaphore _sem;
     DeviceBus *_bus_dev;
 };
 

@@ -55,6 +55,7 @@ private:
     bool _bus_locked = false;
     bool _cs_held = false;
     rt_base_t _cs_pin;
+    uint32_t _br;           /* SPI baud rate divider (BR field in CR1) */
 };
 
 } // namespace RTT

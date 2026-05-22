@@ -258,6 +258,7 @@ void rt_hw_board_init(void)
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIODEN;
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOGEN;
+    RCC->AHB1ENR |= RCC_AHB1ENR_DMA2EN;  /* Enable DMA2 for SPI1 DMA transfers */
     (void)RCC->AHB1ENR;
     /* PA6=MISO(AF5) */
     GPIOA->MODER = (GPIOA->MODER & ~(3U << 12)) | (2U << 12);

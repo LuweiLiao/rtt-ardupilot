@@ -134,8 +134,16 @@
 #define HAL_HAVE_SAFETY_SWITCH 0
 #endif
 
-#ifndef HAL_NUM_CAN_IFACES
+/* Disable CAN until RTT CAN interface (CanIface.cpp) is properly implemented.
+ * hwdef.dat may set HAL_NUM_CAN_IFACES 2 but the RTT CAN driver is not ready yet. */
+#undef HAL_NUM_CAN_IFACES
 #define HAL_NUM_CAN_IFACES 0
+
+#undef HAL_MAX_CAN_PROTOCOL_DRIVERS
+#define HAL_MAX_CAN_PROTOCOL_DRIVERS 0
+
+#ifndef HAL_PICCOLO_CAN_ENABLE
+#define HAL_PICCOLO_CAN_ENABLE 0
 #endif
 
 #ifndef HAL_BOARD_STORAGE_DIRECTORY

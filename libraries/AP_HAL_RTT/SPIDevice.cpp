@@ -124,7 +124,9 @@ static void _spi4_gpio_init(void)
 #ifndef SPI1_PCLK2_HZ
 #define SPI1_PCLK2_HZ 108000000U
 #endif
-static uint32_t _spi_reg_br = SPI_CR1_BR_0 | SPI_CR1_BR_1;  /* BR=3 = default HIGH */
+#ifndef SPI4_PCLK2_HZ
+#define SPI4_PCLK2_HZ 108000000U
+#endif
 
 struct spi_dma_desc {
     DMA_Stream_TypeDef *rx_stream;
@@ -375,7 +377,8 @@ static bool spi1_poll_transfer(struct rt_spi_device *dev,
                                 uint8_t *recv, uint32_t recv_len,
                                 bool cs_take, bool cs_release,
                                 SPI_TypeDef *spi,
-                                rt_base_t cs_pin)
+                                rt_base_t cs_pin,
+                                uint32_t br)
 {
     const bool fullduplex = (send_len > 0 && recv_len > 0 &&
                              send == recv && send_len == recv_len);
@@ -419,7 +422,7 @@ static bool spi1_poll_transfer(struct rt_spi_device *dev,
 
         spi->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI |
                    SPI_CR1_CPOL | SPI_CR1_CPHA |
-                   _spi_reg_br;
+                   br;
         spi->CR2 = SPI_CR2_DS_0 | SPI_CR2_DS_1 | SPI_CR2_DS_2 | SPI_CR2_FRXTH;
         SET_BIT(spi->CR1, SPI_CR1_SPE);
 
@@ -516,6 +519,7 @@ SPIDevice::SPIDevice(RTT_SPIDesc &desc)
     , _dev(nullptr)
     , _bus(DeviceBus::get_bus(desc.bus, APM_RTT_SPI_PRIORITY))
     , _cs_pin(0)
+    , _br(SPI_CR1_BR_0 | SPI_CR1_BR_1)   /* BR=3 = default HIGH (6.75MHz @ 108MHz) */
 {
     set_device_bus(desc.bus);
     _cs_pin = _lookup_cs_pin(desc.rtt_devname);
@@ -571,20 +575,22 @@ bool SPIDevice::set_speed(AP_HAL::Device::Speed speed)
 {
 #ifdef SOC_SERIES_STM32F7
     if (_dev == nullptr) {
-        /* Register-level path: update BR for spi1_poll_transfer().
+        /* Register-level path: update per-device BR for the polling transfer.
          * Matches ChibiOS derive_freq_flag() semantics — find the lowest
          * divider that brings clock below target frequency. */
         uint32_t target_hz = (speed == AP_HAL::Device::SPEED_HIGH)
                              ? _desc.highspeed : _desc.lowspeed;
         if (target_hz == 0) target_hz = 8000000U;
         /* ChibiOS: derive_freq_flag_bus() starts from bus_clocks/2 and halves.
-         * SPI1_CLOCK = STM32_PCLK2 = 108MHz.  bus_clocks[0]/2 = 54MHz.
+         * SPI1/SPI4 share STM32_PCLK2 = 108MHz. bus_clocks[0]/2 = 54MHz.
          * For target=2MHz: 54M→27M→13.5M→6.75M→3.375M→1.6875M → i=5 → BR=5
-         * For target=8MHz: 54M→27M→13.5M→6.75M            → i=3 → BR=3 */
-        uint32_t clk = SPI1_PCLK2_HZ / 2U;
+         * For target=8MHz: 54M→27M→13.5M→6.75M            → i=3 → BR=3
+         * For target=20MHz: 54M→27M→13.5M                  → i=2 → BR=2 */
+        uint32_t clk_hz = (_desc.bus == 4) ? SPI4_PCLK2_HZ : SPI1_PCLK2_HZ;
+        uint32_t clk = clk_hz / 2U;
         uint32_t i = 0;
         while (clk > target_hz && i < 7) { clk >>= 1U; i++; }
-        _spi_reg_br = i * SPI_CR1_BR_0;
+        _br = i * SPI_CR1_BR_0;
         return true;
     }
 #endif
@@ -642,7 +648,7 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
                 /* ── Half-duplex (write then read): use bounce buffer, poll ── */
                 ok = spi1_poll_transfer(nullptr, send, send_len, recv, recv_len,
                                         !_cs_held, !_cs_held,
-                                        bus_to_spi(_desc.bus), _cs_pin);
+                                        bus_to_spi(_desc.bus), _cs_pin, _br);
             }
 
             if (!_cs_held && need_sem) _bus->semaphore.give();
@@ -778,7 +784,7 @@ bool SPIDevice::set_chip_select(bool set)
                 CLEAR_BIT(spi->CR1, SPI_CR1_SPE);
                 spi->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI |
                            SPI_CR1_CPOL | SPI_CR1_CPHA |
-                           _spi_reg_br;
+                           _br;
                 spi->CR2 = SPI_CR2_DS_0 | SPI_CR2_DS_1 | SPI_CR2_DS_2 |
                            SPI_CR2_FRXTH;
                 SET_BIT(spi->CR1, SPI_CR1_SPE);
