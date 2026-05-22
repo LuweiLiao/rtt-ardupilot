@@ -19,8 +19,6 @@
 #include "AP_HAL_RTT.h"
 
 #if HAL_WITH_DSP
-
-#include <AP_HAL/AP_HAL.h>
 #include <AP_Math/AP_Math.h>
 #include <GCS_MAVLink/GCS.h>
 #include "DSP.h"
