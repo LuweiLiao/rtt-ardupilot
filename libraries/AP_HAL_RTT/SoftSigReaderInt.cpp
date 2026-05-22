@@ -158,13 +158,28 @@ void SoftSigReaderInt::init(TIM_TypeDef *tim, uint8_t chan, IRQn_Type irq_n)
 
     /*
      * Configure aux channel (rising edge capture, IRQ enabled).
+     *
+     * CCxS = 10 (TIM_CCMR1_CC1S_1): cross-map to the opposite TI input.
+     * ChibiOS reference: stm32_timer_set_channel_input(tim, aux_chan, 2)
+     * (stm32_util.c:58-68) with input_source=2.
+     *
+     * Why CCxS=10 instead of CCxS=01:
+     *   Main channel uses CCxS=01 (ICx on TIx) — capturing on its own TI.
+     *   Aux  channel uses CCxS=10 (ICx on TI{x+1} or TI{x-1}) — capturing
+     *   the *same* physical input signal as the main channel, just with
+     *   opposite edge polarity. Both channels must connect to the same
+     *   wire to measure pulse width (main->falling, aux->rising).
+     *
+     * STM32F7 CCxS mapping (RM0430 Section 30.4.3):
+     *   CH1 CC1S=10: IC1 mapped on TI2  |  CH2 CC2S=10: IC2 mapped on TI1
+     *   CH3 CC3S=10: IC3 mapped on TI4  |  CH4 CC4S=10: IC4 mapped on TI3
      */
     volatile uint32_t *aux_ccmr_reg = SoftSigReaderInt::ccmr(tim, _aux_channel);
     reg_val = *aux_ccmr_reg;
     uint32_t aux_shift = (_aux_channel & 1) * 8;
 
     reg_val &= ~(TIM_CCMR1_CC1S << aux_shift);
-    reg_val |= (TIM_CCMR1_CC1S_0 << aux_shift);
+    reg_val |= (TIM_CCMR1_CC1S_1 << aux_shift);
     reg_val &= ~(TIM_CCMR1_IC1F << aux_shift);
     reg_val |= (2 << (4 + aux_shift));
     *aux_ccmr_reg = reg_val;
@@ -235,6 +250,14 @@ void SoftSigReaderInt::disable(void)
  * Over-capture detection (CCxOF): if a new capture occurred before this
  * ISR read the previous value, we push a zero-width pulse to signal
  * the protocol parser to reset.
+ *
+ * D-Cache note: sigbuf (ObjectBuffer<pulse_t>) is written in ISR context
+ * and read from _timer_tick (thread context). On STM32F7 with D-Cache
+ * enabled, the thread may read stale cached values after the ISR writes
+ * through to memory. As of 2026-05, CUAV V5 RTT port disables D-Cache
+ * for DMA compatibility, so this is not an issue. If D-Cache is re-enabled
+ * in the future, add SCB_InvalidateDCache_by_Addr() before sigbuf.pop()
+ * in read(), or place sigbuf in a non-cacheable MPU region.
  */
 void SoftSigReaderInt::_irq_handler(void)
 {
