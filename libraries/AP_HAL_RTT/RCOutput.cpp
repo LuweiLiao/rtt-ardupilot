@@ -16,6 +16,7 @@
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Common/ExpandingString.h>
 #include <AP_BoardConfig/AP_BoardConfig.h>
+#include <AP_InternalError/AP_InternalError.h>
 #include <rtthread.h>
 
 extern const AP_HAL::HAL& hal;
@@ -80,9 +81,33 @@ void RCOutput::init()
 
 void RCOutput::set_freq(uint32_t chmask, uint16_t freq_hz)
 {
+    // Reference: ChibiOS RCOutput.cpp:444-463
+    // Forward frequency change to IOMCU
+#if HAL_WITH_IO_MCU
+    if (iomcu_enabled) {
+        uint16_t io_chmask = chmask & 0xFF;
+        if (io_chmask) {
+            iomcu.set_freq(io_chmask, freq_hz);
+        }
+    }
+#endif
+
+    // Convert to a local (FMU) channel mask
+    chmask >>= chan_offset;
+    if (chmask == 0) {
+        return;
+    }
+
+    // Reference: ChibiOS RCOutput.cpp:481-483
+    // Limit frequency to 400Hz for normal PWM (non-brushed)
+    uint16_t capped_freq = freq_hz;
+    if (capped_freq > 400 && _output_mode != MODE_PWM_BRUSHED) {
+        capped_freq = 400;
+    }
+
     for (uint8_t i = 0; i < RTT_RCOUT_MAX_CHANNELS; i++) {
         if (chmask & (1U << i)) {
-            _freq_hz[i] = freq_hz;
+            _freq_hz[i] = capped_freq;
         }
     }
 }
@@ -136,15 +161,35 @@ void RCOutput::_write_hw(uint8_t chan, uint16_t period_us)
 void RCOutput::write(uint8_t chan, uint16_t period_us)
 {
     if (chan >= RTT_RCOUT_MAX_CHANNELS) return;
-    // If safety is on and this channel is in the safety mask, suppress output
-    if (safety_state == AP_HAL::Util::SAFETY_DISARMED && (safety_mask & (1U << chan))) {
+
+    // Reference: ChibiOS RCOutput.cpp:723-727
+    // Forward write to IOMCU for IO MCU channels
+#if HAL_WITH_IO_MCU
+    if (iomcu_enabled) {
+        iomcu.write_channel(chan, period_us);
+    }
+#endif
+    // If this is an IOMCU channel (< chan_offset), return after forwarding
+    // Reference: ChibiOS RCOutput.cpp:729-731
+    if (chan < chan_offset) {
         return;
     }
+
+    // Reference: ChibiOS RCOutput.cpp:733-736
+    // Safety: if DISARMED and channel is NOT in the safety whitelist, force to 0
+    if (safety_state == AP_HAL::Util::SAFETY_DISARMED && !(safety_mask & (1U << chan))) {
+        period_us = 0;
+    }
+
+    // Reference: ChibiOS RCOutput.cpp:738
+    // Adjust channel index for local (FMU) access
+    const uint8_t local_chan = chan - chan_offset;
+
     if (_corked) {
-        _pending_us[chan] = period_us;
+        _pending_us[local_chan] = period_us;
     } else {
-        _period_us[chan] = period_us;
-        _write_hw(chan, period_us);
+        _period_us[local_chan] = period_us;
+        _write_hw(local_chan, period_us);
     }
 }
 
@@ -154,10 +199,20 @@ void RCOutput::cork()
     for (uint8_t i = 0; i < RTT_RCOUT_MAX_CHANNELS; i++) {
         _pending_us[i] = _period_us[i];
     }
+    // Reference: ChibiOS RCOutput.cpp:1337-1341
+#if HAL_WITH_IO_MCU
+    if (iomcu_enabled) {
+        iomcu.cork();
+    }
+#endif
 }
 
 void RCOutput::push()
 {
+    // Reference: ChibiOS RCOutput.cpp:1349-1351
+    if (!_corked) {
+        INTERNAL_ERROR(AP_InternalError::error_t::flow_of_control);
+    }
     _corked = false;
     for (uint8_t i = 0; i < RTT_RCOUT_MAX_CHANNELS; i++) {
         if (_pending_us[i] != _period_us[i] || (_enabled_mask & (1U << i))) {
@@ -165,6 +220,12 @@ void RCOutput::push()
             _write_hw(i, _period_us[i]);
         }
     }
+    // Reference: ChibiOS RCOutput.cpp:1355-1358
+#if HAL_WITH_IO_MCU
+    if (iomcu_enabled) {
+        iomcu.push();
+    }
+#endif
 }
 
 uint16_t RCOutput::read(uint8_t chan)
@@ -208,14 +269,25 @@ void RCOutput::set_failsafe_pwm(uint32_t chmask, uint16_t period_us)
 
 bool RCOutput::force_safety_on()
 {
-    /* No IOMCU on RTT build; manage safety state locally.
-     * Matches ChibiOS behaviour without IOMCU. */
+    // Reference: ChibiOS RCOutput.cpp:2375-2383
+#if HAL_WITH_IO_MCU
+    if (iomcu_enabled) {
+        return iomcu.force_safety_on();
+    }
+#endif
     safety_state = AP_HAL::Util::SAFETY_DISARMED;
     return true;
 }
 
 void RCOutput::force_safety_off()
 {
+    // Reference: ChibiOS RCOutput.cpp:2389-2397
+#if HAL_WITH_IO_MCU
+    if (iomcu_enabled) {
+        iomcu.force_safety_off();
+        return;
+    }
+#endif
     safety_state = AP_HAL::Util::SAFETY_ARMED;
 }
 
