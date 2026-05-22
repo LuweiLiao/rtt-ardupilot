@@ -74,11 +74,14 @@ uint8_t RCInput::read(uint16_t* periods, uint8_t len)
         WITH_SEMAPHORE(rcin_mutex);
         memcpy(periods, _rc_values, len * sizeof(periods[0]));
     }
-    return MIN(len, _num_channels);
+    return len;
 }
 
 void RCInput::pulse_input_enable(bool enable)
 {
+    // RTT does not have ICU/EICU hardware capture; RC input decoding
+    // is handled via rcprot.update() polling in _timer_tick().
+    // This stub matches the ChibiOS virtual interface but is a no-op.
     (void)enable;
 }
 
