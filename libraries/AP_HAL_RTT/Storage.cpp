@@ -12,6 +12,8 @@ extern volatile uint32_t rtt_dbg_setup_stage;
 
 extern const AP_HAL::HAL& hal;
 
+#define STORAGE_FLASH_RETRIES 5
+
 namespace RTT
 {
 
@@ -200,9 +202,24 @@ bool Storage::_flash_write(uint16_t line)
 bool Storage::_flash_write_data(uint8_t sector, uint32_t offset, const uint8_t *data, uint16_t length)
 {
 #ifdef STORAGE_FLASH_PAGE
-    const uint32_t base_address = hal.flash->getpageaddr(_flash_page + sector);
-    EXPECT_DELAY_MS(1);
-    return hal.flash->write(base_address + offset, data, length);
+    size_t base_address = hal.flash->getpageaddr(_flash_page + sector);
+    for (uint8_t i=0; i<STORAGE_FLASH_RETRIES; i++) {
+        EXPECT_DELAY_MS(1);
+        if (hal.flash->write(base_address + offset, data, length)) {
+            return true;
+        }
+        hal.scheduler->delay(1);
+    }
+    if (_flash_erase_ok()) {
+        uint32_t now = AP_HAL::millis();
+        if (now - _last_re_init_ms > 5000) {
+            _last_re_init_ms = now;
+            bool ok = _flash.re_initialise();
+            ::printf("RTT Storage: failed at %u:%u for %u - re-init %u\n",
+                     (unsigned)sector, (unsigned)offset, (unsigned)length, (unsigned)ok);
+        }
+    }
+    return false;
 #else
     (void)sector;
     (void)offset;
@@ -230,8 +247,14 @@ bool Storage::_flash_read_data(uint8_t sector, uint32_t offset, uint8_t *data, u
 bool Storage::_flash_erase_sector(uint8_t sector)
 {
 #ifdef STORAGE_FLASH_PAGE
-    EXPECT_DELAY_MS(1000);
-    return hal.flash->erasepage(_flash_page + sector);
+    for (uint8_t i=0; i<STORAGE_FLASH_RETRIES; i++) {
+        EXPECT_DELAY_MS(1000);
+        if (hal.flash->erasepage(_flash_page + sector)) {
+            return true;
+        }
+        hal.scheduler->delay(1);
+    }
+    return false;
 #else
     (void)sector;
     return false;

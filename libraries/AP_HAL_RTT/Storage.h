@@ -71,6 +71,7 @@ private:
     uint8_t _tmpline[RTT_STORAGE_LINE_SIZE];
     uint16_t _flash_page = 0;
     uint32_t _last_empty_ms = 0;
+    uint32_t _last_re_init_ms = 0;
 
 #ifdef STORAGE_FLASH_PAGE
     AP_FlashStorage _flash{
