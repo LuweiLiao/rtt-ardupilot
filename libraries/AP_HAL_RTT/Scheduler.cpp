@@ -597,7 +597,23 @@ void Scheduler::reboot(bool hold_in_bootloader)
     AP::FS().unmount();
 #endif
 
-    (void)hold_in_bootloader;
+    /* Tell bootloader what to do after reset — mirrors ChibiOS
+     * Scheduler.cpp:311  set_fast_reboot(hold_in_bootloader ? RTC_BOOT_HOLD : RTC_BOOT_FAST) */
+    {
+        /* Enable PWR + backup domain write access */
+        RCC->APB1ENR |= RCC_APB1ENR_PWREN;
+        (void)RCC->APB1ENR;
+        if ((RCC->BDCR & RCC_BDCR_RTCEN) == 0) {
+            RCC->BDCR |= (RCC_BDCR_RTCSEL_0); /* LSE default */
+            RCC->BDCR |= RCC_BDCR_RTCEN;
+        }
+        PWR->CR1 |= PWR_CR1_DBP;             /* enable backup domain write (F7: CR1, not CR) */
+        __DSB();
+        *(volatile uint32_t *)0x40002850UL =      /* TAMP_BKP0R */
+            hold_in_bootloader ? 0xb0070001UL     /* RTC_BOOT_HOLD */
+                               : 0xb0070002UL;    /* RTC_BOOT_FAST */
+        __DSB();
+    }
 
     rt_hw_interrupt_disable();
     rt_hw_cpu_reset();

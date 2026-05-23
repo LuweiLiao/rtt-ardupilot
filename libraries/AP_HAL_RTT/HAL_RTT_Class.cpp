@@ -265,6 +265,25 @@ void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
      * falsely returning true from a previous boot's RCC_CSR residue. */
     RCC->CSR |= RCC_CSR_RMVF;
 
+    /* Tell bootloader the app is alive — write RTC_BOOT_FWOK to backup
+     * register 0.  Mirrors ChibiOS stm32_util.c set_fast_reboot().
+     * PX4 bootloader on CUAV V5 reads BKP0R on startup to detect
+     * app-crashed-from-previous-boot; writing FWOK here prevents
+     * false-positive erase on subsequent power cycles. */
+    {
+        /* Enable PWR + backup domain write access */
+        RCC->APB1ENR |= RCC_APB1ENR_PWREN;
+        (void)RCC->APB1ENR;
+        if ((RCC->BDCR & RCC_BDCR_RTCEN) == 0) {
+            RCC->BDCR |= RCC_BDCR_RTCSEL_0;  /* LSE default */
+            RCC->BDCR |= RCC_BDCR_RTCEN;
+        }
+        PWR->CR1 |= PWR_CR1_DBP;          /* F7: CR1 not CR, PWR_CR1_DBP not PWR_CR_DBP */
+        __DSB();
+        *(volatile uint32_t *)0x40002850UL = 0xb0093a26UL;  /* RTC_BOOT_FWOK */
+        __DSB();
+    }
+
     (void)argc;
     (void)argv;
 

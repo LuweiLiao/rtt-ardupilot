@@ -180,9 +180,9 @@ static uint32_t _adc_read(uint8_t ch)
 {
     // Set sample time (SMP=7 = 480 cycles, at F7 native SMPR offset 0x14)
     if (ch < 10) {
-        ADC_SMPR2 = (7U << (ch * 3));
+        ADC_SMPR1 = (7U << (ch * 3));  // SMPR1: channels 0-9
     } else {
-        ADC_SMPR1 = (7U << ((ch - 10) * 3));
+        ADC_SMPR2 = (7U << ((ch - 10) * 3));  // SMPR2: channels 10-18
     }
 
     // Set channel in SQR3 (1-channel sequence)
