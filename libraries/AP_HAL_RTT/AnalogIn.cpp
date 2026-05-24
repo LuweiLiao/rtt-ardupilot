@@ -1,21 +1,23 @@
 /*
- * AP_HAL_RTT — AnalogIn for CUAV V5
- * Direct STM32F7 CMSIS register access for ADC1.
+ * AP_HAL_RTT — AnalogIn for CUAV V5 (STM32F767)
  *
- * WARNING: STM32F7 ADCv3 register offsets differ from the F4-compatible
- * CMSIS ADC_TypeDef structure!  The struct maps:
- *   SMPR1 → 0x0C (real F7: CFGR)   ← WRONG!
- *   SMPR2 → 0x10 (real F7: CFGR2)  ← WRONG!
- * We use hard-coded offsets to bypass this.
+ * Uses the hal_adc_lld_rtt driver for CMSIS-register-level ADC access.
+ * ChibiOS reference: libraries/AP_HAL_ChibiOS/AnalogIn.cpp
  *
- * F7 ADC register map:
- *   0x000: ISR     0x004: IER      0x008: CR       0x00C: CFGR
- *   0x010: CFGR2   0x014: SMPR1    0x018: SMPR2    0x01C: TR1
- *   0x020: TR2     0x024: TR3      0x028: -        0x02C: SQR1
- *   0x030: SQR2    0x034: SQR3     0x038: SQR4     0x03C: JSQR
- *   0x04C: DR
+ * This is a simplified polled-mode implementation: on every _timer_tick(),
+ * we sequentially convert each channel using the LLD's single-conversion
+ * function.  No DMA is used.  This is adequate for ~8 channels at 100Hz
+ * (800 conversions/s, ~30us each = ~2.4% CPU).
  *
- * Reference: ChibiOS ADCv3 hal_adc_lld.c
+ * STM32F767 uses standard ADCv2 peripheral (same as F4).
+ * CMSIS ADC_TypeDef layout (stm32f767xx.h):
+ *   SR(0x00), CR1(0x04), CR2(0x08), SMPR1(0x0C), SMPR2(0x10),
+ *   HTR(0x24), LTR(0x28), SQR1(0x2C), SQR2(0x30), SQR3(0x34), DR(0x4C)
+ *
+ * ADC clock: PCLK2=108MHz via APB2 prescaler.
+ * ADCPRE=1 -> PCLK2/4 = 27MHz (within 36MHz max).
+ * Sampling time: 480 cycles (~17.8us) for internal temp sensor,
+ *                15 cycles (~0.56us) for external channels.
  */
 
 #include "AnalogIn.h"
@@ -24,277 +26,233 @@
 #include <stm32f7xx.h>
 #include <rtthread.h>
 
+/* ADC LLD */
+extern "C" {
+#include "drivers/hal_adc_lld_rtt.h"
+}
+
 namespace RTT
 {
 
 // Logical (hwdef index) → ADC1 channel number
+// CUAV V5 analog pins:
+//   ch0=ADC_IN0(PIN1_1),  ch1=ADC_IN1(PIN1_2),
+//   ch2=ADC_IN2(PIN1_3),  ch3=ADC_IN3(PIN1_4),
+//   ch4=ADC_IN8(VDD_5V_SENS on PA3), ch5=ADC_IN10(BATT_CURR_SENS on PC0),
+//   ch6=ADC_IN11(BATT_VOLT_SENS on PC1),  ch7=ADC_IN14(PRESS_ADC on PC4),
+//   ch8=ADC_IN4(VDD_3V3_SENS on PA4)
 static const uint8_t _ch_map[9] = {0, 1, 2, 3, 8, 10, 11, 14, 4};
+
+// Index of the 5V rail sense (for board_voltage calculation)
 #define VDD_5V_SENS_INDEX 6
 
+// Sampling time: 480 cycles for internal channels (temp/VREF),
+// 15 cycles for fast external channels
+#define ADC_SAMPLE_TIME_FAST       ADC_LLD_SAMPLE_15
+#define ADC_SAMPLE_TIME_SLOW       ADC_LLD_SAMPLE_480
+
 static bool _adc_inited = false;
-static volatile uint32_t rtt_adc_timeout_count = 0;
+static volatile uint32_t rtt_adc_conversion_count = 0;
 static volatile uint32_t rtt_adc_last_raw = 0;
+static volatile uint32_t rtt_adc_timeout_count = 0;
 
-// F7 ADC1 base address
-#define F7_ADC1      ((__IO uint32_t*)0x40012000)
-
-// Register offsets from ADC base
-#define OFF_ISR      0x00
-#define OFF_IER      0x04
-#define OFF_CR       0x08
-#define OFF_CFGR     0x0C
-#define OFF_CFGR2    0x10
-#define OFF_SMPR1    0x14
-#define OFF_SMPR2    0x18
-#define OFF_TR1      0x1C
-#define OFF_SQR1     0x2C
-#define OFF_SQR2     0x30
-#define OFF_SQR3     0x34
-#define OFF_SQR4     0x38
-#define OFF_DR       0x4C
-
-// ADC register access macros
-#define ADC_ISR      (F7_ADC1[OFF_ISR/4])
-#define ADC_IER      (F7_ADC1[OFF_IER/4])
-#define ADC_CR       (F7_ADC1[OFF_CR/4])
-#define ADC_CFGR     (F7_ADC1[OFF_CFGR/4])
-#define ADC_CFGR2    (F7_ADC1[OFF_CFGR2/4])
-#define ADC_SMPR1    (F7_ADC1[OFF_SMPR1/4])
-#define ADC_SMPR2    (F7_ADC1[OFF_SMPR2/4])
-#define ADC_SQR1     (F7_ADC1[OFF_SQR1/4])
-#define ADC_SQR3     (F7_ADC1[OFF_SQR3/4])
-#define ADC_DR       (F7_ADC1[OFF_DR/4])
-
-// F7 native ADC bit definitions
-#define CR_ADVREGEN    (1U << 28)
-#define CR_ADEN        (1U << 0)
-#define CR_ADCAL       (1U << 31)
-#define CR_ADCALDIF    (1U << 30)
-#define CR_ADSTART     (1U << 2)
-#define CR_ADDIS       (1U << 1)
-#define CR_ADSTP       (1U << 4)
-#define ISR_ADRDY      (1U << 0)
-#define ISR_EOC        (1U << 2)
-#define ISR_EOS        (1U << 3)
-#define ISR_OVR        (1U << 4)
-#define CFGR_CONT      (1U << 13)      /* Continuous conversion */
-#define CFGR_DMAEN     (1U << 0)
-#define CFGR_DMACFG    (1U << 1)
-// NOTE: F7 CFGR bit12 is AUTOFF (auto-off), NOT JQDIS (that's H7 ADCv3).
-// Do NOT set bit12 unless you want the ADC to auto-disable after conversion.
-#define CFGR_RES_12BIT (0U << 3)
-#define CFGR_EOCS_UPON_EACH (1U << 10)
-
-// ADC common register (CCR) definitions for STM32F7 (RM0410 §19.3)
-// F7 has only ADCPRE (bits 16-17, 2-bit field):
-//   ADCPRE=00 → PCLK2/2    ADCPRE=01 → PCLK2/4
-//   ADCPRE=10 → PCLK2/6    ADCPRE=11 → PCLK2/8
-// NOTE: F7 does NOT have PRESC (bits 18-21) or CKMODE — those are H7 ADCv3 only!
-// Use CMSIS-defined ADC_CCR_ADCPRE_Msk, ADC_CCR_ADCPRE_0, ADC_CCR_ADCPRE_1 instead.
+/* ======================================================================== */
+/* ADC LLD wrapper                                                          */
+/* ======================================================================== */
 
 static void _adc_init_once(void)
 {
-    if (_adc_inited) return;
+    if (_adc_inited) { return; }
 
-    // Enable GPIO clocks
-    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOBEN | RCC_AHB1ENR_GPIOCEN;
+    // Configure GPIO pins for analog mode
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOBEN |
+                    RCC_AHB1ENR_GPIOCEN;
     (void)RCC->AHB1ENR;
 
-    // Configure ADC pins as analog
-    GPIOA->MODER |= 0x3FF;       // PA0-4 analog
-    GPIOB->MODER |= 0x3;         // PB0 analog
-    GPIOC->MODER |= 0x30F;       // PC0,PC1,PC4 analog
+    // GPIOA: PA0,1,2,3,4,5,6,7,8 as analog (MODER bits 0-17 = 0x3FFFF)
+    // PA0=ANA0(ADC_IN0), PA1=ANA1(ADC_IN1), PA2=ANA2(ADC_IN2),
+    // PA3=ANA3(ADC_IN8), PA4=VDD_3V3_SENS(ADC_IN4), PA5=ANA5(ADC_IN5),
+    // PA6=ANA6(ADC_IN6), PA7=ANA7(ADC_IN7)
+    GPIOA->MODER |= 0x3FFFF;   // PA0~PA8 analog
 
-    // Enable ADC1 clock on APB2
-    RCC->APB2ENR |= RCC_APB2ENR_ADC1EN;
-    (void)RCC->APB2ENR;
+    // GPIOB: PB0, PB1 as analog (ADC_IN8, ADC_IN9)
+    GPIOB->MODER |= 0xF;       // PB0, PB1 analog
 
-    // ADC clock: Synchronous mode from PCLK2/APB2 = 108MHz, ADCPRE=01 = /4 = 27MHz
-    // On STM32F7, the ADC max clock is 36MHz (RM0410 §19.3.7).
-    // F7 CCR has ADCPRE (bits 16-17, 2-bit):
-    //   00 = PCLK2/2 = 54MHz (overspeed!)
-    //   01 = PCLK2/4 = 27MHz (safe) ✓
-    //   10 = PCLK2/6 = 18MHz
-    //   11 = PCLK2/8 = 13.5MHz
-    // NOTE: F7 does NOT have PRESC bits 18-21 — that is H7 ADCv3 only!
-    // Previous code wrote (4<<18) which F7 hardware ignored, leaving ADCPRE=00=54MHz → ADC overclocked.
-    ADC123_COMMON->CCR = (ADC123_COMMON->CCR & ~ADC_CCR_ADCPRE_Msk) |
-                         ADC_CCR_ADCPRE_0 |   // ADCPRE=01 = PCLK2/4 = 27MHz
-                         ADC_CCR_TSVREFE;     // Temperature sensor enable
+    // GPIOC: PC0, PC1, PC2, PC3, PC4 as analog (ADC_IN10~14)
+    GPIOC->MODER |= 0x3FF;     // PC0~PC4 analog
 
-    // ==== ADC power-up (ChibiOS ADCv3 sequence) ====
-    // 1. Enable voltage regulator
-    ADC_CR = 0U;                     // Clear CR first (RM requirement)
-    ADC_CR = CR_ADVREGEN;            // Enable voltage regulator
-
-    // 2. Wait for regulator startup (~20µs)
-    for (volatile uint32_t i = 0; i < 10000U; i++) { __NOP(); }
-
-    // 3. Calibrate: two-step write per RM0410 — first set ADCALDIF,
-    //    THEN add ADCAL (ChibiOS pattern).  Single-write may not work.
-    //    Differential calibration for master ADC.
-    ADC_CR = CR_ADVREGEN | CR_ADCALDIF;
-    ADC_CR = CR_ADVREGEN | CR_ADCALDIF | CR_ADCAL;
-    while (ADC_CR & CR_ADCAL) { __NOP(); }
-
-    // 4. Wait post-calibration settling
-    for (volatile uint32_t i = 0; i < 5000U; i++) { __NOP(); }
-
-    // 5. Single-ended calibration for master ADC.
-    ADC_CR = CR_ADVREGEN;
-    ADC_CR = CR_ADVREGEN | CR_ADCAL;
-    while (ADC_CR & CR_ADCAL) { __NOP(); }
-
-    // 6. Wait post-calibration settling
-    for (volatile uint32_t i = 0; i < 5000U; i++) { __NOP(); }
-
-    // 7. Enable ADC (OR-assignment to preserve ADVREGEN, per ChibiOS pattern)
-    ADC_CR |= CR_ADEN;
-    {
-        volatile uint32_t timeout = 100000U;
-        while (!(ADC_ISR & ISR_ADRDY) && timeout) {
-            __NOP();
-            timeout--;
-        }
-        ADC_ISR = ISR_ADRDY;  // Clear ADRDY
+    // Initialize ADC1 via LLD
+    // ADCPRE=1 means PCLK2/4 = 27MHz (within 36MHz limit)
+    // Enable TSVREFE for internal temp sensor / VREFINT
+    if (!adc_lld_init_rtt(ADC1, ADC_LLD_ADCPRE_DIV4, true)) {
+        // ADC initialization failed
+        return;
     }
-
-    // 8. Configure CFGR: single conversion, software trigger, EOC on each conv
-    //    Default: CONT=0 (single), EXTSEL=0 (SW start), RES=12bit
-    //    NOTE: F7 CFGR bit12 is AUTOFF, NOT JQDIS (H7).  Must NOT set it.
-    //    Only EOCS=1 (bit10): EOC raised after each conversion in the sequence.
-    ADC_CFGR = (1U << 10);           // EOCS=1
-
-    // 9. Clear any stale status
-    (void)ADC_ISR;
-    (void)ADC_DR;
 
     _adc_inited = true;
-
-    if (!(ADC_ISR & ISR_ADRDY) && !rtt_adc_timeout_count) {
-        rtt_adc_timeout_count = 0xDEAD;
-    }
 }
 
-static uint32_t _adc_read(uint8_t ch)
+static uint16_t _adc_read(uint8_t ch)
 {
-    // Set sample time (SMP=7 = 480 cycles, at F7 native SMPR offset 0x14)
-    if (ch < 10) {
-        ADC_SMPR1 = (7U << (ch * 3));  // SMPR1: channels 0-9
+    if (!_adc_inited) {
+        return 0;
+    }
+
+    // Internal channels (sensor, VREFINT, VBAT) need longer sampling time
+    // per RM0410 §19: internal sensor requires sampling time >= 10us
+    // At 27MHz ADCCLK, 480 cycles = 480/27MHz = 17.8us ✅
+    uint32_t sample_time;
+    if (ch >= 16) {
+        sample_time = ADC_SAMPLE_TIME_SLOW;  // 480 cycles for internal
     } else {
-        ADC_SMPR2 = (7U << ((ch - 10) * 3));  // SMPR2: channels 10-18
+        sample_time = ADC_SAMPLE_TIME_FAST;  // 15 cycles for external
     }
 
-    // Set channel in SQR3 (1-channel sequence)
-    ADC_SQR3 = ch;
-    ADC_SQR1 = 0;   // L=0 means 1 conversion in sequence
+    uint16_t result = adc_lld_convert_channel_rtt(ADC1, ch, sample_time);
 
-    // Clear stale flags: EOC, OVR (write-1-to-clear)
-    ADC_ISR = ISR_EOC | ISR_OVR;
-    // Read DR to clear any stale EOC
-    (void)ADC_DR;
-    // Ensure all register writes complete before starting conversion
-    __DSB();
-    __ISB();
-
-    // Start conversion (F7 native ADSTART, bit 2 of CR)
-    // ADC clock is PCLK2/4 = 108/4 = 27MHz.
-    // At 480-cycle sample time + ~12 ADC clock cycles for conversion,
-    // max conversion time ≈ 492 cycles / 27MHz ≈ 18.2µs.
-    // 50000 NOP loops at 216MHz ≈ 231µs gives 12x margin.
-    ADC_CR |= CR_ADSTART;
-    __DSB();
-
-    for (volatile uint32_t t = 0; t < 50000; t++) {
-        uint32_t isr = ADC_ISR;
-        if (isr & ISR_EOC) {
-            uint32_t val = ADC_DR & 0xFFF;
-            rtt_adc_last_raw = val;
-            return val;
-        }
-        if (isr & ISR_OVR) {
-            // Overrun: clear OVR flag and read DR, try again
-            (void)ADC_DR;
-            ADC_ISR = ISR_OVR;
-            // Restart conversion
-            ADC_CR |= CR_ADSTART;
-            __DSB();
-        }
-        // Use NOP for short waits — conversion at 27MHz takes ~18µs
-        // which is ~3000 NOP iterations at 216MHz
-        __NOP();
+    if (result == 0xFFFF) {
+        // Timeout
+        rtt_adc_timeout_count++;
+        return 0;
     }
 
-    // Timeout — ADC is stuck. Attempt recovery:
-    // 1. Clear overrun if present
-    if (ADC_ISR & ISR_OVR) {
-        (void)ADC_DR;
-        ADC_ISR = ISR_OVR;
-    }
-    // 2. Try stopping any ongoing conversion
-    ADC_CR |= CR_ADSTP;
-    __DSB();
-    {
-        volatile uint32_t stp_timeout = 1000;
-        while ((ADC_CR & CR_ADSTART) && --stp_timeout) { __NOP(); }
-    }
+    rtt_adc_last_raw = result;
+    rtt_adc_conversion_count++;
 
-    rtt_adc_timeout_count++;
-    (void)ADC_DR;
-    return 0;
+    return result;
 }
 
-/* AnalogSource */
-void AnalogSource::_add_sample(float v) { _sum += v; _count++; _latest_value = v; }
-float AnalogSource::read_average() { if (_count > 0) { _value = _sum / _count; _sum = 0; _count = 0; } return _value; }
-float AnalogSource::read_latest() { return _latest_value; }
-bool AnalogSource::set_pin(uint8_t p) { _pin = (int16_t)p; return true; }
-float AnalogSource::voltage_average() { return read_average() * (3.3f / 4096.0f) * _scale; }
-float AnalogSource::voltage_latest() { return _latest_value * (3.3f / 4096.0f) * _scale; }
-float AnalogSource::voltage_average_ratiometric() { return voltage_average(); }
+/* ======================================================================== */
+/* AnalogSource                                                             */
+/* ======================================================================== */
 
-/* AnalogIn */
-void AnalogIn::init() {
+void AnalogSource::_add_sample(float v)
+{
+    _sum += v;
+    _count++;
+    _latest_value = v;
+}
+
+float AnalogSource::read_average()
+{
+    if (_count > 0) {
+        _value = _sum / _count;
+        _sum = 0;
+        _count = 0;
+    }
+    return _value;
+}
+
+float AnalogSource::read_latest()
+{
+    return _latest_value;
+}
+
+bool AnalogSource::set_pin(uint8_t p)
+{
+    _pin = (int16_t)p;
+    return true;
+}
+
+float AnalogSource::voltage_average()
+{
+    return read_average() * (3.3f / 4096.0f) * _scale;
+}
+
+float AnalogSource::voltage_latest()
+{
+    return _latest_value * (3.3f / 4096.0f) * _scale;
+}
+
+float AnalogSource::voltage_average_ratiometric()
+{
+    return voltage_average();
+}
+
+/* ======================================================================== */
+/* AnalogIn                                                                 */
+/* ======================================================================== */
+
+void AnalogIn::init()
+{
     if (_initialized) return;
     _adc_init_once();
     _initialized = true;
 }
 
-AP_HAL::AnalogSource* AnalogIn::channel(int16_t n) {
+AP_HAL::AnalogSource* AnalogIn::channel(int16_t n)
+{
     init();
-    if (n < 0 || n >= RTT_ANALOG_MAX_CHANNELS) return nullptr;
-    if ((uint8_t)n < ARRAY_SIZE(_ch_map) && (_ch_map[n] == 10 || _ch_map[n] == 11)) {
-        _sources[n].set_scale(2.0f);
+    if (n < 0 || n >= RTT_ANALOG_MAX_CHANNELS) {
+        return nullptr;
+    }
+
+    // Set scale factor based on channel type.
+    // Channels that map to ADC_IN10 (BATT_CURR, logical ch5) and
+    // ADC_IN11 (BATT_VOLT, logical ch6) have voltage dividers (scale=2).
+    // Channel VDD_5V_SENS (logical ch6→ADC_IN11) also uses scale=2.
+    if ((uint8_t)n < ARRAY_SIZE(_ch_map)) {
+        uint8_t adc_ch = _ch_map[n];
+        if (adc_ch == 10 || adc_ch == 11) {
+            // Battery voltage/current sense - voltage divider needs scaling
+            _sources[n].set_scale(2.0f);
+        } else if (adc_ch == 14) {
+            // PRESSURE ADC - divider on some boards
+            _sources[n].set_scale(1.0f);
+        } else {
+            _sources[n].set_scale(1.0f);
+        }
     } else {
         _sources[n].set_scale(1.0f);
     }
+
     IGNORE_RETURN(_sources[n].set_pin(n));
     return &_sources[n];
 }
 
-float AnalogIn::board_voltage() { return _board_voltage; }
-float AnalogIn::servorail_voltage() { return _servorail_voltage; }
-uint16_t AnalogIn::power_status_flags() { return _power_flags; }
+float AnalogIn::board_voltage()
+{
+    return _board_voltage;
+}
+
+float AnalogIn::servorail_voltage()
+{
+    return _servorail_voltage;
+}
+
+uint16_t AnalogIn::power_status_flags()
+{
+    return _power_flags;
+}
 
 void AnalogIn::_timer_tick()
 {
     if (!_initialized) return;
 
+    // Convert each channel sequentially
     for (uint8_t i = 0; i < ARRAY_SIZE(_ch_map); i++) {
-        uint32_t raw = _adc_read(_ch_map[i]);
+        uint16_t raw = _adc_read(_ch_map[i]);
         if (i < RTT_ANALOG_MAX_CHANNELS) {
             _sources[i]._add_sample((float)raw);
         }
     }
 
-    float vdd = _sources[VDD_5V_SENS_INDEX].read_latest() * (3.3f / 4096.0f) * 2.0f;
+    // Compute board voltage from VDD_5V_SENS channel
+    // ADC_IN11 with 2:1 divider: V = (count/4096) * 3.3V * 2
+    float vdd = _sources[VDD_5V_SENS_INDEX].read_latest() *
+                (3.3f / 4096.0f) * 2.0f;
     if (vdd > 0.5f) {
         _board_voltage = vdd;
     }
 
+    // Update power status flags
     uint16_t flags = 0;
-    if (_board_voltage > 4.5f) flags |= (uint16_t)PowerStatusFlag::BRICK_VALID;
-    if (_board_voltage > 4.0f && _board_voltage < 5.5f) flags |= (uint16_t)PowerStatusFlag::USB_CONNECTED;
+    if (_board_voltage > 4.5f) {
+        flags |= (uint16_t)PowerStatusFlag::BRICK_VALID;
+    }
+    if (_board_voltage > 4.0f && _board_voltage < 5.5f) {
+        flags |= (uint16_t)PowerStatusFlag::USB_CONNECTED;
+    }
     _power_flags = flags;
     _accumulated_power_flags |= flags;
 }
