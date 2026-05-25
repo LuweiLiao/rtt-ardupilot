@@ -565,11 +565,15 @@ static void _otg_fifo_read(volatile uint32_t *fifop, uint8_t *buf, size_t n)
 
 static void _otg_core_reset(void)
 {
-    while ((_OTG->GRSTCTL & GRSTCTL_AHBIDL) == 0) {}
+    uint32_t timeout = 100000;
+    while ((_OTG->GRSTCTL & GRSTCTL_AHBIDL) == 0) {
+        if (--timeout == 0) break;
+        __NOP();
+    }
     _OTG->GRSTCTL = GRSTCTL_CSRST;
     (void)_OTG->GRSTCTL;
     { volatile uint32_t _d = 20; while (_d--) { __NOP(); } }
-    uint32_t timeout = 100000;
+    timeout = 100000;
     while ((_OTG->GRSTCTL & GRSTCTL_CSRST) != 0) {
         if (--timeout == 0) break;
         __NOP();
@@ -1169,6 +1173,15 @@ bool usb_lld_init_rtt(void)
         return true;
     }
 
+    /* ---- Step 0: Ensure VTOR points to firmware vector table ---- */
+    /* The bootloader may overwrite VTOR during interrupts. Re-set to
+     * the firmware's vector table base to guarantee correct dispatch
+     * for all exception vectors (SysTick, PendSV, USB, etc.). */
+    extern uint32_t g_pfnVectors[];
+    SCB->VTOR = (uint32_t)g_pfnVectors;
+    __DSB();
+    __ISB();
+
     /* ---- Step 1: Enable OTG_FS clock and reset ---- */
     RCC->AHB2ENR |= RCC_AHB2ENR_OTGFSEN;
     (void)RCC->AHB2ENR;
@@ -1214,15 +1227,35 @@ bool usb_lld_init_rtt(void)
     _PCGCCTL = 0;
     __DSB();
 
-    /* ---- Step 5: VBUS sensing + transceiver ---- */
-    _OTG->GOTGCTL = GOTGCTL_BVALOEN | GOTGCTL_BVALOVAL;
-    _OTG->GCCFG = GCCFG_VBDEN | GCCFG_PWRDWN;
-    __DSB();
-
-    /* ---- Step 6: Core reset ---- */
+    /* ---- Step 5: Core reset ---- */
     _otg_core_reset();
 
-    /* ---- Step 7: GAHBCFG — no DMA, no global int yet ---- */
+    /* ---- Step 5b: Re-program GUSBCFG after core reset ---- */
+    /* Core soft reset (GRSTCTL_CSRST) resets GUSBCFG back to default
+     * (0x00001440), losing FDMOD and PHYSEL. These bits MUST be re-set
+     * for proper internal FS PHY operation. (2026-05-26 debug) */
+    _OTG->GUSBCFG = GUSBCFG_FDMOD | GUSBCFG_TRDT(TRDT_VALUE_FS) |
+                    GUSBCFG_PHYSEL;
+    (void)_OTG->GUSBCFG;
+    __DSB();
+
+    /* ---- Step 6: Soft disconnect → reconnect cycle ---- */
+    /* Force D+ low so the host detects a clean disconnect. Without this
+     * cycle the host may never see the device after bootloader hand-off. */
+    _DEV->DCTL = DCTL_SDIS;                    /* pull D+ low */
+    __DSB();
+    { volatile uint32_t _d = 50000; while (_d--) { __NOP(); } }
+    _DEV->DCTL = 0;                            /* release D+ pull-up */
+    __DSB();
+    { volatile uint32_t _d = 50000; while (_d--) { __NOP(); } }
+
+    /* ---- Step 7: VBUS sensing + transceiver (AFTER core reset) ---- */
+    /* GCCFG = VBDEN | VBUSBSEN (NOT PWRDWN! PWRDWN powers down the PHY). */
+    _OTG->GOTGCTL = GOTGCTL_BVALOEN | GOTGCTL_BVALOVAL;
+    _OTG->GCCFG = GCCFG_VBDEN | GCCFG_VBUSBSEN;
+    __DSB();
+
+    /* ---- Step 8: GAHBCFG — no DMA, no global int yet ---- */
     _OTG->GAHBCFG = 0;
     __DSB();
 
