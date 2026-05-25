@@ -1179,6 +1179,27 @@ bool usb_lld_init_rtt(void)
     RCC->AHB2RSTR &= ~RCC_AHB2RSTR_OTGFSRST;
     __DSB();
 
+    /* ---- Step 1b: GPIO AF10 configuration (bypassed HAL_PCD_MspInit) ---- */
+    /* PA11=OTG_FS_DM, PA12=OTG_FS_DP, PA9=OTG_FS_VBUS */
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+    (void)RCC->AHB1ENR;
+    __DSB();
+
+    /* PA11 AF10 (OTG_FS_DM) */
+    GPIOA->MODER = (GPIOA->MODER & ~(3U << 22)) | (2U << 22);
+    GPIOA->AFR[1] = (GPIOA->AFR[1] & ~(0xFU << 12)) | (10U << 12);
+    GPIOA->OSPEEDR |= (3U << 22);  /* Very High */
+    GPIOA->PUPDR &= ~(3U << 22);   /* No pull */
+
+    /* PA12 AF10 (OTG_FS_DP) */
+    GPIOA->MODER = (GPIOA->MODER & ~(3U << 24)) | (2U << 24);
+    GPIOA->AFR[1] = (GPIOA->AFR[1] & ~(0xFU << 16)) | (10U << 16);
+    GPIOA->OSPEEDR |= (3U << 24);  /* Very High */
+    GPIOA->PUPDR &= ~(3U << 24);   /* No pull */
+
+    /* PA9 OTG_FS_VBUS (input) */
+    GPIOA->MODER &= ~(3U << 18);  /* Input */
+
     /* ---- Step 2: GUSBCFG — forced device mode, FS 1.1 PHY ---- */
     _OTG->GUSBCFG = GUSBCFG_FDMOD | GUSBCFG_TRDT(TRDT_VALUE_FS) |
                     GUSBCFG_PHYSEL;

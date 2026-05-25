@@ -1,11 +1,11 @@
 /*
  * STM32F767 clock configuration using pure CMSIS register writes.
  *
- * Target: CUAV V5 — 8 MHz HSE crystal → PLL → 216 MHz SYSCLK
+ * Target: CUAV V5 — 16 MHz HSE crystal → PLL → 216 MHz SYSCLK
  *   HCLK  = 216 MHz (AHB  /1)
  *   PCLK1 =  54 MHz (APB1 /4)
  *   PCLK2 = 108 MHz (APB2 /2)
- *   USB48  =  48 MHz (PLL Q = PLL / (Q*2)) → PLL = (8/8)*432 = 432, Q=9 → 432/18 = 24MHz
+ *   USB48  =  48 MHz (PLL Q = PLL / (Q*2)) → PLL = (16/8)*216 = 432, Q=9 → 432/18 = 24MHz
  *
  * Fallback: HSE crystal → HSE bypass → HSI
  */
@@ -19,12 +19,12 @@ volatile uint8_t clock_source_used;
 
 /* PLL dividers */
 #define PLL_M                  8
-#define PLL_N                  432
+#define PLL_N                  216
 #define PLL_P_DIV              0                              /* 0x00000 → PLLP=/2 */
 #define PLL_Q                  9
 
 /*
- * PLLCFGR value with HSE (8 MHz → PLL = 8/8*432 = 432 MHz):
+ * PLLCFGR value with HSE (16 MHz → PLL = 16/8*216 = 432 MHz):
  *   PLLP = /2 → 432/2 = 216 MHz SYSCLK
  *   PLLQ = /9 → 432/9 = 48 MHz for 48M domain (USB, SDMMC)
  */
@@ -35,8 +35,8 @@ volatile uint8_t clock_source_used;
                       (PLL_Q << RCC_PLLCFGR_PLLQ_Pos))
 
 /*
- * PLLCFGR value with HSI (16 MHz → PLL = 16/8*432 = 864 MHz → overflow!
- * HSI fallback needs different M/N.  HSI=16MHz, M=16, N=432 → PLL=432MHz, /2=216MHz.
+ * PLLCFGR value with HSI (16 MHz → PLL = 16/16*216 = 216 MHz):
+ * HSI fallback: HSI=16MHz, M=16, N=216 → PLL=216MHz, /2=108MHz.
  */
 #define PLL_M_HSI               16
 #define PLLCFGR_HSI  (0 << RCC_PLLCFGR_PLLSRC_Pos                                         | \

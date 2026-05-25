@@ -19,42 +19,37 @@
  * on some boards) so we restore on first transfer only — repeated init
  * creates glitches that confuse IMU slaves during CS-held burst reads.
  *
- * Pinout (CUAV V5, actual hardware):
- *   PA5=SCK(AF5), PA6=MISO(AF5), PA7=MOSI(AF5)
- *   PF2=ICM20689_CS, PF3=ICM20602_CS, PF4=BMI055_GYRO_CS */
+ * Pinout (CUAV V5, actual hardware from ChibiOS fmuv5/CUAVv5 hwdef):
+ *   PG11=SCK(AF5), PA6=MISO(AF5), PD7=MOSI(AF5)
+ *   PF11=ICM42688_CS */
 static bool _spi1_gpio_init_done = false;
 static void _spi1_gpio_init(void)
 {
     if (_spi1_gpio_init_done) return;
 
-    /* Enable GPIO clocks — GPIOA for SPI1, GPIOF/PG for CS pins */
-    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOFEN |
+    /* Enable GPIO clocks — GPIOA (PA6 MISO), GPIOD (PD7 MOSI), GPIOF (PF11 CS), GPIOG (PG11 SCK) */
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIODEN | RCC_AHB1ENR_GPIOFEN |
                     RCC_AHB1ENR_GPIOGEN;
     (void)RCC->AHB1ENR;
     /* Ensure SPI1 peripheral clock is enabled */
     RCC->APB2ENR |= RCC_APB2ENR_SPI1EN;
     (void)RCC->APB2ENR;
 
-    /* PA5 SCK: MODE=AF(10), AF=AF5(0101) */
-    GPIOA->MODER = (GPIOA->MODER & ~(3U << 10)) | (2U << 10);
-    GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << 20)) | (5U << 20);
+    /* PG11 SCK: MODE=AF(10), AF=AF5(0101) */
+    GPIOG->MODER = (GPIOG->MODER & ~(3U << 22)) | (2U << 22);
+    GPIOG->AFR[1] = (GPIOG->AFR[1] & ~(0xFU << 12)) | (5U << 12);
 
     /* PA6 MISO: MODE=AF(10), AF=AF5(0101) */
     GPIOA->MODER = (GPIOA->MODER & ~(3U << 12)) | (2U << 12);
     GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << 24)) | (5U << 24);
 
-    /* PA7 MOSI: MODE=AF(10), AF=AF5(0101) */
-    GPIOA->MODER = (GPIOA->MODER & ~(3U << 14)) | (2U << 14);
-    GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << 28)) | (5U << 28);
+    /* PD7 MOSI: MODE=AF(10), AF=AF5(0101) */
+    GPIOD->MODER = (GPIOD->MODER & ~(3U << 14)) | (2U << 14);
+    GPIOD->AFR[0] = (GPIOD->AFR[0] & ~(0xFU << 28)) | (5U << 28);
 
-    /* CS pins: OUTPUT, INITIAL STATE HIGH */
-    GPIOF->MODER = (GPIOF->MODER & ~(3U << 4)) | (1U << 4);  /* PF2 OUT */
-    GPIOF->MODER = (GPIOF->MODER & ~(3U << 6)) | (1U << 6);  /* PF3 OUT */
-    GPIOF->MODER = (GPIOF->MODER & ~(3U << 8)) | (1U << 8);  /* PF4 OUT */
-    GPIOF->BSRR = (1U << 2) | (1U << 3) | (1U << 4);         /* set HIGH */
-    /* PG10 BMI055 accel CS (spi14, cs_pin=106): OUTPUT, INITIAL STATE HIGH */
-    GPIOG->MODER = (GPIOG->MODER & ~(3U << 20)) | (1U << 20);
-    GPIOG->BSRR = (1U << 10);                                 /* set PG10 HIGH */
+    /* CS pin: PF11 = ICM42688_CS, OUTPUT, INITIAL STATE HIGH */
+    GPIOF->MODER = (GPIOF->MODER & ~(3U << 22)) | (1U << 22);  /* PF11 OUT */
+    GPIOF->BSRR = (1U << 11);                                     /* set PF11 HIGH */
 
     _spi1_gpio_init_done = true;
 }
