@@ -55,9 +55,8 @@ PF6  UART7_RX  UART7 AF8
 APJ_BOARD_ID TARGET_HW_PX4_FMU_V5
 
 # ---- CS pin definitions ----
-#PF2  ICM20689_CS CS     -- commented: not on CUAV V5 HW (ICM42688 only)
+PF2  ICM20689_CS OUTPUT LOW   -- ICM20689 CS, software-driven via SPIDevice.cpp BSRR
 #PF3  ICM20602_CS CS     -- commented: not on CUAV V5 HW
-#PF11 ICM42688_CS CS      -- commented: debug boot hang; re-enable after root cause
 PF11 GPIO_ICM42688_CS  OUTPUT LOW   -- CS pin, software-driven via SPIDevice.cpp BSRR
 #PF4  BMI055_G_CS CS     -- commented: not on CUAV V5 HW
 #PG10 BMI055_A_CS CS     -- commented: not on CUAV V5 HW
@@ -147,16 +146,16 @@ PH8  I2C3_SDA I2C3 AF4
 
 # ---- SPI device table ----
 # SPIDEV name      bus   devid    cs_pin        mode    lowspeed  highspeed
-#SPIDEV icm20689    SPI1  DEVID1   ICM20689_CS   MODE3   2*MHZ     8*MHZ    -- not on CUAV V5 HW
+SPIDEV icm20689    SPI1  DEVID1   ICM20689_CS   MODE3   2*MHZ     8*MHZ
 #SPIDEV icm20602    SPI1  DEVID2   ICM20602_CS   MODE3   2*MHZ     8*MHZ    -- not on CUAV V5 HW
 #SPIDEV bmi055_g    SPI1  DEVID3   BMI055_G_CS   MODE3  10*MHZ    10*MHZ   -- not on CUAV V5 HW
 #SPIDEV bmi055_a    SPI1  DEVID4   BMI055_A_CS   MODE3  10*MHZ    10*MHZ   -- not on CUAV V5 HW
-#SPIDEV icm42688    SPI1  DEVID2   ICM42688_CS   MODE3   2*MHZ     8*MHZ  -- manual CMSIS, no RT-Thread attach
+SPIDEV icm42688     SPI1  DEVID2   ICM42688_CS   MODE3   2*MHZ     8*MHZ
 SPIDEV ramtron     SPI2  DEVID1   RAMTRON_CS    MODE3   8*MHZ     8*MHZ
 SPIDEV ms5611      SPI4  DEVID1   MS5611_CS     MODE3  20*MHZ    20*MHZ
 
 # ---- Sensor probe lists ----
-#IMU Invensense SPI:icm20689 ROTATION_NONE  -- not on CUAV V5 HW
+IMU Invensense SPI:icm20689 ROTATION_NONE
 IMU Invensensev3 SPI:icm42688 ROTATION_PITCH_180_YAW_270
 # No sensors defined for now — prevent AP_InertialSensor from expecting probe macros.
 # Re-enable when SPI spinlock is resolved.

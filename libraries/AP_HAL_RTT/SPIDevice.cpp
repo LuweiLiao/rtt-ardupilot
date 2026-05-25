@@ -51,6 +51,10 @@ static void _spi1_gpio_init(void)
     GPIOF->MODER = (GPIOF->MODER & ~(3U << 22)) | (1U << 22);  /* PF11 OUT */
     GPIOF->BSRR = (1U << 11);                                     /* set PF11 HIGH */
 
+    /* CS pin: PF2 = ICM20689_CS, OUTPUT, INITIAL STATE HIGH */
+    GPIOF->MODER = (GPIOF->MODER & ~(3U << 4)) | (1U << 4);    /* PF2 OUT */
+    GPIOF->BSRR = (1U << 2);                                     /* set PF2 HIGH */
+
     _spi1_gpio_init_done = true;
 }
 
@@ -372,6 +376,8 @@ volatile struct {
     uint32_t spi1_rx_bytes;
     uint32_t last_recv_0;
     uint32_t last_recv_1;
+    uint32_t cr2_after_cfg;
+    uint32_t cr2_after_xfer;
 } rtt_spi1_rt = {};
 
 /*
@@ -491,6 +497,7 @@ static bool spi1_poll_transfer(struct rt_spi_device *dev,
                    SPI_CR1_CPOL | SPI_CR1_CPHA |
                    br;
         spi->CR2 = SPI_CR2_DS_0 | SPI_CR2_DS_1 | SPI_CR2_DS_2 | SPI_CR2_FRXTH;
+        rtt_spi1_rt.cr2_after_cfg = spi->CR2;
         SET_BIT(spi->CR1, SPI_CR1_SPE);
 
         /* Flush stale FIFO — SPI is now running, CS still HIGH */
@@ -560,6 +567,7 @@ static bool spi1_poll_transfer(struct rt_spi_device *dev,
     }
 
     /* Runtime diagnostic */
+    rtt_spi1_rt.cr2_after_xfer = spi->CR2;
     rtt_spi1_rt.spi1_xfer_calls++;
     rtt_spi1_rt.spi1_tx_bytes += send_len;
     rtt_spi1_rt.spi1_rx_bytes += recv_len;

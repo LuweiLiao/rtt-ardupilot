@@ -45,7 +45,7 @@ if PLATFORM == 'gcc':
     DEVICE = ' -mcpu=' + CPU + ' -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard -DARM_MATH_CM7 -ffunction-sections -fdata-sections'
     CFLAGS = DEVICE + ' -g -Wall'
     AFLAGS = ' -c' + DEVICE + ' -x assembler-with-cpp -Wa,-mimplicit-it=thumb '
-    LFLAGS = DEVICE + ' -Wl,--gc-sections,-Map=rtthread.map,-cref,-u,Reset_Handler -T board/linker_scripts/link.lds'
+    LFLAGS = DEVICE + ' -Wl,--gc-sections,-Map=rtthread.map,-cref,-u,Reset_Handler,--allow-multiple-definition -T board/linker_scripts/link.lds'
 
     CPATH = ''
     LPATH = ''

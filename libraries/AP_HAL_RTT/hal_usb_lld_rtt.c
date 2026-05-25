@@ -490,6 +490,9 @@ static void _otg_rxfifo_flush(void);
 static void _otg_disable_endpoints(void);
 static void _otg_ram_reset(void);
 static uint32_t _otg_ram_alloc(uint32_t size_words);
+/* DEBUG: USB init entry/progress tracing */
+volatile uint32_t rtt_dbg_usb_init = 0;
+
 static void _otg_fifo_write(volatile uint32_t *fifop, const uint8_t *buf, size_t n);
 static void _otg_fifo_read(volatile uint32_t *fifop, uint8_t *buf, size_t n);
 static void _usb_reset(void);
@@ -1169,8 +1172,8 @@ static void _otg_epout_handler(uint32_t ep)
 
 bool usb_lld_init_rtt(void)
 {
-    /* DEBUG: magic 0xDEAD0001 = function entered */
-    *(volatile uint32_t *)0x2001fff0 = 0xDEAD0001;
+    /* DEBUG: magic = 1 = function entered */
+    rtt_dbg_usb_init = 1;
     if (_usb.initialized) {
         return true;
     }
@@ -1282,8 +1285,8 @@ bool usb_lld_init_rtt(void)
     __DSB();
 
     _usb.initialized = true;
-    /* DEBUG: magic 0xDEAD0002 = function completed */
-    *(volatile uint32_t *)0x2001fff0 = 0xDEAD0002;
+    /* DEBUG: magic = 2 = function completed */
+    rtt_dbg_usb_init = 2;
     _usb.enumerated = false;
     _usb.device_addr = 0;
     _usb.configured = false;

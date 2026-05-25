@@ -196,6 +196,10 @@ void PendSV_Handler(void)
 void SysTick_Handler(void)
 {
   /* USER CODE BEGIN SysTick_IRQn 0 */
+  /* Feed IWDG every 1ms — PVU/RVU stuck, PR/RLR can't reconfigure
+   * past 512ms default.  Every SysTick we refresh the counter so
+   * the watchdog never fires during long setup() / init sequences. */
+  *((volatile uint32_t *)0x40003000UL) = 0xAAAAU;
 
   /* USER CODE END SysTick_IRQn 0 */
   HAL_IncTick();

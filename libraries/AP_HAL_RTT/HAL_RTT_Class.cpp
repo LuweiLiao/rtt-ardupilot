@@ -11,6 +11,10 @@
 #include "HAL_RTT_Class.h"
 #include "Scheduler.h"
 #include "UARTDriver.h"
+/* DEBUG: setup completion stage tracker */
+volatile uint32_t rtt_dbg_setup_trace = 0;
+
+#include <stm32f7xx.h>
 #include "hal_usb_lld_rtt.h"
 #include <rtthread.h>
 #include "RCInput.h"
@@ -278,6 +282,19 @@ void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
      * ap_rtt_iwdg_init() reconfigures timeout to ~10s and feeds the counter. */
     ap_rtt_iwdg_init();
 
+    /* Strategic feed — PVU/RVU stuck means IWDG still at ~512ms timeout.
+     * SysTick feeds every 1ms from here on, but ap_rtt_iwdg_init() may have
+     * consumed up to ~200ms.  Feed now to maximize remaining margin before
+     * the next SysTick fires. */
+    *(volatile uint32_t *)0x40003000 = 0xAAAA;
+
+    /* 🔥 HACK: Force SPI1 clock enable — _spi1_gpio_init() in SPIDevice.cpp
+     * writes APB2ENR but is never reached because the virtual dispatch of
+     * transfer() takes a different code path.  Enable SPI1 clock here to
+     * ensure SPI1 register writes have effect regardless of which transfer
+     * path is taken.  SPI4 clock also enabled for MS5611 baro. */
+    RCC->APB2ENR |= RCC_APB2ENR_SPI1EN | RCC_APB2ENR_SPI4EN;
+
     /* Clear sticky reset flags (RCC_CSR RMVF) — mirrors ChibiOS __late_init()
      * stm32_watchdog_clear_reason(). Prevents was_watchdog_reset() from
      * falsely returning true from a previous boot's RCC_CSR residue. */
@@ -333,9 +350,12 @@ void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
 #endif
 
     /* Initialize DWC2 USB in device mode (self-enumeration, no CherryUSB) */
+    rtt_dbg_setup_trace = 30;
     usb_lld_init_rtt();
+    rtt_dbg_setup_trace = 31;
 
     hal.serial(0)->begin(SERIAL0_BAUD);
+    rtt_dbg_setup_trace = 32;
     hal.analogin->init();
 
     /* Pre-initialize SPI bus 1 DeviceBus — warm up the lazy semaphore init

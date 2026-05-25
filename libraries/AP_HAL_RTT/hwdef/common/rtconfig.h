@@ -153,9 +153,12 @@
 #define BSP_SPI2_TX_USING_DMA
 #define RT_USING_I2C
 #define RT_USING_I2C_BITOPS
-#define BSP_USING_I2C3
-#define BSP_I2C3_SCL_PIN 119
-#define BSP_I2C3_SDA_PIN 120
+// BSP_USING_I2C3 disabled — soft bitbang on I2C3 conflicts with CMSIS hardware I2C3 driver (I2CDevice.cpp)
+// Hardware I2C3 via CMSIS registers handles the HMC5883/IST8310 compass on CUAV V5
+// Commenting this out allows I2CDevice.cpp's _i2c3_register() → _i2c3_hw_init() to take over
+//#define BSP_USING_I2C3
+//#define BSP_I2C3_SCL_PIN 119
+//#define BSP_I2C3_SDA_PIN 120
 #define BSP_USING_I2C1
 #define BSP_I2C1_SCL_PIN 24
 #define BSP_I2C1_SDA_PIN 25

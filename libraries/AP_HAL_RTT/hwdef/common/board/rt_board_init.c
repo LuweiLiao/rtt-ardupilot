@@ -205,8 +205,50 @@ static void _spi_lld_board_init(void)
 }
 #endif /* SOC_SERIES_STM32F7 */
 
+/* ──────────────────────────────────────────────
+ *  IWDG early feed — Layer 0 foundation.
+ *  Hardware watchdog (if enabled by option bytes)
+ *  starts counting from reset with ~512ms timeout.
+ *
+ *  Strategy: feed NOW, don't reconfigure PR/RLR
+ *  (LSI-domain PVU/RVU sync can hang early in boot
+ *   before clock init).  The 512ms window is enough
+ *   for board init + scheduler startup; after that,
+ *   ap_rtt_iwdg_init() in HAL_RTT::run() extends
+ *   to ~10s and sets up periodic feeding.
+ *
+ *  CMSIS struct access — uses IWDG_TypeDef from
+ *  stm32f7xx.h (no HAL dependency).
+ * ────────────────────────────────────────────── */
+static void _iwdg_early_feed(void)
+{
+    /* Just reload the counter; no PR/RLR writes.
+     * 0xAAAA is the refresh key — doesn't need unlock. */
+    IWDG->KR = 0xAAAAU;
+}
+
+static void _iwdg_reconfig(void)
+{
+    /* Reconfigure IWDG to longer timeout (~10s).
+     * Called AFTER clock init, when LSI is stable
+     * and APB bus interface is fully operational.
+     * NO rt_kprintf here — console not yet initialized. */
+    IWDG->KR = 0x5555U;
+    IWDG->PR = 6U;
+    for (volatile int i = 0; i < 100000 && (IWDG->SR & IWDG_SR_PVU); i++) { }
+    IWDG->KR = 0x5555U;
+    IWDG->RLR = 1250U;
+    for (volatile int i = 0; i < 100000 && (IWDG->SR & IWDG_SR_RVU); i++) { }
+    IWDG->KR = 0xAAAAU;
+}
+
 void rt_hw_board_init(void)
 {
+    /* Layer 0: IWDG watchdog — feed immediately before any init that
+     * may take >512ms (the default hardware watchdog timeout).
+     * PR/RLR reconfig deferred to after clock init (see _iwdg_reconfig below). */
+    _iwdg_early_feed();
+
     rt_kprintf("[BOARD-INIT] Starting board initialization\n");
 #ifdef FLASH_ORIGIN
     SCB->VTOR = FLASH_ORIGIN;
@@ -234,6 +276,11 @@ void rt_hw_board_init(void)
 
     rtt_clock_init();
     rtt_enable_peripheral_clocks();
+
+    /* IWDG reconfig to ~10s — after clock/peripheral init so APB bus
+     * interface is stable and LSI-domain sync completes reliably. */
+    _iwdg_reconfig();
+
     rt_hw_systick_init();
     rt_hw_pin_init();
     rt_hw_usart_init();
@@ -448,6 +495,11 @@ static volatile uint32_t _measure_start_cyc = 0;
 
 static void _idle_hook(void)
 {
+    /* Feed IWDG every idle cycle — safety net when SysTick handler
+     * is temporarily starved (SPI burst with __disable_irq, etc.).
+     * Redundant with SysTick feed but zero-cost when idle. */
+    *(volatile uint32_t *)0x40003000UL = 0xAAAAU;
+
     uint32_t now = DWT->CYCCNT;
     if (_idle_last_cyc != 0) {
         _idle_cycles_acc += (now - _idle_last_cyc);

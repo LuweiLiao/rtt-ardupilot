@@ -960,6 +960,10 @@ class RTTHWDef(HWDef):
             enables.append('#define RT_USING_I2C_BITOPS')
             for bus_name, pins in self.i2c_pins.items():
                 bus_upper = bus_name.upper()
+                # Skip I2C3 — soft bitbang conflicts with CMSIS hardware I2C3 driver (I2CDevice.cpp)
+                # CMSIS hardware I2C3 handles IST8310 compass on CUAV V5 with proper timing/timeouts
+                if bus_upper == 'I2C3':
+                    continue
                 enables.append('#define BSP_USING_%s' % bus_upper)
                 if 'SCL' in pins:
                     enables.append('#define BSP_%s_SCL_PIN %d' % (bus_upper, pins['SCL']['rtt_pin']))
