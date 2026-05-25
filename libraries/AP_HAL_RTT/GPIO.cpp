@@ -265,11 +265,11 @@ AP_HAL::DigitalSource* GPIO::channel(uint16_t n)
     return NEW_NOTHROW DigitalSource(n);
 }
 
-extern "C" bool usb_device_is_configured(uint8_t busid);
+#include "hal_usb_lld_rtt.h"
 
 bool GPIO::usb_connected()
 {
-    return usb_device_is_configured(0);
+    return usb_lld_get_connected_rtt();
 }
 
 /* --- Interrupt support ------------------------------------------ */

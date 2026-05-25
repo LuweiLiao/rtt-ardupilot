@@ -11,6 +11,10 @@
 
 #include <rtthread.h>
 
+#if defined(SOC_SERIES_STM32F7)
+#include <stm32f7xx.h>
+#endif
+
 #define RTT_UART_MAX_DRIVERS 10
 #define RTT_UART_RX_BOUNCE_SIZE 512
 #define RTT_UART_TX_BOUNCE_SIZE 512
@@ -92,9 +96,9 @@ private:
     uint32_t _rx_stats_bytes = 0;
 
 #if defined(SOC_SERIES_STM32F7)
-    /* Direct UART register base for register-level polling TX.
-     * Actually a uart_hw*, but stored as void* to avoid header dependency. */
-    void *_uart_hw{nullptr};
+    /* Direct UART register base for CMSIS register-level access.
+     * NULL for USB ports. */
+    USART_TypeDef *_uart_hw{nullptr};
 #endif
 
     bool _last_drain_wrote{true};
@@ -105,10 +109,13 @@ private:
     uint8_t _rx_bounce[RTT_UART_RX_BOUNCE_SIZE];
     uint8_t _tx_bounce[RTT_UART_TX_BOUNCE_SIZE];
 
+    /* DMA state tracking */
+    bool _tx_dma_active{false};
+    bool _rx_dma_active{false};
+
     void _drain_rx_to_readbuf();
     void _drain_writebuf_to_dev();
 
-    static rt_err_t _rx_indicate_cb(rt_device_t dev, rt_size_t size);
     static UARTDriver *_drivers[RTT_UART_MAX_DRIVERS];
 };
 
