@@ -54,24 +54,11 @@
 #include "CANIface.h"
 
 /*
- * PCLK1 frequency for STM32F767 at typical 216 MHz:
- *   APB1 prescaler = 4 → PCLK1 = 54 MHz
- * Use HAL_RCC_GetPCLK1Freq() if available, otherwise derive from SystemCoreClock.
+ * PCLK1 frequency derived from SystemCoreClock and RCC CFGR PPRE1 bits.
+ * Replaces HAL_RCC_GetPCLK1Freq() for zero-HAL portability.
  */
 #if !defined(STM32_PCLK1)
-#if defined(HAL_RCC_GetPCLK1Freq)
-#define STM32_PCLK1 HAL_RCC_GetPCLK1Freq()
-#else
 extern uint32_t SystemCoreClock;
-/*
- * Derive PCLK1 from SystemCoreClock using RCC CFGR PPRE1 bits.
- * PPRE1[2:0] encoding (RM0430 §6.3.8):
- *   0xx: HCLK not divided
- *   100: HCLK/2
- *   101: HCLK/4
- *   110: HCLK/8
- *   111: HCLK/16
- */
 static inline uint32_t _get_pclk1(void)
 {
     const uint32_t cfgr = RCC->CFGR;
@@ -83,7 +70,6 @@ static inline uint32_t _get_pclk1(void)
     return SystemCoreClock / div;
 }
 #define STM32_PCLK1 _get_pclk1()
-#endif
 #endif
 
 #if HAL_CANMANAGER_ENABLED

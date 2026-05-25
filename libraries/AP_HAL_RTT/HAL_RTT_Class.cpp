@@ -11,6 +11,7 @@
 #include "HAL_RTT_Class.h"
 #include "Scheduler.h"
 #include "UARTDriver.h"
+#include "hal_usb_lld_rtt.h"
 #include <rtthread.h>
 #include "RCInput.h"
 
@@ -235,6 +236,8 @@ static void _main_loop_entry(void* arg)
         rtt_dbg_boost_calls_per_loop = 0;
         rtt_dbg_boost_total_us_per_loop = 0;
         uint32_t pre_loop_us = AP_HAL::micros();
+        /* Poll USB bus events (enumeration, control transfers, CDC data RX) */
+        usb_lld_poll_rtt();
         a->callbacks->loop();
         /* Call delay callbacks after loop() completes.
          * On ChibiOS, call_delay_cb() is called inside wait_for_sample() → delay(),
@@ -328,6 +331,9 @@ void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
         GPIOD->AFR[0] = (GPIOD->AFR[0] & ~(0xFU << 28)) | (5U << 28);
     }
 #endif
+
+    /* Initialize DWC2 USB in device mode (self-enumeration, no CherryUSB) */
+    usb_lld_init_rtt();
 
     hal.serial(0)->begin(SERIAL0_BAUD);
     hal.analogin->init();

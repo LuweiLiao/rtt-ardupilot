@@ -91,6 +91,18 @@ extern "C" void uart_usb_rx_bridge(const uint8_t *data, uint32_t len)
 
 using namespace RTT;
 
+/*
+ * CDC data receive callback — called from usb_lld_poll_rtt() context
+ * when a bulk OUT packet arrives on EP2. Routes data to the USB UARTDriver
+ * via the existing uart_usb_rx_bridge() C-linkage function.
+ */
+static void _usb_cdc_rx_cb(const uint8_t *data, uint32_t len, void *arg)
+{
+    (void)arg;
+    /* usb_rx_bridge() writes to _readbuf and releases the RX semaphore */
+    ::uart_usb_rx_bridge(data, len);
+}
+
 #if defined(SOC_SERIES_STM32F7)
 /*
  * CMSIS register-level UART TX — polls TXE and TC directly.
@@ -318,58 +330,26 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
     }
 
     /* ================================
-     * USB CDC path — keep existing RT-Thread device framework
+     * USB CDC path — direct DWC2 register access, no RT-Thread device
      * ================================ */
     if (is_usb) {
         if (txSpace < 8192) { txSpace = 8192; }
         if (rxSpace < 2048) { rxSpace = 2048; }
 
-        rt_device_t dev = rt_device_find(name);
-        if (dev == nullptr) {
-            _deferred_open = true;
-            _baudrate = baud;
-            uint16_t rxS = rxSpace < 512 ? 512 : rxSpace;
-            uint16_t txS = txSpace < 512 ? 512 : txSpace;
-            if (_readbuf.get_size() == 0) { _readbuf.set_size(rxS); }
-            if (_writebuf.get_size() == 0) { _writebuf.set_size(txS); }
-            return;
-        }
+        /* No rt_device needed — USB is handled by hal_usb_lld_rtt.c directly.
+         * The DWC2 init is done by usb_lld_init_rtt() in HAL_RTT_Class.cpp */
 
-        rt_err_t err = rt_device_open(dev, RT_DEVICE_FLAG_RDWR | RT_DEVICE_FLAG_INT_RX | RT_DEVICE_FLAG_DMA_TX);
-        if (err != RT_EOK) {
-            err = rt_device_open(dev, RT_DEVICE_FLAG_RDWR | RT_DEVICE_FLAG_INT_RX);
-        }
-        if (err != RT_EOK) {
-            rt_kprintf("[UART%u] INT_RX open failed (%d), trying DMA_RX\n", (unsigned)_port_num, (int)err);
-            err = rt_device_open(dev, RT_DEVICE_FLAG_RDWR | RT_DEVICE_FLAG_DMA_RX);
-        }
-        if (err != RT_EOK) {
-            return;
-        }
-
-        _dev = dev;
-        _is_usb = true;
         _baudrate = baud;
+        _is_usb = true;
         _flow_control = FLOW_CONTROL_ENABLE;
         _usb_console_driver = this;
-
-        if (_baudrate != 0) {
-            rt_device_t console_dev = rt_console_get_device();
-            bool is_console = (console_dev && dev == console_dev);
-            if (!is_console) {
-                rt_device_control(_dev, 0x1000, &_baudrate);
-            } else {
-                _baudrate = 115200;
-            }
-        }
+        _deferred_open = false;
 
         if (_rx_sem == nullptr) {
             char sem_name[RT_NAME_MAX];
             rt_snprintf(sem_name, sizeof(sem_name), "urx%u", (unsigned)_port_num);
             _rx_sem = rt_sem_create(sem_name, 0, RT_IPC_FLAG_FIFO);
             if (_rx_sem == nullptr) {
-                rt_device_close(_dev);
-                _dev = nullptr;
                 return;
             }
         }
@@ -379,12 +359,15 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
         if (_readbuf.get_size() != rxS) { _readbuf.set_size(rxS); }
         if (_writebuf.get_size() != txS) { _writebuf.set_size(txS); }
 
+        /* Register CDC data RX callback */
+        usb_lld_set_rx_callback(_usb_cdc_rx_cb, this);
+
         _initialized = true;
 
         /* Disable console output if this port is the RTT console */
         {
             rt_device_t console_dev = rt_console_get_device();
-            if (console_dev && dev == console_dev) {
+            if (console_dev) {
                 rt_console_output_set_enabled(RT_FALSE);
             }
         }
@@ -521,25 +504,9 @@ uint32_t UARTDriver::_available()
 void UARTDriver::_drain_rx_to_readbuf()
 {
     if (_is_usb) {
-        /* USB path: poll DWC2 GRXSTSP + FIFO for bulk OUT data */
-        /* Check RX FIFO status for OUT data packets (EP1 bulk) */
-        volatile uint32_t *grxstsp = (volatile uint32_t*)0x50000420;
-        uint32_t rxsts = *grxstsp;
-        uint8_t pktsts = (rxsts >> 17) & 0xF;
-        if (pktsts == 0x02) {  /* OUT data packet */
-            uint16_t bcnt = (rxsts >> 4) & 0x7FF;
-            uint16_t n = (bcnt < sizeof(_rx_bounce)) ? bcnt : sizeof(_rx_bounce);
-            volatile uint32_t *fifo = (volatile uint32_t*)0x50001000;
-            for (uint16_t i = 0; i < n; i++) {
-                _rx_bounce[i] = (uint8_t)(*fifo);
-            }
-            if (n > 0) {
-                _readbuf.write(_rx_bounce, n);
-                if (_rx_sem != nullptr) {
-                    rt_sem_release(_rx_sem);  /* wake wait_timeout */
-                }
-            }
-        }
+        /* USB path: data is received via callback in usb_lld_poll_rtt()
+         * which writes directly to _readbuf via uart_usb_rx_bridge().
+         * Nothing to do here — the callback handles everything. */
     } else {
         /* UART path: poll RXNE and read RDR directly */
 #if defined(SOC_SERIES_STM32F7)
@@ -566,9 +533,6 @@ void UARTDriver::_drain_writebuf_to_dev()
 {
     if (_is_usb) {
         /* USB path: write directly to DWC2 EP1 TX FIFO */
-        if (_dev == nullptr) {
-            return;
-        }
         /* Send data in FS bulk packets (max 64 bytes each) */
         uint32_t n = _writebuf.peekbytes(_tx_bounce, sizeof(_tx_bounce));
         if (n == 0) {
@@ -1022,5 +986,9 @@ void RTT::UARTDriver::usb_rx_bridge(const uint8_t *data, size_t len)
 {
     if (::_usb_console_driver != nullptr) {
         ::_usb_console_driver->_readbuf.write(data, len);
+        /* Release the RX semaphore to wake wait_timeout() */
+        if (::_usb_console_driver->_rx_sem != nullptr) {
+            rt_sem_release(::_usb_console_driver->_rx_sem);
+        }
     }
 }

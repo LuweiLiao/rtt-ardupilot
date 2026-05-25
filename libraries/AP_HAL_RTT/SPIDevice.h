@@ -31,6 +31,9 @@ public:
     SPIDevice(RTT_SPIDesc &desc);
     ~SPIDevice();
 
+    /* Bring base-class transfer_fullduplex(uint8_t*,uint32_t) overload into scope
+     * so it isn't hidden by our 3-param override (fixes -Woverloaded-virtual). */
+    using AP_HAL::SPIDevice::transfer_fullduplex;
     bool set_speed(AP_HAL::Device::Speed speed) override;
     bool transfer(const uint8_t *send, uint32_t send_len,
                   uint8_t *recv, uint32_t recv_len) override;

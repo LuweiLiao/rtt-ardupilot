@@ -197,6 +197,7 @@ extern const AP_HAL::HAL& hal;
 
 /* SDIO_ICR clear bits (same positions as STA) */
 #define SDIO_ICR_ALL_FLAGS                0xFFFFFFFFUL
+#define SDIO_ICR_CMDSENTC                 (1U << 5)     /* CMDSENT flag clear */
 
 /* SDIO_MASK interrupt enable bits (same positions as STA) */
 #define SDIO_MASK_CCRCFAILIE              SDIO_STA_CCRCFAIL
@@ -272,7 +273,7 @@ extern const AP_HAL::HAL& hal;
 #define MMCSD_R1_ILLEGAL_COMMAND          (1U << 22)
 #define MMCSD_R1_CARD_ECC_FAILED          (1U << 21)
 #define MMCSD_R1_CC_ERROR                 (1U << 20)
-#define MMCSD_R1_ERROR                    (1U << 19)
+/* MMCSD_R1_ERROR_BIT defined below as function-style mask — single bit unused */
 #define MMCSD_R1_UNDERRUN                 (1U << 18)
 #define MMCSD_R1_OVERRUN                  (1U << 17)
 #define MMCSD_R1_CID_CSD_OVERWRITE        (1U << 16)
@@ -329,7 +330,9 @@ extern const AP_HAL::HAL& hal;
 #endif
 
 /* GPIOG register base (port 6 = GPIOG, 0x40021800) */
+#ifndef GPIOG_BASE
 #define GPIOG_BASE                        0x40021800UL
+#endif
 #define GPIOG_MODER                       (*(volatile uint32_t *)(GPIOG_BASE + 0x00))
 #define GPIOG_OTYPER                      (*(volatile uint32_t *)(GPIOG_BASE + 0x04))
 #define GPIOG_OSPEEDR                     (*(volatile uint32_t *)(GPIOG_BASE + 0x08))
@@ -358,8 +361,8 @@ static uint32_t _card_rca;
 static inline void _delay_us(uint32_t us)
 {
     const uint32_t cycles = us * (SystemCoreClock / 1000000U);
-    const uint32_t start = DWT_CYCCNT;
-    while ((DWT_CYCCNT - start) < cycles) {
+    const uint32_t start = DWT->CYCCNT;
+    while ((DWT->CYCCNT - start) < cycles) {
         __DSB();
     }
 }
@@ -1119,6 +1122,10 @@ bool sdcard_init(void)
     if (_sdcard_running) {
         return true;
     }
+
+    /* Enable DWT cycle counter for _delay_us() timing */
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 
     /* Check whether the SD card filesystem is already mounted (by board init).
      * This is the typical RTT scenario: sd_card_mount_sync() in rt_board_init.c

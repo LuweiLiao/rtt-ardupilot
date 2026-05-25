@@ -219,6 +219,11 @@ void rt_hw_board_init(void)
     SCB_EnableICache();
     // SCB_EnableDCache();  // Disabled: USB DWC2 DMA coherency issues on STM32F7
 
+    /* Enable SWD debug interface in all low-power modes (WFI/STOP/STANDBY).
+     * Without this, ST-Link connection drops when the chip enters WFI idle.
+     * CUAV V5 NRST pin is not connected, so SWD must stay alive. */
+    DBGMCU->CR |= DBGMCU_CR_DBG_SLEEP | DBGMCU_CR_DBG_STOP | DBGMCU_CR_DBG_STANDBY;
+
     /* Clock init: pure CMSIS register writes (no HAL) */
     NVIC_SetPriorityGrouping(3U);  /* PRIGROUP=3 → 4-bit preemption */
 

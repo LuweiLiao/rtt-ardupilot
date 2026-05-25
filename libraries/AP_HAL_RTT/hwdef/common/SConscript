@@ -10,11 +10,14 @@ cwd = GetCurrentDir()
 objs = []
 dirlist = os.listdir(cwd)
 
-# Package include paths so kernel/board can find stm32f7xx.h, core_cm7.h
+# Package include paths so kernel/board can find stm32f7xx.h, core_cm7.h, board.h
 env.Append(CPPPATH = [
     os.path.join(cwd, 'packages', 'CMSIS-Core-latest', 'Include'),
     os.path.join(cwd, 'packages', 'stm32f7_cmsis_driver-latest', 'Include'),
     os.path.join(cwd, 'packages', 'stm32f7_hal_driver-latest', 'Inc'),
+    # Board path for HAL_Drivers/drivers/drv_gpio.c → <board.h>
+    os.path.join(cwd, 'board'),
+    os.path.join(cwd, 'board', 'CubeMX_Config', 'Inc'),
 ])
 # CMSIS-DSP include path (libraries/AP_GyroFFT/CMSIS_5/include)
 _cmsis_dsp_include = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(cwd)))),

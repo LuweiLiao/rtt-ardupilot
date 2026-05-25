@@ -15,7 +15,7 @@ static RTT_SPIDesc _device_table[] = { HAL_SPI_DEVICE_LIST };
 #define _DEVICE_TABLE_COUNT ARRAY_SIZE(_device_table)
 /* ICM42688 on SPI1 — manually added (hwdef SPIDEV commented to avoid RT-Thread spinlock).
  * CS=PF11(pin 91), bus=1, devid=2, mode=3, lowspeed=2MHz, highspeed=8MHz */
-static RTT_SPIDesc _icm42688_desc = {"icm42688", "spi12", 1, 2, 3, 2000000U, 8000000U};
+static RTT_SPIDesc _icm42688_desc __attribute__((unused)) = {"icm42688", "spi12", 1, 2, 3, 2000000U, 8000000U};
 
 #else
 static RTT_SPIDesc *_device_table = nullptr;
