@@ -1,0 +1,24 @@
+import os
+from building import *
+
+cwd = GetCurrentDir()
+src = []
+
+# SD card port — compiled when BSP_USING_SDIO is enabled in rtconfig.h
+if GetDepend(['BSP_USING_SDIO']):
+    src += ['sdcard_port.c']
+
+# PHY reset helper
+if os.path.isfile(os.path.join(cwd, 'phy_reset.c')):
+    src += ['phy_reset.c']
+
+group = DefineGroup('Ports', src, depend=[''], CPPPATH=[cwd])
+
+# Traverse sub-directory groups (e.g. cherryusb)
+list = os.listdir(cwd)
+for item in list:
+    if os.path.isfile(os.path.join(cwd, item, 'SConscript')):
+        group = group + SConscript(os.path.join(item, 'SConscript'))
+
+objs = group
+Return('objs')

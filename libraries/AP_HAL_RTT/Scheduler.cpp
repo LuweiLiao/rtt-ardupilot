@@ -29,6 +29,8 @@
 #include <AP_Filesystem/AP_Filesystem.h>
 #include <AP_Logger/AP_Logger.h>
 #include <rtthread.h>
+/* STM32F7 HAL/CMSIS registers for RCC/PWR/RTC backup domain access */
+#include <stm32f7xx.h>
 
 #if HAL_WITH_IO_MCU
 /* ch.h provides thread_t / chThdGetSelfX for AP_IOMCU's thread_main.
@@ -642,11 +644,11 @@ void Scheduler::set_system_initialized()
 #define IWDG_KR    (*(volatile uint32_t *)0x40003000)
 #define IWDG_PR    (*(volatile uint32_t *)0x40003004)
 #define IWDG_RLR   (*(volatile uint32_t *)0x40003008)
-    IWDG_KR = 0x5555;
-    IWDG_PR = 3;         // prescaler /32
-    IWDG_RLR = 2047;     // ~2s timeout
-    IWDG_KR = 0xCCCC;    // start IWDG
-    _iwdg_started = true;
+    // IWDG_KR = 0x5555;      // DISABLED for debug — allows probing without ~2s reset
+    // IWDG_PR = 3;           // prescaler /32
+    // IWDG_RLR = 2047;       // ~2s timeout
+    // IWDG_KR = 0xCCCC;      // start IWDG
+    // _iwdg_started = true;
 }
 
 /* ----------------------------------------------------------------

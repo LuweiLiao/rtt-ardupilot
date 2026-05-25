@@ -41,14 +41,13 @@ extern int _end;  /* after .bss AND .sram1_bss in linker script */
                                     ? _HEAP_AFTER_ALL : STM32F7_SRAM1_START))
 #define HEAP_END         STM32_SRAM_END
 
-void SystemClock_Config(void);
+void rtt_clock_init(void);
+void rtt_enable_peripheral_clocks(void);
 
 /*
- * SPI1 DMA stream assignments per RM0410 Table 40:
- *   SPI1_RX → DMA2_Stream2 / Channel 3
- *   SPI1_TX → DMA2_Stream3 / Channel 3
- * SPI4 uses its own streams (Stream0-RX, Stream1-TX) so there is
- * no conflict with SPI1.
+ * Force SPI1 to alternate DMA2 streams so SPI4 can use its
+ * default assignments (Stream0-RX, Stream1-TX).  Without this
+ * override both SPI1 and SPI4 try to use DMA2_Stream0 for RX.
  */
 #define SPI1_DMA_RX_IRQHandler    DMA2_Stream2_IRQHandler
 #define SPI1_RX_DMA_RCC           RCC_AHB1ENR_DMA2EN
@@ -56,28 +55,11 @@ void SystemClock_Config(void);
 #define SPI1_RX_DMA_CHANNEL       DMA_CHANNEL_3
 #define SPI1_RX_DMA_IRQ           DMA2_Stream2_IRQn
 
-#define SPI1_DMA_TX_IRQHandler    DMA2_Stream3_IRQHandler
+#define SPI1_DMA_TX_IRQHandler    DMA2_Stream5_IRQHandler
 #define SPI1_TX_DMA_RCC           RCC_AHB1ENR_DMA2EN
-#define SPI1_TX_DMA_INSTANCE      DMA2_Stream3
+#define SPI1_TX_DMA_INSTANCE      DMA2_Stream5
 #define SPI1_TX_DMA_CHANNEL       DMA_CHANNEL_3
-#define SPI1_TX_DMA_IRQ           DMA2_Stream3_IRQn
-
-/*
- * The generated CUAV V5 RT-Thread BSP currently compiles drivers against this
- * board header, but the per-board rtconfig DMA enable macros are not always
- * visible from every translation unit. Define the SPI DMA enable flags here so
- * SPI1 reliably takes the DMA/LLD path instead of falling back to the blocking
- * HAL polling transfer path.
- */
-#ifndef BSP_SPI_USING_DMA
-#define BSP_SPI_USING_DMA
-#endif
-#ifndef BSP_SPI1_RX_USING_DMA
-#define BSP_SPI1_RX_USING_DMA
-#endif
-#ifndef BSP_SPI1_TX_USING_DMA
-#define BSP_SPI1_TX_USING_DMA
-#endif
+#define SPI1_TX_DMA_IRQ           DMA2_Stream5_IRQn
 
 /*
  * SPI4 uses its default DMA2 streams freed by the SPI1 remap above.
@@ -95,12 +77,5 @@ void SystemClock_Config(void);
 #define SPI4_TX_DMA_INSTANCE      DMA2_Stream1
 #define SPI4_TX_DMA_CHANNEL       DMA_CHANNEL_4
 #define SPI4_TX_DMA_IRQ           DMA2_Stream1_IRQn
-
-#ifndef BSP_SPI4_RX_USING_DMA
-#define BSP_SPI4_RX_USING_DMA
-#endif
-#ifndef BSP_SPI4_TX_USING_DMA
-#define BSP_SPI4_TX_USING_DMA
-#endif
 
 #endif

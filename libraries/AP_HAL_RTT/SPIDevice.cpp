@@ -19,33 +19,33 @@
  * on some boards) so we restore on first transfer only — repeated init
  * creates glitches that confuse IMU slaves during CS-held burst reads.
  *
- * Pinout (CUAV V5, from hwdef.dat):
- *   PG11=SCK(AF5), PA6=MISO(AF5), PD7=MOSI(AF5)
+ * Pinout (CUAV V5, actual hardware):
+ *   PA5=SCK(AF5), PA6=MISO(AF5), PA7=MOSI(AF5)
  *   PF2=ICM20689_CS, PF3=ICM20602_CS, PF4=BMI055_GYRO_CS */
 static bool _spi1_gpio_init_done = false;
 static void _spi1_gpio_init(void)
 {
     if (_spi1_gpio_init_done) return;
 
-    /* Enable GPIO clocks */
-    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIODEN |
-                    RCC_AHB1ENR_GPIOFEN | RCC_AHB1ENR_GPIOGEN;
+    /* Enable GPIO clocks — GPIOA for SPI1, GPIOF/PG for CS pins */
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOFEN |
+                    RCC_AHB1ENR_GPIOGEN;
     (void)RCC->AHB1ENR;
     /* Ensure SPI1 peripheral clock is enabled */
     RCC->APB2ENR |= RCC_APB2ENR_SPI1EN;
     (void)RCC->APB2ENR;
 
-    /* PG11 SCK: MODE=AF(10), AF=AF5(0101) */
-    GPIOG->MODER = (GPIOG->MODER & ~(3U << 22)) | (2U << 22);
-    GPIOG->AFR[1] = (GPIOG->AFR[1] & ~(0xFU << 12)) | (5U << 12);
+    /* PA5 SCK: MODE=AF(10), AF=AF5(0101) */
+    GPIOA->MODER = (GPIOA->MODER & ~(3U << 10)) | (2U << 10);
+    GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << 20)) | (5U << 20);
 
     /* PA6 MISO: MODE=AF(10), AF=AF5(0101) */
     GPIOA->MODER = (GPIOA->MODER & ~(3U << 12)) | (2U << 12);
     GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << 24)) | (5U << 24);
 
-    /* PD7 MOSI: MODE=AF(10), AF=AF5(0101) */
-    GPIOD->MODER = (GPIOD->MODER & ~(3U << 14)) | (2U << 14);
-    GPIOD->AFR[0] = (GPIOD->AFR[0] & ~(0xFU << 28)) | (5U << 28);
+    /* PA7 MOSI: MODE=AF(10), AF=AF5(0101) */
+    GPIOA->MODER = (GPIOA->MODER & ~(3U << 14)) | (2U << 14);
+    GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << 28)) | (5U << 28);
 
     /* CS pins: OUTPUT, INITIAL STATE HIGH */
     GPIOF->MODER = (GPIOF->MODER & ~(3U << 4)) | (1U << 4);  /* PF2 OUT */
@@ -182,11 +182,26 @@ static void _spi_dma_abort(const struct spi_dma_desc *dma, SPI_TypeDef *spi)
  *   dmaStreamSetMemory0 + dmaStreamSetTransactionSize + dmaStreamSetMode + dmaStreamEnable
  */
 static bool _spi_dma_xfer(SPI_TypeDef *spi, uint8_t bus,
-                           const uint8_t *send, uint8_t *recv, uint32_t len)
+                           const uint8_t *send, uint8_t *recv, uint32_t len,
+                           uint32_t br)
 {
     if (bus >= ARRAY_SIZE(_spi_dma_tbl)) return false;
     const struct spi_dma_desc *dma = &_spi_dma_tbl[bus];
     if (dma->rx_stream == NULL || dma->tx_stream == NULL) return false;
+
+    /* Configure SPI CR1/CR2 and enable SPE — matches spi1_poll_transfer()
+     * cs_take path and ChibiOS spiStart() convention (SPIDevice.cpp:432-437).
+     * Full-duplex transfers skip spi1_poll_transfer() entirely so we must
+     * ensure SPE=1 here; otherwise the peripheral is disabled and TXE/RXNE
+     * never assert, hanging the probe forever.
+     * [Cybernetics Ch.4] Closed-loop: verify CR1.SPE=1 via GDB before DMA. */
+    CLEAR_BIT(spi->CR1, SPI_CR1_SPE);
+    spi->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI |
+               SPI_CR1_CPOL | SPI_CR1_CPHA | br;
+    spi->CR2 = SPI_CR2_DS_0 | SPI_CR2_DS_1 | SPI_CR2_DS_2 | SPI_CR2_FRXTH;
+    SET_BIT(spi->CR1, SPI_CR1_SPE);
+    while (spi->SR & SPI_SR_RXNE) { (void)*(volatile uint8_t *)&spi->DR; }
+    (void)spi->SR;
 
     /* Small transfers: register polling avoids DMA setup latency */
     if (len <= SPI_DMA_THRESHOLD) {
@@ -329,6 +344,15 @@ static bool _spi_dma_xfer(SPI_TypeDef *spi, uint8_t bus,
             /* Wait for BSY — last byte may still be shifting in */
             uint32_t bsy = 10000;
             while ((spi->SR & SPI_SR_BSY) && --bsy) { __NOP(); }
+            if (bsy == 0) {
+                /* BSY stuck — try clearing SPI state by toggling SPE */
+                spi->CR1 &= ~SPI_CR1_SPE;
+                (void)spi->SR;
+                (void)spi->DR;
+                spi->CR1 |= SPI_CR1_SPE;
+                bsy = 10000;
+                while ((spi->SR & SPI_SR_BSY) && --bsy) { __NOP(); }
+            }
             return true;
         }
         __NOP();
@@ -364,6 +388,7 @@ struct spi_cs_entry {
     rt_base_t cs_pin;
 };
 static const struct spi_cs_entry _spi_cs_table[] = {
+    {"spi12", 91},   /* ICM42688 CS = PF11 = 5*16+11 = 91 — must be first! */
     {"spi11", 82},
     {"spi12", 83},
     {"spi13", 84},
@@ -591,7 +616,14 @@ SPIDevice::~SPIDevice()
 
 bool SPIDevice::_lock_bus()
 {
-    if (_dev == nullptr || _dev->bus == nullptr || _dev->bus->ops == nullptr) {
+    if (_dev == nullptr) {
+        /* Manual CMSIS path (ICM42688) — no RT-Thread SPI device.
+         * Use __disable_irq as lightweight spinlock alternative.
+         * SPI1 has only one device, so no bus contention. */
+        __disable_irq();
+        return true;
+    }
+    if (_dev->bus == nullptr || _dev->bus->ops == nullptr) {
         return false;
     }
     if (_bus_locked) {
@@ -613,7 +645,12 @@ bool SPIDevice::_lock_bus()
 
 void SPIDevice::_unlock_bus()
 {
-    if (_dev != nullptr && _dev->bus != nullptr && !_bus_locked) {
+    if (_dev == nullptr) {
+        /* Manual CMSIS path */
+        __enable_irq();
+        return;
+    }
+    if (_dev->bus != nullptr && !_bus_locked) {
         rt_mutex_release(&(_dev->bus->lock));
     }
 }
@@ -681,7 +718,7 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
         }
         if (send_len > 0 || recv_len > 0) {
             bool need_sem = !_cs_held;
-            if (need_sem && !_bus->semaphore.take(HAL_SEMAPHORE_BLOCK_FOREVER)) return false;
+            if (need_sem && !_lock_bus()) return false;
             bool ok = false;
 
             /* ── Full-duplex case (send == recv, same len): try DMA ── */
@@ -689,8 +726,22 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
                                      send == recv && send_len == recv_len);
 
             if (fullduplex) {
+                /* CS低 — 用BSRR复位CS引脚 */
+                {
+                    rt_base_t cs = _cs_pin;
+                    uint32_t port_idx = cs >> 4;
+                    uint32_t pin = cs & 0xF;
+                    *(volatile uint32_t *)(0x40020000U + port_idx * 0x400U + 0x18U) = 1U << (pin + 16);
+                }
                 ok = _spi_dma_xfer(bus_to_spi(_desc.bus), _desc.bus,
-                                   send, recv, send_len);
+                                   send, recv, send_len, _br);
+                /* CS高 — 用BSRR置位CS引脚 */
+                {
+                    rt_base_t cs = _cs_pin;
+                    uint32_t port_idx = cs >> 4;
+                    uint32_t pin = cs & 0xF;
+                    *(volatile uint32_t *)(0x40020000U + port_idx * 0x400U + 0x18U) = 1U << pin;
+                }
             } else {
                 /* ── Half-duplex (write then read): use bounce buffer, poll ── */
                 ok = spi1_poll_transfer(nullptr, send, send_len, recv, recv_len,
@@ -698,7 +749,7 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
                                         bus_to_spi(_desc.bus), _cs_pin, _br);
             }
 
-            if (!_cs_held && need_sem) _bus->semaphore.give();
+            if (!_cs_held && need_sem) _unlock_bus();
             return ok;
         }
         return true;
@@ -707,9 +758,9 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
     if (_dev == nullptr) return false;
 
     bool need_sem = !_cs_held;
-    if (need_sem && !_bus->semaphore.take(HAL_SEMAPHORE_BLOCK_FOREVER)) return false;
+    if (need_sem && !_lock_bus()) return false;
     if (!_cs_held && !_lock_bus()) {
-        if (need_sem) { _bus->semaphore.give(); }
+        if (need_sem) { _unlock_bus(); }
         return false;
     }
 
@@ -729,7 +780,7 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
             buf = (uint8_t *)rt_malloc_align(total_len, 32);
             if (buf == nullptr) {
                 if (!_cs_held) { _unlock_bus(); }
-                if (need_sem) _bus->semaphore.give();
+                if (need_sem) _unlock_bus();
                 return false;
             }
             heap = true;
@@ -764,7 +815,7 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
             rxbuf = (uint8_t *)rt_malloc_align(send_len, 32);
             if (rxbuf == nullptr) {
                 if (!_cs_held) { _unlock_bus(); }
-                if (need_sem) { _bus->semaphore.give(); }
+                if (need_sem) { _unlock_bus(); }
                 return false;
             }
             heap = true;
@@ -802,7 +853,7 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
     }
 
     if (!_cs_held) { _unlock_bus(); }
-    if (need_sem) { _bus->semaphore.give(); }
+    if (need_sem) { _unlock_bus(); }
     return ok;
 }
 
@@ -818,7 +869,7 @@ bool SPIDevice::set_chip_select(bool set)
              * corruption.  ChibiOS ref: SPIDevice.h:set_chip_select().
              *
              * The semaphore is released in set_chip_select(false). */
-            if (!_bus->semaphore.take(HAL_SEMAPHORE_BLOCK_FOREVER)) {
+            if (!_lock_bus()) {
                 return false;
             }
             /* Configure SPI registers (CR1/CR2/SPE) BEFORE asserting CS.
@@ -862,7 +913,7 @@ bool SPIDevice::set_chip_select(bool set)
             /* Release bus semaphore when CS is de-asserted.
              * Aligns with ChibiOS set_chip_select(false). */
             _cs_held = false;
-            _bus->semaphore.give();
+            _unlock_bus();
             return true;
         }
         _cs_held = set;
@@ -877,7 +928,7 @@ bool SPIDevice::set_chip_select(bool set)
         if (_cs_held) {
             return true;
         }
-        if (!_bus->semaphore.take(HAL_SEMAPHORE_BLOCK_FOREVER)) {
+        if (!_lock_bus()) {
             return false;
         }
         _cs_held = true;
@@ -886,7 +937,7 @@ bool SPIDevice::set_chip_select(bool set)
 
     if (_cs_held) {
         _cs_held = false;
-        _bus->semaphore.give();
+        _unlock_bus();
     }
     return true;
 }
@@ -909,18 +960,18 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
         }
         if (len > 0) {
             return _spi_dma_xfer(bus_to_spi(_desc.bus), _desc.bus,
-                                 send, recv, len);
+                                 send, recv, len, _br);
         }
 #endif
         return false;
     }
 
     bool need_sem = !_cs_held;
-    if (need_sem && !_bus->semaphore.take(HAL_SEMAPHORE_BLOCK_FOREVER)) {
+    if (need_sem && !_lock_bus()) {
         return false;
     }
     if (!_cs_held && !_lock_bus()) {
-        if (need_sem) { _bus->semaphore.give(); }
+        if (need_sem) { _unlock_bus(); }
         return false;
     }
 
@@ -941,7 +992,7 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
             txbuf = (uint8_t *)rt_malloc_align(len, 32);
             if (txbuf == nullptr) {
                 if (!_cs_held) { _unlock_bus(); }
-                if (need_sem) { _bus->semaphore.give(); }
+                if (need_sem) { _unlock_bus(); }
                 return false;
             }
             rxbuf = txbuf;
@@ -968,7 +1019,7 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
 
     if (heap) { rt_free_align(txbuf); }
     if (!_cs_held) { _unlock_bus(); }
-    if (need_sem) { _bus->semaphore.give(); }
+    if (need_sem) { _unlock_bus(); }
     return ok;
 }
 

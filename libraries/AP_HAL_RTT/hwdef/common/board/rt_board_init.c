@@ -207,25 +207,31 @@ static void _spi_lld_board_init(void)
 
 void rt_hw_board_init(void)
 {
-    SCB->VTOR = 0x08008000U;
     rt_kprintf("[BOARD-INIT] Starting board initialization\n");
+#ifdef FLASH_ORIGIN
+    SCB->VTOR = FLASH_ORIGIN;
+#else
+    SCB->VTOR = 0x08008000U;
+#endif
 
     _mpu_config();
     _fpu_context_init();
     SCB_EnableICache();
-    // SCB_EnableDCache();
+    // SCB_EnableDCache();  // Disabled: USB DWC2 DMA coherency issues on STM32F7
 
-    FLASH->ACR |= FLASH_ACR_ARTEN | FLASH_ACR_PRFTEN;
-    NVIC_SetPriorityGrouping(3U);
+    /* Clock init: pure CMSIS register writes (no HAL) */
+    NVIC_SetPriorityGrouping(3U);  /* PRIGROUP=3 → 4-bit preemption */
 
-    SystemClock_Config();
-
-    /* SAFE: SysTick NULL guard in SysTick_Handler */
+    rtt_clock_init();
+    rtt_enable_peripheral_clocks();
     rt_hw_systick_init();
-
     rt_hw_pin_init();
-
     rt_hw_usart_init();
+
+    /* GPIO power pins moved to _sensor_power_init (INIT_PREV_EXPORT) —
+     * DCache interference causes MODER writes at this early stage to be
+     * lost when HAL_SPI_MspInit later does read-modify-write on the same
+     * GPIO port (e.g. SPI4 HAL_GPIO_Init on GPIOE clobbers PE3). */
 
 #ifdef RT_USING_HEAP
     rt_system_heap_init(HEAP_BEGIN, HEAP_END);
@@ -235,7 +241,8 @@ void rt_hw_board_init(void)
     rt_console_set_device(RT_CONSOLE_DEVICE_NAME);
 #endif
 
-    /* SPI LLD contexts (DMA) */
+    /* Register SPI LLD contexts before rt_components_board_init() so that
+     * rt_hw_spi_init() (INIT_BOARD_EXPORT) finds them. */
 #ifdef SOC_SERIES_STM32F7
 #if (defined(BSP_USING_SPI1) && defined(BSP_SPI1_TX_USING_DMA) && defined(BSP_SPI1_RX_USING_DMA)) || \
     (defined(BSP_USING_SPI4) && defined(BSP_SPI4_TX_USING_DMA) && defined(BSP_SPI4_RX_USING_DMA))
@@ -243,52 +250,44 @@ void rt_hw_board_init(void)
 #endif
 #endif
 
-    /* Init SPI buses + I2C via INIT_BOARD_EXPORT table */
     rt_kprintf("[BOARD-INIT] Calling rt_components_board_init()\n");
 #ifdef RT_USING_COMPONENTS_INIT
     rt_components_board_init();
 #endif
 
-    /* === CUAV V5 register-level GPIO/clock fixes === */
+        /* Sensor power PE3 re-apply (SPI4 HAL init can clobber it) */
+    {
+        volatile uint32_t *moder = (volatile uint32_t *)0x40021000; /* GPIOE */
+        uint32_t m = *moder;
+        m &= ~(3U << 6);   /* clear PE3 MODER bits */
+        m |= (1U << 6);    /* set OUTPUT mode */
+        *moder = m;
+        /* Also ensure ODR[3] = HIGH */
+        *(volatile uint32_t *)0x40021014 |= (1U << 3);
+    }
 
+    /*
+     * SPI1 GPIO early init — configure PA5(SCK)/PA6(MISO)/PA7(MOSI) as AF5.
+     * Must happen here (before SPI/IMU probe in setup()) rather than lazily
+     * in SPIDevice.cpp's _spi1_gpio_init(), because the lazy init is only
+     * triggered on first SPI transfer — setup() probes the IMU before that.
+     *
+     * Pinout (CUAV V5): PA5=SCK(AF5), PA6=MISO(AF5), PA7=MOSI(AF5)
+     */
 #ifdef BSP_USING_SPI1
-    /* SPI1: PA6(MISO,AF5) PD7(MOSI,AF5) PG11(SCK,AF5)
-     * Force clock on, MODER=AF2, AFR=AF5 */
-    RCC->APB2ENR |= RCC_APB2ENR_SPI1EN;
-    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
-    RCC->AHB1ENR |= RCC_AHB1ENR_GPIODEN;
-    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOGEN;
-    RCC->AHB1ENR |= RCC_AHB1ENR_DMA2EN;  /* Enable DMA2 for SPI1 DMA transfers */
-    (void)RCC->AHB1ENR;
-    /* PA6=MISO(AF5) */
-    GPIOA->MODER = (GPIOA->MODER & ~(3U << 12)) | (2U << 12);
-    GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << 24)) | (5U << 24);
-    /* PD7=MOSI(AF5) */
-    GPIOD->MODER = (GPIOD->MODER & ~(3U << 14)) | (2U << 14);
-    GPIOD->AFR[0] = (GPIOD->AFR[0] & ~(0xFU << 28)) | (5U << 28);
-    /* PG11=SCK(AF5) */
-    GPIOG->MODER = (GPIOG->MODER & ~(3U << 22)) | (2U << 22);
-    GPIOG->AFR[1] = (GPIOG->AFR[1] & ~(0xFU << 12)) | (5U << 12);
-#endif
-
-#ifdef BSP_USING_SPI4
-    /* SPI4: PE2(SCK,AF5) PE13(MISO,AF5) PE6(MOSI,AF5) PF10(MS5611 CS,OUTPUT) */
-    RCC->APB2ENR |= RCC_APB2ENR_SPI4EN;
-    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOEEN;
-    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOFEN;
-    (void)RCC->AHB1ENR;
-    /* PE2=SCK(AF5) */
-    GPIOE->MODER = (GPIOE->MODER & ~(3U << 4)) | (2U << 4);
-    GPIOE->AFR[0] = (GPIOE->AFR[0] & ~(0xFU << 8)) | (5U << 8);
-    /* PE13=MISO(AF5) */
-    GPIOE->MODER = (GPIOE->MODER & ~(3U << 26)) | (2U << 26);
-    GPIOE->AFR[1] = (GPIOE->AFR[1] & ~(0xFU << 20)) | (5U << 20);
-    /* PE6=MOSI(AF5) */
-    GPIOE->MODER = (GPIOE->MODER & ~(3U << 12)) | (2U << 12);
-    GPIOE->AFR[0] = (GPIOE->AFR[0] & ~(0xFU << 24)) | (5U << 24);
-    /* PF10=CS (MS5611): OUTPUT HIGH */
-    GPIOF->MODER = (GPIOF->MODER & ~(3U << 20)) | (1U << 20);
-    GPIOF->BSRR = (1U << 10);
+    {
+        RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+        (void)RCC->AHB1ENR;
+        /* PA5 SCK: MODE=AF, AF=5 */
+        GPIOA->MODER = (GPIOA->MODER & ~(3U << 10)) | (2U << 10);
+        GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << 20)) | (5U << 20);
+        /* PA6 MISO */
+        GPIOA->MODER = (GPIOA->MODER & ~(3U << 12)) | (2U << 12);
+        GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << 24)) | (5U << 24);
+        /* PA7 MOSI */
+        GPIOA->MODER = (GPIOA->MODER & ~(3U << 14)) | (2U << 14);
+        GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << 28)) | (5U << 28);
+    }
 #endif
 
     rt_kprintf("[BOARD-INIT] Board initialization complete\n");
@@ -337,10 +336,6 @@ static int rtt_run_cpp_ctors(void)
 }
 INIT_COMPONENT_EXPORT(rtt_run_cpp_ctors);
 
-/* Always define for AP_Logger_File.cpp */
-volatile int rtt_sd_mount_stage = 0;
-volatile int rtt_sd_mount_result = -99;
-
 #ifdef BSP_USING_SDIO
 #include <dfs_fs.h>
 #include <sys/stat.h>
@@ -353,6 +348,9 @@ volatile int rtt_sd_mount_result = -99;
 #define SD_POWER_PIN    GET_PIN(G, 7)   /* fallback default */
 #endif
 #define SD_MOUNT_POINT  "/"
+
+volatile int rtt_sd_mount_stage = 0;
+volatile int rtt_sd_mount_result = -99;
 
 static void _sd_try_mount_once(void)
 {
@@ -419,51 +417,13 @@ static int sd_card_mount_sync(void)
 
     /* Card not ready yet — spawn background retry thread */
     rt_thread_t th = rt_thread_create("sdmnt", _sd_mount_thread,
-                                      RT_NULL, 1024,
+                                      RT_NULL, 2048,
                                       RT_THREAD_PRIORITY_MAX - 2, 20);
     if (th) rt_thread_startup(th);
     return 0;
 }
 INIT_ENV_EXPORT(sd_card_mount_sync);
 #endif
-
-/* ----------------------------------------------------------------
- *  Internal Flash block device for DFS elmfat (logging without SD).
- *  Uses sector 11 (256KB) — sector 10 is HAL_Storage parameters.
- * ---------------------------------------------------------------- */
-extern int rt_hw_flash_blkdev_init(void);
-
-#define FLASH_BLKDEV_MOUNT_POINT  "/logs"
-#define FLASH_BLKDEV_DEV          "flash0"
-
-static int flash_blkdev_mount(void)
-{
-    if (rt_hw_flash_blkdev_init() != RT_EOK) return -1;
-
-    /* Try mounting first; if no filesystem, format then mount */
-    if (dfs_mount(FLASH_BLKDEV_DEV, FLASH_BLKDEV_MOUNT_POINT, "elm", 0, 0) == 0) {
-        rt_kprintf("[flash0] mounted on %s\n", FLASH_BLKDEV_MOUNT_POINT);
-        return 0;
-    }
-
-    rt_kprintf("[flash0] no filesystem, formatting...\n");
-    int rc = dfs_mkfs("elm", FLASH_BLKDEV_DEV);
-    if (rc != 0) {
-        rt_kprintf("[flash0] mkfs failed: %d\n", rc);
-        return -2;
-    }
-
-    rc = dfs_mount(FLASH_BLKDEV_DEV, FLASH_BLKDEV_MOUNT_POINT, "elm", 0, 0);
-    if (rc != 0) {
-        rt_kprintf("[flash0] mount after mkfs failed: %d\n", rc);
-        return -3;
-    }
-
-    mkdir(FLASH_BLKDEV_MOUNT_POINT, 0777);
-    rt_kprintf("[flash0] formatted and mounted on %s\n", FLASH_BLKDEV_MOUNT_POINT);
-    return 0;
-}
-INIT_ENV_EXPORT(flash_blkdev_mount);
 
 /* ----------------------------------------------------------------
  *  True CPU idle measurement via DWT cycle counter + idle hook.

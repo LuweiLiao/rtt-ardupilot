@@ -55,11 +55,12 @@ PF6  UART7_RX  UART7 AF8
 APJ_BOARD_ID TARGET_HW_PX4_FMU_V5
 
 # ---- CS pin definitions ----
-PF2  ICM20689_CS CS
-PF3  ICM20602_CS CS
-PF11 SPARE_CS CS
-PF4  BMI055_G_CS CS
-PG10 BMI055_A_CS CS
+#PF2  ICM20689_CS CS     -- commented: not on CUAV V5 HW (ICM42688 only)
+#PF3  ICM20602_CS CS     -- commented: not on CUAV V5 HW
+#PF11 ICM42688_CS CS      -- commented: debug boot hang; re-enable after root cause
+PF11 GPIO_ICM42688_CS  OUTPUT LOW   -- CS pin, software-driven via SPIDevice.cpp BSRR
+#PF4  BMI055_G_CS CS     -- commented: not on CUAV V5 HW
+#PG10 BMI055_A_CS CS     -- commented: not on CUAV V5 HW
 PF5  RAMTRON_CS  CS
 PF10 MS5611_CS   CS
 PI4  EXTERNAL1_CS1  CS
@@ -146,16 +147,22 @@ PH8  I2C3_SDA I2C3 AF4
 
 # ---- SPI device table ----
 # SPIDEV name      bus   devid    cs_pin        mode    lowspeed  highspeed
-SPIDEV icm20689    SPI1  DEVID1   ICM20689_CS   MODE3   2*MHZ     8*MHZ
-SPIDEV icm20602    SPI1  DEVID2   ICM20602_CS   MODE3   2*MHZ     8*MHZ
-SPIDEV bmi055_g    SPI1  DEVID3   BMI055_G_CS   MODE3  10*MHZ    10*MHZ
-SPIDEV bmi055_a    SPI1  DEVID4   BMI055_A_CS   MODE3  10*MHZ    10*MHZ
+#SPIDEV icm20689    SPI1  DEVID1   ICM20689_CS   MODE3   2*MHZ     8*MHZ    -- not on CUAV V5 HW
+#SPIDEV icm20602    SPI1  DEVID2   ICM20602_CS   MODE3   2*MHZ     8*MHZ    -- not on CUAV V5 HW
+#SPIDEV bmi055_g    SPI1  DEVID3   BMI055_G_CS   MODE3  10*MHZ    10*MHZ   -- not on CUAV V5 HW
+#SPIDEV bmi055_a    SPI1  DEVID4   BMI055_A_CS   MODE3  10*MHZ    10*MHZ   -- not on CUAV V5 HW
+#SPIDEV icm42688    SPI1  DEVID2   ICM42688_CS   MODE3   2*MHZ     8*MHZ  -- manual CMSIS, no RT-Thread attach
 SPIDEV ramtron     SPI2  DEVID1   RAMTRON_CS    MODE3   8*MHZ     8*MHZ
 SPIDEV ms5611      SPI4  DEVID1   MS5611_CS     MODE3  20*MHZ    20*MHZ
 
 # ---- Sensor probe lists ----
-IMU Invensense SPI:icm20689 ROTATION_NONE
-IMU Invensense SPI:icm20602 ROTATION_NONE
+#IMU Invensense SPI:icm20689 ROTATION_NONE  -- not on CUAV V5 HW
+IMU Invensensev3 SPI:icm42688 ROTATION_PITCH_180_YAW_270
+# No sensors defined for now — prevent AP_InertialSensor from expecting probe macros.
+# Re-enable when SPI spinlock is resolved.
+
+#ICM20602 temporarily disabled — start() hangs at setup_stage 681 (likely semaphore/SPI deadlock)
+#IMU Invensense SPI:icm20602 ROTATION_NONE
 # BMI055/BMI088 disabled temporarily — SPI start() hangs at boot (setup_stage ~682).
 # ChibiOS CUAVv5 does NOT have BMI055 in its probe list (fmuv5 uses ICM20689 + ICM20602 only).
 # These bmi055_a/bmi055_g SPIDEV entries are kept for reference; re-enable when the
@@ -204,7 +211,8 @@ define AP_SCRIPTING_ENABLED 0
 define SCRIPTING_DIRECTORY "/APM/scripts_rtt"
 # RTT DFS provides POSIX FS interface (open/close/read/write/stat/mkdir)
 define AP_FILESYSTEM_POSIX_ENABLED 1
-# Temporary: allow system to boot without IMU while debugging SPI issues (REMOVED - IMU works)
+# Allow boot without any IMU (temporary, debugging SPI polled IMU init)
+define AP_INERTIALSENSOR_ALLOW_NO_SENSORS 1
 # ---- RGB LED (PixRacer scheme: PH10/PH11/PH12, open-drain active-low) ----
 # RTT uses GET_PIN(port, num) = port*16+num: H=7 → PH10=122, PH11=123, PH12=124
 # ChibiOS CUAVv5 leaves HAL_GPIO_LED_ON undefined, so AP_HAL_Boards.h falls

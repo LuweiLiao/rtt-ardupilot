@@ -134,10 +134,18 @@ __attribute__((weak)) void MemManage_Handler(void)
  * ---------------------------------------------------------------- */
 extern "C" void ap_rtt_iwdg_init(void)
 {
-#define IWDG_KR    (*(volatile uint32_t *)0x40003000)
-#define IWDG_PR    (*(volatile uint32_t *)0x40003004)
-#define IWDG_RLR   (*(volatile uint32_t *)0x40003008)
-#define IWDG_SR    (*(volatile uint32_t *)0x4000300C)
+#define IWDG_KR    (*(volatile uint32_t *)0x40002800)
+#define IWDG_PR    (*(volatile uint32_t *)0x40002804)
+#define IWDG_RLR   (*(volatile uint32_t *)0x40002808)
+#define IWDG_SR    (*(volatile uint32_t *)0x4000280C)
+
+    /* 🚨 FEED IMMEDIATELY — hardware IWDG starts from reset with default
+     * ~512ms timeout (PR=0=div4, RLR=4095).  The bootloader may take
+     * 100-300ms to validate the app, so only ~200-400ms remain by the
+     * time we reach here.  LSI enable can take up to ~100ms, and PR/RLR
+     * sync adds more delay.  Feed first to extend the counter NOW, then
+     * reconfigure to a longer timeout. */
+    IWDG_KR = 0xAAAA;  /* Feed to prevent imminent reset */
 
     /* Enable LSI */
     RCC->CSR |= RCC_CSR_LSION;
@@ -152,9 +160,22 @@ extern "C" void ap_rtt_iwdg_init(void)
     /* Reload value: 1250 → timeout = (256 * 1250) / 32000 ≈ 10s */
     IWDG_RLR = 1250;
 
-    /* Wait for register update */
-    while (IWDG_SR & (IWDG_SR_PVU | IWDG_SR_RVU)) {}
+    /* Wait for register update with timeout (~10ms at 32kHz LSI) */
+    {
+        volatile uint32_t iwdg_timeout = 1000000;
+        while (IWDG_SR & (IWDG_SR_PVU | IWDG_SR_RVU)) {
+            if (--iwdg_timeout == 0) {
+                rt_kprintf("IWDG: SR sync timeout (SR=0x%08lx), continuing\n",
+                           (unsigned long)IWDG_SR);
+                break;
+            }
+            __NOP();
+        }
+    }
 
-    /* Start the watchdog */
+    /* Final feed with the new timeout configuration active */
+    IWDG_KR = 0xAAAA;
+
+    /* Start the watchdog (no-op if already running from hardware IWDG) */
     IWDG_KR = 0xCCCC;
 }

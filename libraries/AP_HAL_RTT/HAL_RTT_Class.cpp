@@ -13,6 +13,9 @@
 #include "UARTDriver.h"
 #include <rtthread.h>
 #include "RCInput.h"
+
+/* GPIO 寄存器操作所需 */
+#include <stm32f7xx.h>
 #include "RCOutput.h"
 #include "GPIO.h"
 #include "Storage.h"
@@ -71,6 +74,7 @@ static RTT::UARTDriver serial9Driver(9);
 static RTT::I2CDeviceManager i2cDeviceManager;
 static RTT::SPIDeviceManager spiDeviceManager;
 static RTT::WSPIDeviceManager wspiDeviceManager;
+RTT::WSPIDeviceManager *hal_wspi = &wspiDeviceManager;
 static RTT::AnalogIn analogIn;
 static RTT::Storage storageDriver;
 static RTT::GPIO gpioDriver;
@@ -98,6 +102,8 @@ static AP_HAL::SIMState xsimstate;
 #endif
 
 extern const AP_HAL::HAL& hal;
+
+namespace RTT { WSPIDeviceManager *hal_wspi = nullptr; }
 
 HAL_RTT::HAL_RTT() :
     AP_HAL::HAL(
@@ -256,9 +262,18 @@ static void _main_loop_entry(void* arg)
     }
 }
 
+/* Declared in system.cpp — IWDG init + feed */
+extern "C" void ap_rtt_iwdg_init(void);
+
 void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
 {
     rtt_dbg_hal_run_called = 0xAAAAAAAA;
+
+    /* Feed + reconfigure IWDG IMMEDIATELY — hardware IWDG is active from reset
+     * with ~512ms timeout because FLASH_OPTCR_IWDG_SW=0 on CUAV V5.
+     * This must happen before any long-running init, timer, or USB enumeration.
+     * ap_rtt_iwdg_init() reconfigures timeout to ~10s and feeds the counter. */
+    ap_rtt_iwdg_init();
 
     /* Clear sticky reset flags (RCC_CSR RMVF) — mirrors ChibiOS __late_init()
      * stm32_watchdog_clear_reason(). Prevents was_watchdog_reset() from
@@ -298,8 +313,36 @@ void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
      */
     hal.gpio->init();
 
+    /* SPI1 GPIO MODER — gpio->init() may clobber PG11/PA6/PD7 AF mode.
+     * PG11=SCK, PA6=MISO, PD7=MOSI (fmuv5/CUAV V5 reference). */
+#ifdef STM32F7
+    {
+        /* PG11: MODER bit 23:22 = 10 (AF), AFR1 bit 15:12 = 0101 (AF5) */
+        GPIOG->MODER = (GPIOG->MODER & ~(3U << 22)) | (2U << 22);
+        GPIOG->AFR[1] = (GPIOG->AFR[1] & ~(0xFU << 12)) | (5U << 12);
+        /* PA6: MODER bit 13:12 = 10 (AF), AFR0 bit 27:24 = 0101 (AF5) */
+        GPIOA->MODER = (GPIOA->MODER & ~(3U << 12)) | (2U << 12);
+        GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << 24)) | (5U << 24);
+        /* PD7: MODER bit 15:14 = 10 (AF), AFR0 bit 31:28 = 0101 (AF5) */
+        GPIOD->MODER = (GPIOD->MODER & ~(3U << 14)) | (2U << 14);
+        GPIOD->AFR[0] = (GPIOD->AFR[0] & ~(0xFU << 28)) | (5U << 28);
+    }
+#endif
+
     hal.serial(0)->begin(SERIAL0_BAUD);
     hal.analogin->init();
+
+    /* Pre-initialize SPI bus 1 DeviceBus — warm up the lazy semaphore init
+     * from known-good context (main init, interrupts on, scheduler running).
+     * Without this warmup, the first SPIDevice::transfer (during IMU probe
+     * in setup) triggers rt_mutex_init which deadlocks with the RT-Thread
+     * spinlock when the scheduler is still stabilizing. */
+    {
+        RTT::DeviceBus *spibus = RTT::DeviceBus::get_bus(1, APM_RTT_SPI_PRIORITY);
+        /* Take+give to force lazy mutex init NOW, not during SPIDevice::transfer */
+        spibus->semaphore.take_nonblocking();
+        spibus->semaphore.give();
+    }
 
     rtt_dbg_hal_run_called = 0xBBBBBBBB;
 

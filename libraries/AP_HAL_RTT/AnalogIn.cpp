@@ -28,7 +28,7 @@
 
 /* ADC LLD */
 extern "C" {
-#include "drivers/hal_adc_lld_rtt.h"
+#include "hal_adc_lld_rtt.h"
 }
 
 namespace RTT
@@ -55,6 +55,10 @@ static bool _adc_inited = false;
 static volatile uint32_t rtt_adc_conversion_count = 0;
 static volatile uint32_t rtt_adc_last_raw = 0;
 static volatile uint32_t rtt_adc_timeout_count = 0;
+/* Diagnostic: track _timer_tick execution — 1=init_OK, reads ADC */
+static volatile uint32_t rtt_adc_timer_tick_state = 0;
+/* Diagnostic: cumulative _timer_tick calls */
+static volatile uint32_t rtt_adc_timer_tick_count = 0;
 
 /* ======================================================================== */
 /* ADC LLD wrapper                                                          */
@@ -73,7 +77,7 @@ static void _adc_init_once(void)
     // PA0=ANA0(ADC_IN0), PA1=ANA1(ADC_IN1), PA2=ANA2(ADC_IN2),
     // PA3=ANA3(ADC_IN8), PA4=VDD_3V3_SENS(ADC_IN4), PA5=ANA5(ADC_IN5),
     // PA6=ANA6(ADC_IN6), PA7=ANA7(ADC_IN7)
-    GPIOA->MODER |= 0x3FFFF;   // PA0~PA8 analog
+    GPIOA->MODER |= 0x3FF;     // PA0~PA4 analog only (leave PA5/PA6/PA7 for SPI1)
 
     // GPIOB: PB0, PB1 as analog (ADC_IN8, ADC_IN9)
     GPIOB->MODER |= 0xF;       // PB0, PB1 analog
@@ -90,6 +94,7 @@ static void _adc_init_once(void)
     }
 
     _adc_inited = true;
+    rtt_adc_timer_tick_state = 1;  /* ADC ready for timer_tick */
 }
 
 static uint16_t _adc_read(uint8_t ch)
@@ -228,6 +233,8 @@ uint16_t AnalogIn::power_status_flags()
 void AnalogIn::_timer_tick()
 {
     if (!_initialized) return;
+
+    rtt_adc_timer_tick_count++;
 
     // Convert each channel sequentially
     for (uint8_t i = 0; i < ARRAY_SIZE(_ch_map); i++) {
