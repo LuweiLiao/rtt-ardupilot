@@ -224,6 +224,11 @@ void rt_hw_board_init(void)
      * CUAV V5 NRST pin is not connected, so SWD must stay alive. */
     DBGMCU->CR |= DBGMCU_CR_DBG_SLEEP | DBGMCU_CR_DBG_STOP | DBGMCU_CR_DBG_STANDBY;
 
+    /* Freeze IWDG counter when debugger halts the CPU.
+     * Without this, IWDG continues running during debug → ~2s timeout → reset →
+     * debug connection drops. */
+    DBGMCU->APB1FZ |= DBGMCU_APB1_FZ_DBG_IWDG_STOP;
+
     /* Clock init: pure CMSIS register writes (no HAL) */
     NVIC_SetPriorityGrouping(3U);  /* PRIGROUP=3 → 4-bit preemption */
 

@@ -209,8 +209,10 @@ void GPIO::write(uint8_t pin, uint8_t value)
             RCC->AHB1ENR |= RCC_AHB1ENR_GPIOHEN;
             /* Set PH10/11/12 to OUTPUT (MODER bits 21:20, 23:22, 25:24 = 01) */
             GPIOH->MODER = (GPIOH->MODER & ~(0x3FUL << 20)) | (0x15UL << 20);
+            __DSB(); /* Ensure MODER write visible before OTYPER/BSRR */
             /* Set PH10/11/12 to open-drain (OTYPER bits 10,11,12 = 1) */
             GPIOH->OTYPER |= (0x7UL << 10);
+            __DSB(); /* Ensure OTYPER write visible before BSRR */
             /* Set ODR HIGH (LED off — open-drain HIGH = floating) */
             GPIOH->BSRR = (0x7UL << 10);
             led_moder_done = true;

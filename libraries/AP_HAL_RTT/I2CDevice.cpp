@@ -58,19 +58,19 @@ static I2CBusDescr _i2c_buses[] = {
       GPIOH, 7, 4, GPIOH, 8, 4,
       I2C_TIMINGR_100KHZ, I2C_TIMINGR_400KHZ, false },
 
-    /* Bus 1 — I2C1 (PB6=SCL AF4, PB7=SDA AF4) — no physical pins on CUAV V5 */
+    /* Bus 1 — I2C1 (PB8=SCL AF4, PB9=SDA AF4) — no physical pins on CUAV V5 */
     { I2C1, RCC_APB1ENR_I2C1EN, RCC_APB1RSTR_I2C1RST,
-      GPIOB, 6, 4, GPIOB, 7, 4,
+      GPIOB, 8, 4, GPIOB, 9, 4,
       I2C_TIMINGR_100KHZ, I2C_TIMINGR_400KHZ, false },
 
-    /* Bus 2 — I2C2 (PB10=SCL AF4, PB11=SDA AF4) — no physical pins on CUAV V5 */
+    /* Bus 2 — I2C2 (PF1=SCL AF4, PF0=SDA AF4) — no physical pins on CUAV V5 */
     { I2C2, RCC_APB1ENR_I2C2EN, RCC_APB1RSTR_I2C2RST,
-      GPIOB, 10, 4, GPIOB, 11, 4,
+      GPIOF, 1, 4, GPIOF, 0, 4,
       I2C_TIMINGR_100KHZ, I2C_TIMINGR_400KHZ, false },
 
-    /* Bus 3 — I2C4 (PD12=SCL AF4, PD13=SDA AF4) — no physical pins on CUAV V5 */
+    /* Bus 3 — I2C4 (PF14=SCL AF4, PF15=SDA AF4) — no physical pins on CUAV V5 */
     { I2C4, RCC_APB1ENR_I2C4EN, RCC_APB1RSTR_I2C4RST,
-      GPIOD, 12, 4, GPIOD, 13, 4,
+      GPIOF, 14, 4, GPIOF, 15, 4,
       I2C_TIMINGR_100KHZ, I2C_TIMINGR_400KHZ, false },
 };
 #define I2C_BUS_COUNT (sizeof(_i2c_buses) / sizeof(_i2c_buses[0]))

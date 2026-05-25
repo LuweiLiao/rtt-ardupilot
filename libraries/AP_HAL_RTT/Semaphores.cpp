@@ -100,25 +100,11 @@ void Semaphore::take_blocking()
     _ensure_mtx();
     if (!_mtx_inited) return;
 
-    /* RT-Thread mutex supports recursive locking (same thread can take
-     * multiple times).  However during init the timer thread (higher
-     * priority) may preempt the main thread and attempt to take the same
-     * mutex — deadlock follows because the timer thread ≠ owner.
-     *
-     * Our workaround: if the mutex is already owned by the current thread,
-     * bump hold ourselves and skip rt_mutex_take entirely.  This avoids
-     * the spin_lock → schedule → deadlock path in _rt_mutex_take.
-     *
-     * [Cybernetics Ch.5] Decoupled fix: localize RTT kernel workaround
-     * in our HAL layer rather than patching upstream AruvPilot.
-     */
-    if (_mtx_obj.owner == rt_thread_self()) {
-        if (_mtx_obj.hold < RT_MUTEX_HOLD_MAX) {
-            _mtx_obj.hold++;
-        }
-        return;
-    }
-
+    /* RT-Thread kernel (ipc.c:1353-1358) already supports recursive
+     * mutex natively — same thread can take multiple times without
+     * deadlock.  No need for the old owner-check + direct hold++
+     * workaround that bypassed the kernel spinlock.  This path is
+     * identical to take(HAL_SEMAPHORE_BLOCK_FOREVER). */
     rt_mutex_take(&_mtx_obj, RT_WAITING_FOREVER);
 }
 

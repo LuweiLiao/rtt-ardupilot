@@ -134,10 +134,10 @@ __attribute__((weak)) void MemManage_Handler(void)
  * ---------------------------------------------------------------- */
 extern "C" void ap_rtt_iwdg_init(void)
 {
-#define IWDG_KR    (*(volatile uint32_t *)0x40002800)
-#define IWDG_PR    (*(volatile uint32_t *)0x40002804)
-#define IWDG_RLR   (*(volatile uint32_t *)0x40002808)
-#define IWDG_SR    (*(volatile uint32_t *)0x4000280C)
+#define IWDG_KR    (*(volatile uint32_t *)0x40003000)
+#define IWDG_PR    (*(volatile uint32_t *)0x40003004)
+#define IWDG_RLR   (*(volatile uint32_t *)0x40003008)
+#define IWDG_SR    (*(volatile uint32_t *)0x4000300C)
 
     /* 🚨 FEED IMMEDIATELY — hardware IWDG starts from reset with default
      * ~512ms timeout (PR=0=div4, RLR=4095).  The bootloader may take

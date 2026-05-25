@@ -35,6 +35,10 @@ _dst_hwdef = os.path.join(_hwdef_dir, 'hwdef.h')
 if os.path.isfile(_bsp_hwdef):
     import shutil as _sh
     _sh.copy2(_bsp_hwdef, _dst_hwdef)
+_bsp_rtconfig = os.path.join(cwd, 'rtconfig.h')
+_dst_rtconfig = os.path.join(_hwdef_dir, 'rtconfig.h')
+if os.path.isfile(_bsp_rtconfig):
+    _sh.copy2(_bsp_rtconfig, _dst_rtconfig)
 env.Append(CPPPATH = [_hwdef_dir])
 
 # Module test build: TEST_NAME=<name> => skip ArduPilot and applications, build test firmware

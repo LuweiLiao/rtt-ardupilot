@@ -633,22 +633,30 @@ void Scheduler::set_system_initialized()
     }
     _initialized = true;
 
-    /* Start IWDG (Independent Watchdog) — ChibiOS-style, mirrors
-     * stm32_watchdog_init() in watchdog.c:
-     *   PR=3 (prescaler /32), RLR=2047 → timeout ≈ 2s at LSI 32kHz
-     *   KR=0x5555 unlock → write PR/RLR → KR=0xCCCC start
-     * Called here (after setup() completes, before main loop) so threads,
-     * interrupts, and system clock are all running — safe to configure IWDG.
-     * Note: bootloader does NOT start IWDG on CUAV V5, so this is the
-     * only IWDG init in the system. */
+    /* Reconfigure IWDG from ~10s (ap_rtt_iwdg_init early timeout) to ~2s
+     * for normal operation.  IWDG is already running from early init;
+     * we unlock PR/RLR, set tighter timeout, and wait for sync. */
 #define IWDG_KR    (*(volatile uint32_t *)0x40003000)
 #define IWDG_PR    (*(volatile uint32_t *)0x40003004)
 #define IWDG_RLR   (*(volatile uint32_t *)0x40003008)
-    // IWDG_KR = 0x5555;      // DISABLED for debug — allows probing without ~2s reset
-    // IWDG_PR = 3;           // prescaler /32
-    // IWDG_RLR = 2047;       // ~2s timeout
-    // IWDG_KR = 0xCCCC;      // start IWDG
-    // _iwdg_started = true;
+#define IWDG_SR    (*(volatile uint32_t *)0x4000300C)
+    IWDG_KR = 0xAAAA;          /* Feed to extend counter before reconfig */
+    IWDG_KR = 0x5555;          /* Unlock PR/RLR */
+    IWDG_PR = 3;               /* prescaler /32 */
+    IWDG_RLR = 2047;           /* ~2s timeout at LSI 32kHz */
+    {
+        volatile uint32_t iwdg_timeout = 1000000;
+        while (IWDG_SR & (IWDG_SR_PVU | IWDG_SR_RVU)) {
+            if (--iwdg_timeout == 0) {
+                rt_kprintf("IWDG: SR sync timeout in set_system_initialized (SR=0x%08lx)\n",
+                           (unsigned long)IWDG_SR);
+                break;
+            }
+            __NOP();
+        }
+    }
+    IWDG_KR = 0xAAAA;          /* Reload counter with new RLR value */
+    _iwdg_started = true;
 }
 
 /* ----------------------------------------------------------------
@@ -774,7 +782,7 @@ void Scheduler::watchdog_pat(void)
 {
     last_watchdog_pat_ms = AP_HAL::millis();
 
-    /* IWDG kick — only after IWDG has been started by set_system_initialized() */
+    /* IWDG kick — only after IWDG has been configured by set_system_initialized() */
 #if defined(HAL_BOARD_RTT) && !defined(IOMCU_FW)
     if (_iwdg_started) {
 #define IWDG_KR_REG    (*(volatile uint32_t *)0x40003000)
