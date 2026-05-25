@@ -198,7 +198,7 @@
 
 /* ---- GCCFG (0x038) ---- */
 #define GCCFG_PWRDWN            0x00010000UL
-#define GCCFG_VBDEN             0x00100000UL
+#define GCCFG_VBDEN             0x40000000UL   /* Bit 30 (NOT 0x00100000! That's SOFOUTEN) */
 #define GCCFG_VBUSASEN          0x00040000UL
 #define GCCFG_VBUSBSEN          0x00080000UL
 #define GCCFG_NOVBUSSENS        0x00200000UL
