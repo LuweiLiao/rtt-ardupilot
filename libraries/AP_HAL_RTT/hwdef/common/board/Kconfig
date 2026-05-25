@@ -8,13 +8,8 @@ menu "Onboard Peripheral Drivers"
         default y
 
     config BSP_USING_USB_DEVICE
-        bool "Enable USB Device (CDC virtual serial)"
-        select RT_USING_CHERRYUSB
-        select RT_CHERRYUSB_DEVICE
-        select RT_CHERRYUSB_DEVICE_DWC2_ST
-        select RT_CHERRYUSB_DEVICE_CDC_ACM
-        select RT_CHERRYUSB_DEVICE_CDC_ACM_CHARDEV
-        select RT_CHERRYUSB_DEVICE_TEMPLATE_CDC_ACM_CHARDEV
+        bool "Enable USB Device (DWC2 self-enumeration, no CherryUSB)"
+        # CherryUSB replaced — DWC2 register-level LLD in hal_usb_lld_rtt.c
         default y
 
     config BSP_USING_ETH
