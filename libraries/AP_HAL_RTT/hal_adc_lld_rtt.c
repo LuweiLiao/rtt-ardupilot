@@ -215,6 +215,20 @@ uint16_t adc_lld_convert_channel_rtt(void *ADCx, uint8_t channel,
     /* Read result */
     uint16_t result = (uint16_t)(adc->DR & 0xFFFF);
 
+    /* STM32F7 Errata: check OVR flag before clearing SR.
+     * If OVR was set (overflow occurred), the previous conversion was lost.
+     * The OVR is tracked via diagnostic counter. The SR=0 at the top of
+     * this function already cleared any stale OVR before starting, but
+     * a genuine overflow DURING this conversion is flagged here. */
+    uint32_t sr_after = adc->SR;
+    if (sr_after & ADC_SR_OVR) {
+        /* OVR during this conversion — increment diagnostic counter.
+         * The value in DR is still valid per RM0410 §19.4.14
+         * ("the most recent conversion result is preserved in ADC_DR"),
+         * but we've potentially missed an intermediate value. */
+        rtt_adc_lld_conv_timeouts++;  /* reuse: count overflow events */
+    }
+
     /* Clear EOC (read DR clears EOC automatically on ADCv2) */
     /* Also clear STR if set */
     adc->SR = 0;

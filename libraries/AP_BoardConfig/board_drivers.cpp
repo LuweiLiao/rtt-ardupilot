@@ -51,7 +51,14 @@ void AP_BoardConfig::board_init_safety()
 /*
   init debug pins. We set debug pins as input if BRD_OPTIONS bit for debug enable is not set
   this prevents possible ESD issues on the debug pins
- */
+
+  On RTT: board_init_debug() is a no-op because HAL_GPIO_PIN_JTCK_SWCLK / JTMS_SWDIO
+  are not defined by rtt_hwdef.py.  SWD pins (PA13/PA14) therefore stay at their
+  reset-default AF0 mode, keeping SWD permanently available for debugging.
+  BRD_OPTIONS debug enable bit has no effect on RTT — SWD is always enabled.
+  This is intentional: CUAV V5 has no NRST connection, so disabling SWD would
+  require a power cycle to recover.
+*/
 void AP_BoardConfig::board_init_debug()
 {
 #if !defined(HAL_BUILD_AP_PERIPH) && !defined(HAL_DEBUG_BUILD)
