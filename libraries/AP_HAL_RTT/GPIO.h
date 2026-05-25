@@ -1,7 +1,12 @@
 /*
  * AP_HAL_RTT — GPIO driver
- * Uses RT-Thread rt_pin_* API for digital I/O.
- * Supports up to 8 concurrent pin interrupts.
+ * Pure CMSIS register access for all GPIO operations.
+ * Pin numbers follow GET_PIN(port,bit) = port*16 + bit.
+ * Supports up to 8 concurrent pin interrupts (EXTI via RT-Thread PIN framework).
+ *
+ * Reference: ChibiOS GPIOv3/hal_pal_lld.c and stm32_gpio.h
+ *   _pal_lld_setgroupmode()  — hal_pal_lld.c:89-143
+ *   _pal_lld_enablepadevent() — hal_pal_lld.c:156-196
  */
 
 #pragma once
@@ -9,6 +14,7 @@
 #include <AP_HAL/GPIO.h>
 #include "HAL_RTT_Namespace.h"
 
+/* Max concurrent EXTI interrupt handlers */
 #define RTT_GPIO_MAX_IRQ 8
 
 namespace RTT
@@ -52,6 +58,13 @@ public:
 
     bool    get_mode(uint8_t pin, uint32_t &mode) override;
     void    set_mode(uint8_t pin, uint32_t mode) override;
+
+    /*
+     * Set GPIO alternate function number (AFRL/AFRH).
+     * Reference: ChibiOS _pal_lld_setgroupmode(), hal_pal_lld.c:105-129.
+     * af_num: 0-15 (AF0-AF15).  Skips PA13/PA14 (SWD).
+     */
+    void    set_af(uint8_t pin, uint8_t af_num);
 
 private:
     struct IRQState {

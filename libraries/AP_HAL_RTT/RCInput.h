@@ -4,6 +4,16 @@
  * AP_RCProtocol to local _rc_values[] under mutex; read() reads from
  * the local buffer. This decouples the main thread from the protocol
  * layer's internal _new_input flag.
+ *
+ * TIM input capture (pulse capture) is wired through SoftSigReaderInt
+ * for boards without IOMCU. Board hwdef should define:
+ *   HAL_RCININT_TIMER    — TIM_TypeDef* (e.g. TIM8)
+ *   HAL_RCININT_CHANNEL  — capture channel (0=CH1, 1=CH2, 2=CH3, 3=CH4)
+ *   HAL_RCININT_IRQ      — NVIC IRQn (e.g. TIM8_CC_IRQn)
+ *   HAL_RCININT_AF       — GPIO alternate function number
+ *   HAL_RCININT_GPIO     — GPIO port base (e.g. GPIOI)
+ *   HAL_RCININT_PIN      — GPIO pin number (e.g. 5 for PI5)
+ * If undefined, pulse capture is disabled and RC comes via serial/IOMCU.
  */
 
 #pragma once
@@ -11,6 +21,7 @@
 #include <AP_HAL/RCInput.h>
 #include "HAL_RTT_Namespace.h"
 #include "Semaphores.h"
+#include "SoftSigReaderInt.h"
 
 #ifndef RC_INPUT_MAX_CHANNELS
 #define RC_INPUT_MAX_CHANNELS 18
@@ -44,6 +55,10 @@ private:
     int16_t  _rx_link_quality = -1;
     uint32_t _rcin_timestamp_last_signal = 0;
     bool     _init = false;
+
+    /* Pulse input (TIM capture via SoftSigReaderInt) */
+    bool     pulse_input_enabled = false;
+    RTT::SoftSigReaderInt sig_reader;
 };
 
 } // namespace RTT

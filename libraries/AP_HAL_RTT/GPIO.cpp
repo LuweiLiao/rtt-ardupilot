@@ -1,7 +1,13 @@
 /*
  * AP_HAL_RTT — GPIO driver implementation
- * Uses RT-Thread rt_pin_* API. Pin numbers follow GET_PIN() convention.
- * Interrupt support via rt_pin_attach_irq / rt_pin_irq_enable.
+ * Pure CMSIS register access for all GPIO operations.
+ * Pin numbers follow GET_PIN(port,bit) = port*16 + bit.
+ * EXTI interrupt support retained through RT-Thread pin device framework
+ * (OS-level NVIC service, not GPIO data path).
+ *
+ * Reference: ChibiOS GPIOv3/hal_pal_lld.c and stm32_gpio.h
+ *   _pal_lld_setgroupmode()  — hal_pal_lld.c:89-143 (MODER/OTYPER/OSPEEDR/PUPDR/AF)
+ *   _pal_lld_enablepadevent() — hal_pal_lld.c:156-196 (SYSCFG_EXTICR/EXTI)
  */
 
 #include "GPIO.h"
@@ -10,20 +16,35 @@
 #include <drivers/dev_pin.h>
 #include <cstdio>
 
-#if AP_NOTIFY_GPIO_LED_RGB_ENABLED && defined(AP_NOTIFY_GPIO_LED_RGB_RED_PIN)
-#include <stm32f7xx_hal.h>
-#endif
+/* CMSIS header provides GPIO_TypeDef, GPIOA_BASE, __DSB() */
+#include <stm32f7xx.h>
 
 /*
- * GPIO register-level helpers.
- * _GPIO_PORT_BASE computes the peripheral base address for a port index:
- *   port 0 = GPIOA (0x40020000), port 1 = GPIOB (0x40020400), etc.
- * Must be defined before any function using it (pinMode OTYPER check).
+ * Internal helpers — convert RT-Thread pin numbering
+ * (port*16 + bit) to port index and bit position.
  */
-#ifndef GPIOA_BASE
-#define GPIOA_BASE 0x40020000UL
-#endif
-#define _GPIO_PORT_BASE(port) (GPIOA_BASE + (port) * 0x0400UL)
+static inline uint8_t _rtt_pin_port(uint8_t pin)
+{
+    return pin / 16;
+}
+static inline uint8_t _rtt_pin_bit(uint8_t pin)
+{
+    return pin % 16;
+}
+static inline GPIO_TypeDef *_rtt_pin_gpio(uint8_t pin)
+{
+    return (GPIO_TypeDef *)(GPIOA_BASE + _rtt_pin_port(pin) * 0x400UL);
+}
+
+/* Maximum valid pin for STM32F7 (11 ports A-K × 16 pins) */
+#define RTT_GPIO_PIN_MAX (11U * 16U)
+
+/* SWD pins: PA13 = SWDIO, PA14 = SWCLK (must never be changed) */
+#define RTT_GPIO_PIN_SWDIO 13
+#define RTT_GPIO_PIN_SWCLK 14
+
+/* Default speed for all GPIO outputs: high speed (10 = 50MHz) */
+#define RTT_GPIO_OSPEED_DEFAULT (2U)
 
 using namespace RTT;
 
@@ -33,22 +54,70 @@ DigitalSource::DigitalSource(uint16_t pin) : _pin(pin) {}
 
 void DigitalSource::mode(uint8_t output)
 {
-    rt_pin_mode(_pin, output ? PIN_MODE_OUTPUT : PIN_MODE_INPUT);
+    if (_pin >= RTT_GPIO_PIN_MAX) {
+        return;
+    }
+    GPIO_TypeDef *gpio = _rtt_pin_gpio((uint8_t)_pin);
+    uint8_t bit = _rtt_pin_bit((uint8_t)_pin);
+    uint32_t mask2 = 3UL << (bit * 2);
+
+    if (output) {
+        /*
+         * ChibiOS _pal_lld_setgroupmode() order (hal_pal_lld.c:109-125):
+         * OTYPER → OSPEEDR → PUPDR → MODER (non-alternate path).
+         * Retain OPENDRAIN if already set (mirrors ChibiOS L222-228).
+         */
+        if (gpio->OTYPER & (1UL << bit)) {
+            /* open-drain: keep OTYPER=1 */
+        } else {
+            gpio->OTYPER &= ~(1UL << bit);
+        }
+        gpio->OSPEEDR = (gpio->OSPEEDR & ~mask2) | (RTT_GPIO_OSPEED_DEFAULT << (bit * 2));
+        gpio->PUPDR   = (gpio->PUPDR & ~mask2) | (0U << (bit * 2));   /* no pull */
+        gpio->MODER   = (gpio->MODER & ~mask2) | (1U << (bit * 2));   /* output */
+    } else {
+        gpio->PUPDR = (gpio->PUPDR & ~mask2) | (0U << (bit * 2));   /* no pull */
+        gpio->MODER = (gpio->MODER & ~mask2) | (0U << (bit * 2));   /* input */
+    }
+    __DSB();
 }
 
 uint8_t DigitalSource::read()
 {
-    return rt_pin_read(_pin) == PIN_HIGH ? 1 : 0;
+    if (_pin >= RTT_GPIO_PIN_MAX) {
+        return 0;
+    }
+    GPIO_TypeDef *gpio = _rtt_pin_gpio((uint8_t)_pin);
+    uint8_t bit = _rtt_pin_bit((uint8_t)_pin);
+    return (gpio->IDR >> bit) & 1U;
 }
 
 void DigitalSource::write(uint8_t value)
 {
-    rt_pin_write(_pin, value ? PIN_HIGH : PIN_LOW);
+    if (_pin >= RTT_GPIO_PIN_MAX) {
+        return;
+    }
+    GPIO_TypeDef *gpio = _rtt_pin_gpio((uint8_t)_pin);
+    uint8_t bit = _rtt_pin_bit((uint8_t)_pin);
+    if (value) {
+        gpio->BSRR = 1UL << bit;          /* set ODR HIGH */
+    } else {
+        gpio->BSRR = 1UL << (bit + 16);   /* reset ODR LOW */
+    }
 }
 
 void DigitalSource::toggle()
 {
-    write(read() ^ 1);
+    if (_pin >= RTT_GPIO_PIN_MAX) {
+        return;
+    }
+    GPIO_TypeDef *gpio = _rtt_pin_gpio((uint8_t)_pin);
+    uint8_t bit = _rtt_pin_bit((uint8_t)_pin);
+    /*
+     * Atomic toggle via ODR XOR (same as STM32 HAL_GPIO_TogglePin).
+     * Volatile access ensures compiler does not optimize the RMW.
+     */
+    gpio->ODR ^= (1UL << bit);
 }
 
 /* GPIO */
@@ -145,8 +214,29 @@ void GPIO::init()
     };
 
     for (const auto &e : init_list) {
-        rt_pin_mode(e.pin, PIN_MODE_OUTPUT);
-        rt_pin_write(e.pin, e.init_value ? PIN_HIGH : PIN_LOW);
+        uint8_t pin = (uint8_t)e.pin;
+        if (pin >= RTT_GPIO_PIN_MAX) {
+            continue;
+        }
+        /* Skip SWD pins — never touch PA13/PA14 */
+        if (pin == RTT_GPIO_PIN_SWDIO || pin == RTT_GPIO_PIN_SWCLK) {
+            continue;
+        }
+        GPIO_TypeDef *gpio = _rtt_pin_gpio(pin);
+        uint8_t bit = _rtt_pin_bit(pin);
+        uint32_t mask2 = 3UL << (bit * 2);
+        /* ChibiOS order: OTYPER → OSPEEDR → PUPDR → MODER */
+        gpio->OTYPER &= ~(1UL << bit);              /* push-pull */
+        gpio->OSPEEDR = (gpio->OSPEEDR & ~mask2) | (RTT_GPIO_OSPEED_DEFAULT << (bit * 2));
+        gpio->PUPDR   = (gpio->PUPDR & ~mask2) | (0U << (bit * 2));   /* no pull */
+        gpio->MODER   = (gpio->MODER & ~mask2) | (1U << (bit * 2));   /* output */
+        __DSB();
+        /* Set initial output value via BSRR */
+        if (e.init_value) {
+            gpio->BSRR = 1UL << bit;
+        } else {
+            gpio->BSRR = 1UL << (bit + 16);
+        }
     }
 
     /* RGB LED GPIO (PH10/11/12) MODER is set lazily in write() on first use.
@@ -159,46 +249,99 @@ void GPIO::init()
 
 void GPIO::pinMode(uint8_t pin, uint8_t output)
 {
+    if (pin >= RTT_GPIO_PIN_MAX) {
+        return;
+    }
+    /* SWD pin protection: PA13(SWDIO) and PA14(SWCLK) must keep default mode */
+    if (pin == RTT_GPIO_PIN_SWDIO || pin == RTT_GPIO_PIN_SWCLK) {
+        return;
+    }
+
+    GPIO_TypeDef *gpio = _rtt_pin_gpio(pin);
+    uint8_t bit = _rtt_pin_bit(pin);
+    uint32_t mask2 = 3UL << (bit * 2);
+
     if (output == HAL_GPIO_INPUT) {
-        rt_pin_mode(pin, PIN_MODE_INPUT);
+        gpio->PUPDR = (gpio->PUPDR & ~mask2) | (0U << (bit * 2));   /* no pull */
+        gpio->MODER = (gpio->MODER & ~mask2) | (0U << (bit * 2));   /* input */
     } else {
         /*
          * Retain OPENDRAIN if already set (mirrors ChibiOS behavior on
          * STM32F7/H7/F4/G4/L4).  Read OTYPER directly to check.
+         * ChibiOS reference: GPIO.cpp:221-228
          */
-        if (pin < 176) {
-            uint8_t port = pin / 16;
-            uint8_t bit  = pin % 16;
-            volatile uint32_t *otyper =
-                (volatile uint32_t *)(_GPIO_PORT_BASE(port) + 0x04U);
-            if ((*otyper >> bit) & 0x01U) {
-                rt_pin_mode(pin, PIN_MODE_OUTPUT_OD);
-                return;
-            }
+        if ((gpio->OTYPER >> bit) & 0x01U) {
+            /* Keep open-drain OTYPER=1, set MODER=output */
+            gpio->OSPEEDR = (gpio->OSPEEDR & ~mask2) | (RTT_GPIO_OSPEED_DEFAULT << (bit * 2));
+            gpio->PUPDR   = (gpio->PUPDR & ~mask2) | (0U << (bit * 2));
+            gpio->MODER   = (gpio->MODER & ~mask2) | (1U << (bit * 2));
+        } else {
+            /* Push-pull: OTYPER=0 */
+            gpio->OTYPER &= ~(1UL << bit);
+            gpio->OSPEEDR = (gpio->OSPEEDR & ~mask2) | (RTT_GPIO_OSPEED_DEFAULT << (bit * 2));
+            gpio->PUPDR   = (gpio->PUPDR & ~mask2) | (0U << (bit * 2));
+            gpio->MODER   = (gpio->MODER & ~mask2) | (1U << (bit * 2));
         }
-        rt_pin_mode(pin, PIN_MODE_OUTPUT);
     }
+    __DSB();
 }
 
 void GPIO::pinMode(uint8_t pin, uint8_t output, uint8_t alt)
 {
-    (void)alt;
-    pinMode(pin, output);
+    if (pin >= RTT_GPIO_PIN_MAX) {
+        return;
+    }
+    /* SWD pin protection */
+    if (pin == RTT_GPIO_PIN_SWDIO || pin == RTT_GPIO_PIN_SWCLK) {
+        return;
+    }
+
+    GPIO_TypeDef *gpio = _rtt_pin_gpio(pin);
+    uint8_t bit = _rtt_pin_bit(pin);
+    uint32_t mask2 = 3UL << (bit * 2);
+
+    if (output == HAL_GPIO_INPUT) {
+        gpio->PUPDR = (gpio->PUPDR & ~mask2) | (0U << (bit * 2));
+        gpio->MODER = (gpio->MODER & ~mask2) | (0U << (bit * 2));
+    } else {
+        /*
+         * Alternate function configuration.
+         * ChibiOS _pal_lld_setgroupmode() AF path (L113-120):
+         *   AFRL/AFRH → MODER (alternate mode set AFTER AFR to avoid glitches).
+         */
+        if (bit < 8) {
+            gpio->AFR[0] = (gpio->AFR[0] & ~(0xFUL << (bit * 4))) | ((uint32_t)alt << (bit * 4));
+        } else {
+            gpio->AFR[1] = (gpio->AFR[1] & ~(0xFUL << ((bit - 8) * 4))) | ((uint32_t)alt << ((bit - 8) * 4));
+        }
+        gpio->OTYPER &= ~(1UL << bit);           /* push-pull */
+        gpio->OSPEEDR = (gpio->OSPEEDR & ~mask2) | (RTT_GPIO_OSPEED_DEFAULT << (bit * 2));
+        gpio->PUPDR   = (gpio->PUPDR & ~mask2) | (0U << (bit * 2));
+        gpio->MODER   = (gpio->MODER & ~mask2) | (2U << (bit * 2));   /* alternate function */
+    }
+    __DSB();
 }
 
 uint8_t GPIO::read(uint8_t pin)
 {
-    return rt_pin_read(pin) == PIN_HIGH ? 1 : 0;
+    if (pin >= RTT_GPIO_PIN_MAX) {
+        return 0;
+    }
+    GPIO_TypeDef *gpio = _rtt_pin_gpio(pin);
+    uint8_t bit = _rtt_pin_bit(pin);
+    return (gpio->IDR >> bit) & 1U;
 }
 
 void GPIO::write(uint8_t pin, uint8_t value)
 {
+    if (pin >= RTT_GPIO_PIN_MAX) {
+        return;
+    }
+
 #if AP_NOTIFY_GPIO_LED_RGB_ENABLED && defined(AP_NOTIFY_GPIO_LED_RGB_RED_PIN)
     /* RGB LED pins on CUAV V5: PH10(R) / PH11(G) / PH12(B), active-low.
      * ChibiOS configures these as OPENDRAIN. The LED turns ON when pin is
-     * LOW (open-drain sinks current). Bypass RTT pin driver, write BSRR
-     * directly to avoid rt_pin_write() reliability issues on GPIOH.
-     * BSRR: bits[15:0] set ODR (pin HIGH), bits[31:16] reset ODR (pin LOW).
+     * LOW (open-drain sinks current). Write BSRR directly.
      */
     if (pin == AP_NOTIFY_GPIO_LED_RGB_RED_PIN ||
         pin == AP_NOTIFY_GPIO_LED_RGB_GREEN_PIN ||
@@ -224,40 +367,40 @@ void GPIO::write(uint8_t pin, uint8_t value)
         return;
     }
 #endif
+
+    GPIO_TypeDef *gpio = _rtt_pin_gpio(pin);
+    uint8_t bit = _rtt_pin_bit(pin);
+    uint32_t mask2 = 3UL << (bit * 2);
+
     /*
-     * ChibiOS semantics: writing to an input-configured pin controls
-     * pull-up/pull-down resistors.  Read MODER to check current mode.
+     * ChibiOS semantics (GPIO.cpp:254-263): writing to an input-configured
+     * pin controls pull-up/pull-down resistors.  Read MODER to check.
      */
-    if (pin < 176) {
-        uint8_t port = pin / 16;
-        uint8_t bit  = pin % 16;
-        volatile uint32_t *moder =
-            (volatile uint32_t *)_GPIO_PORT_BASE(port);
-        uint32_t mode = (*moder >> (bit * 2)) & 0x03;
-        if (mode == 0) {
-            /* Pin is in INPUT mode — set pull-up/pull-down via PUPDR
-             * through rt_pin_mode instead of writing ODR (which is a
-             * no-op for input pins on STM32). */
-            rt_pin_mode(pin, value ? PIN_MODE_INPUT_PULLUP
-                                   : PIN_MODE_INPUT_PULLDOWN);
-            return;
-        }
+    uint32_t mode = (gpio->MODER >> (bit * 2)) & 0x03;
+    if (mode == 0) {
+        /* Pin is in INPUT mode — set pull-up/pull-down via PUPDR */
+        gpio->PUPDR = (gpio->PUPDR & ~mask2) | ((value ? 1U : 2U) << (bit * 2));
+        __DSB();
+        return;
     }
-    rt_pin_write(pin, value ? PIN_HIGH : PIN_LOW);
+
+    /* Output mode — atomically set/reset via BSRR */
+    if (value) {
+        gpio->BSRR = 1UL << bit;
+    } else {
+        gpio->BSRR = 1UL << (bit + 16);
+    }
 }
 
 void GPIO::toggle(uint8_t pin)
 {
-    /* Atomically toggle via direct ODR XOR (same as STM32 HAL_GPIO_TogglePin).
-     * Avoids non-atomic read-write cycle of write(pin, read(pin) ^ 1). */
-    if (pin >= 176) {
+    if (pin >= RTT_GPIO_PIN_MAX) {
         return;
     }
-    uint8_t port = pin / 16;
-    uint8_t bit  = pin % 16;
-    volatile uint32_t *odr =
-        (volatile uint32_t *)(_GPIO_PORT_BASE(port) + 0x14U);
-    *odr ^= (1UL << bit);
+    GPIO_TypeDef *gpio = _rtt_pin_gpio(pin);
+    uint8_t bit = _rtt_pin_bit(pin);
+    /* Atomically toggle via ODR XOR (same as STM32 HAL_GPIO_TogglePin) */
+    gpio->ODR ^= (1UL << bit);
 }
 
 AP_HAL::DigitalSource* GPIO::channel(uint16_t n)
@@ -273,6 +416,19 @@ bool GPIO::usb_connected()
 }
 
 /* --- Interrupt support ------------------------------------------ */
+
+/*
+ * EXTI interrupt handling is retained through the RT-Thread pin device
+ * framework (rt_pin_attach_irq / rt_pin_irq_enable / rt_pin_detach_irq).
+ * This is an OS-level NVIC service, not a GPIO data-path operation.
+ * The ChibiOS equivalent (pal_lld_enablepadevent) also programs EXTI
+ * registers directly, but RT-Thread handles the NVIC ISR routing and
+ * callback dispatch internally.  Keeping this as an OS-level boundary
+ * is the correct HAL isolation choice (see ADR-005).
+ *
+ * The _irq_trampoline still uses CMSIS IDR register for the pin state
+ * read (replacing rt_pin_read).
+ */
 
 GPIO::IRQState* GPIO::_find_or_alloc_irq(uint8_t pin)
 {
@@ -298,12 +454,20 @@ void GPIO::_irq_trampoline(void *args)
 
     st->isr_count++;
 
-    if (st->isr_fn) {
-        bool state = rt_pin_read(st->pin) == PIN_HIGH;
+    /*
+     * Read pin state from IDR directly (not rt_pin_read).
+     */
+    if (st->pin < RTT_GPIO_PIN_MAX) {
+        GPIO_TypeDef *gpio = _rtt_pin_gpio(st->pin);
+        uint8_t bit = _rtt_pin_bit(st->pin);
+        bool state = (gpio->IDR >> bit) & 1U;
         uint32_t ts = AP_HAL::micros();
-        st->isr_fn(st->pin, state, ts);
-    } else if (st->simple_fn) {
-        st->simple_fn();
+
+        if (st->isr_fn) {
+            st->isr_fn(st->pin, state, ts);
+        } else if (st->simple_fn) {
+            st->simple_fn();
+        }
     }
 }
 
@@ -350,7 +514,19 @@ bool GPIO::attach_interrupt(uint8_t pin,
     st->isr_fn = fn;
     st->simple_fn = nullptr;
 
-    rt_pin_mode(pin, PIN_MODE_INPUT);
+    /*
+     * Set pin to input mode via CMSIS before attaching interrupt.
+     * This matches ChibiOS behavior where EXTI requires input mode.
+     */
+    if (pin < RTT_GPIO_PIN_MAX) {
+        GPIO_TypeDef *gpio = _rtt_pin_gpio(pin);
+        uint8_t bit = _rtt_pin_bit(pin);
+        uint32_t mask2 = 3UL << (bit * 2);
+        gpio->PUPDR = (gpio->PUPDR & ~mask2) | (0U << (bit * 2));   /* no pull */
+        gpio->MODER = (gpio->MODER & ~mask2) | (0U << (bit * 2));   /* input */
+        __DSB();
+    }
+
     rt_pin_attach_irq(pin, _to_rtt_irq_mode(mode), _irq_trampoline, st);
     rt_pin_irq_enable(pin, PIN_IRQ_ENABLE);
     return true;
@@ -384,7 +560,18 @@ bool GPIO::attach_interrupt(uint8_t pin, AP_HAL::Proc fn,
     st->isr_fn = nullptr;
     st->simple_fn = fn;
 
-    rt_pin_mode(pin, PIN_MODE_INPUT);
+    /*
+     * Set pin to input mode via CMSIS before attaching interrupt.
+     */
+    if (pin < RTT_GPIO_PIN_MAX) {
+        GPIO_TypeDef *gpio = _rtt_pin_gpio(pin);
+        uint8_t bit = _rtt_pin_bit(pin);
+        uint32_t mask2 = 3UL << (bit * 2);
+        gpio->PUPDR = (gpio->PUPDR & ~mask2) | (0U << (bit * 2));
+        gpio->MODER = (gpio->MODER & ~mask2) | (0U << (bit * 2));
+        __DSB();
+    }
+
     rt_pin_attach_irq(pin, _to_rtt_irq_mode(mode), _irq_trampoline, st);
     rt_pin_irq_enable(pin, PIN_IRQ_ENABLE);
     return true;
@@ -438,12 +625,19 @@ bool GPIO::wait_pin(uint8_t pin, INTERRUPT_TRIGGER_TYPE mode, uint32_t timeout_u
         timeout_us = 30000U;
     }
 
-    rt_pin_mode(pin, PIN_MODE_INPUT);
-    uint8_t initial = read(pin);
+    /* Set pin to input mode via CMSIS */
+    GPIO_TypeDef *gpio = _rtt_pin_gpio(pin);
+    uint8_t bit = _rtt_pin_bit(pin);
+    uint32_t mask2 = 3UL << (bit * 2);
+    gpio->PUPDR = (gpio->PUPDR & ~mask2) | (0U << (bit * 2));
+    gpio->MODER = (gpio->MODER & ~mask2) | (0U << (bit * 2));
+    __DSB();
+
+    uint8_t initial = (gpio->IDR >> bit) & 1U;
     uint64_t start = AP_HAL::micros64();
 
     while (true) {
-        uint8_t current = read(pin);
+        uint8_t current = (gpio->IDR >> bit) & 1U;
         bool triggered = false;
         switch (mode) {
         case INTERRUPT_RISING:   triggered = (current && !initial); break;
@@ -499,23 +693,42 @@ bool GPIO::arming_checks(size_t buflen, char *buffer) const
 
 bool GPIO::get_mode(uint8_t pin, uint32_t &mode)
 {
-    if (pin >= 176) return false;
-    uint8_t port = pin / 16;
-    uint8_t bit  = pin % 16;
-    volatile uint32_t *moder = (volatile uint32_t *)_GPIO_PORT_BASE(port);
-    mode = (*moder >> (bit * 2)) & 0x03;
+    if (pin >= RTT_GPIO_PIN_MAX) return false;
+    GPIO_TypeDef *gpio = _rtt_pin_gpio(pin);
+    uint8_t bit = _rtt_pin_bit(pin);
+    mode = (gpio->MODER >> (bit * 2)) & 0x03;
     return true;
 }
 
 void GPIO::set_mode(uint8_t pin, uint32_t mode)
 {
-    if (pin >= 176) return;
-    uint8_t port = pin / 16;
-    uint8_t bit  = pin % 16;
-    volatile uint32_t *moder = (volatile uint32_t *)_GPIO_PORT_BASE(port);
-    uint32_t val = *moder;
+    if (pin >= RTT_GPIO_PIN_MAX) return;
+    GPIO_TypeDef *gpio = _rtt_pin_gpio(pin);
+    uint8_t bit = _rtt_pin_bit(pin);
+    uint32_t val = gpio->MODER;
     val &= ~(0x03U << (bit * 2));
     val |= (mode & 0x03U) << (bit * 2);
-    *moder = val;
-    __DSB(); /* Ensure MODER write is visible before subsequent operations */
+    gpio->MODER = val;
+    __DSB();
+}
+
+/*
+ * AF configuration helper — programs GPIOx_AFRL/AFRH.
+ * ChibiOS reference: _pal_lld_setgroupmode() L105-129 (hal_pal_lld.c).
+ */
+void GPIO::set_af(uint8_t pin, uint8_t af_num)
+{
+    if (pin >= RTT_GPIO_PIN_MAX) return;
+    /* SWD pin protection */
+    if (pin == RTT_GPIO_PIN_SWDIO || pin == RTT_GPIO_PIN_SWCLK) return;
+
+    GPIO_TypeDef *gpio = _rtt_pin_gpio(pin);
+    uint8_t bit = _rtt_pin_bit(pin);
+    uint32_t mask4 = 0xFUL << ((bit & 7) * 4);
+
+    if (bit < 8) {
+        gpio->AFR[0] = (gpio->AFR[0] & ~mask4) | ((uint32_t)af_num << (bit * 4));
+    } else {
+        gpio->AFR[1] = (gpio->AFR[1] & ~mask4) | ((uint32_t)af_num << ((bit - 8) * 4));
+    }
 }

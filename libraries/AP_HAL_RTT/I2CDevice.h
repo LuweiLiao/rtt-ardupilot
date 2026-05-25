@@ -1,6 +1,6 @@
 /*
  * AP_HAL_RTT — I2C device driver
- * Uses RT-Thread rt_i2c_bus_device for I2C communication.
+ * Direct CMSIS register-level I2C transfers (no RT-Thread I2C framework).
  * Supports periodic callbacks via DeviceBus (same as SPI).
  */
 
@@ -10,8 +10,6 @@
 #include "Semaphores.h"
 #include "DeviceBus.h"
 #include "HAL_RTT_Namespace.h"
-
-struct rt_i2c_bus_device;
 
 namespace RTT
 {
@@ -41,7 +39,9 @@ public:
     static void clear_bus(uint8_t busidx);
 
 private:
-    struct rt_i2c_bus_device *_bus;
+    bool _do_transfer(const uint8_t *send, uint32_t send_len,
+                     uint8_t *recv, uint32_t recv_len);
+
     uint8_t _address;
     uint8_t _busnum;
     uint8_t _retries = 2;

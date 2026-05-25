@@ -1,7 +1,7 @@
 /*
  * AP_HAL_RTT — RC Output (PWM)
- * Uses RT-Thread PWM device framework for servo/ESC output.
- * Channel-to-timer mapping driven by pwm_channel_map[].
+ * Direct TIM register access (TIM1, TIM4, TIM12) for servo/ESC output.
+ * Replaces RT-Thread PWM device framework with register-level control.
  *
  * DShot support: command queue, channel masks, IOMCU routing.
  * Low-level DMA pulse generation (ChibiOS pwm_group) is not available
@@ -16,17 +16,28 @@
 #include <AP_HAL/utility/RingBuffer.h>
 #include "HAL_RTT_Namespace.h"
 #include <rtthread.h>
+#include <stm32f7xx.h>       // TIM_TypeDef, RCC, register bit definitions
+
+/* STM32 HAL legacy.h defines ALL_CHANNELS → ADC_ALL_CHANNELS, which
+ * conflicts with ArduPilot RCOutput_serial.cpp usage.  Undefine here
+ * so the macro doesn't leak into other ArduPilot sources. */
+#ifdef ALL_CHANNELS
+#undef ALL_CHANNELS
+#endif
 
 #define RTT_RCOUT_MAX_CHANNELS 16
-
-struct rt_device_pwm;
 
 namespace RTT
 {
 
-struct pwm_channel_config {
-    const char *dev_name;
-    uint8_t     timer_ch;
+/*
+ * Channel-to-timer mapping entry.
+ * 'tim'       — TIM_TypeDef pointer (e.g. TIM1, TIM4, TIM12)
+ * 'channel' — 0-based capture/compare channel index (0..3 for CCR1..CCR4)
+ */
+struct tim_channel_config {
+    TIM_TypeDef *tim;
+    uint8_t      channel;   // 0-based: 0=CCR1, 1=CCR2, 2=CCR3, 3=CCR4
 };
 
 class RCOutput : public AP_HAL::RCOutput
@@ -107,8 +118,49 @@ private:
     bool _corked = false;
     bool _initialized = false;
 
-    struct rt_device_pwm *_pwm_dev[RTT_RCOUT_MAX_CHANNELS];
+    /* ---- TIM register access ----
+     * Instead of rt_device_pwm handles, store the TIM_TypeDef pointer
+     * and 0-based channel number for each output channel.
+     */
+    TIM_TypeDef *_tim_dev[RTT_RCOUT_MAX_CHANNELS];     // timer peripheral
+    uint8_t      _tim_chan[RTT_RCOUT_MAX_CHANNELS];     // 0-based channel
 
+    /* Per-timer state for frequency / prescaler tracking.
+     * Up to 3 timers used on CUAV V5: TIM1, TIM4, TIM12.
+     */
+    struct timer_state {
+        TIM_TypeDef *tim;
+        uint32_t     clock_hz;     // timer input clock (after ×2 from APB)
+        uint16_t     period_arr;   // current ARR value (period-1)
+        uint16_t     prescaler;    // current PSC value
+    };
+    static constexpr uint8_t _num_timers = 3;
+    timer_state _timer[_num_timers];
+
+    /* Find the timer_state index for a given TIM_TypeDef*, or -1. */
+    int8_t _timer_idx(TIM_TypeDef *tim) const;
+
+    /* Enable RCC clock for a timer peripheral. */
+    static void _timer_clock_enable(TIM_TypeDef *tim);
+
+    /* Configure CCMR registers for PWM1 output mode with preload. */
+    static void _timer_ccmr_init(TIM_TypeDef *tim);
+
+    /* Program ARR and PSC for a given timer and frequency.
+     * Returns the computed ARR value (period-1).
+     */
+    uint16_t _timer_set_freq_internal(TIM_TypeDef *tim, uint16_t freq_hz);
+
+    /* Write a pulse width in timer counts to a specific CCR. */
+    static void _timer_write_ccr(TIM_TypeDef *tim, uint8_t channel, uint32_t ccr_val);
+
+    /* Enable/disable a capture/compare output channel via CCER. */
+    static void _timer_ccer_enable(TIM_TypeDef *tim, uint8_t channel, bool enable);
+
+    /* Get the total number of channels per timer based on hw mapping. */
+    static uint8_t _timer_num_channels(TIM_TypeDef *tim);
+
+    /* ---- Low-level helpers ---- */
     void _write_hw(uint8_t chan, uint16_t period_us);
 
     // ---- DShot infrastructure (ChibiOS reference: RCOutput.h L600-630) ----
@@ -132,6 +184,11 @@ private:
     uint8_t chan_offset = 0;
     // true when IOMCU handles DShot output
     bool iomcu_dshot = false;
+
+    // Timer clock constants
+    static constexpr uint32_t TIM1_CLOCK = 216000000U;   // APB2=108MHz, ×2
+    static constexpr uint32_t TIM4_CLOCK = 108000000U;   // APB1= 54MHz, ×2
+    static constexpr uint32_t TIM12_CLOCK = 108000000U;  // APB1= 54MHz, ×2
 };
 
 } // namespace RTT

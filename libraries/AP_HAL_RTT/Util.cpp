@@ -84,12 +84,7 @@ uint32_t Util::available_memory(void)
 bool Util::get_system_id(char buf[50])
 {
     const uint32_t *uid = (const uint32_t *)STM32_UID_BASE;
-#ifdef CHIBIOS_SHORT_BOARD_NAME
-    snprintf(buf, 50, "%s %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X",
-             CHIBIOS_SHORT_BOARD_NAME,
-#else
     snprintf(buf, 50, "CUAVv5-RTT %02X%02X%02X%02X %02X%02X%02X%02X %02X%02X%02X%02X",
-#endif
              (unsigned)((uid[2]>>24)&0xFF), (unsigned)((uid[2]>>16)&0xFF),
              (unsigned)((uid[2]>> 8)&0xFF), (unsigned)((uid[2]>> 0)&0xFF),
              (unsigned)((uid[1]>>24)&0xFF), (unsigned)((uid[1]>>16)&0xFF),
@@ -261,9 +256,6 @@ bool Util::get_random_vals(uint8_t* data, size_t size)
 void Util::set_soft_armed(const bool b)
 {
     AP_HAL::Util::set_soft_armed(b);
-#ifdef HAL_GPIO_PIN_nARMED
-    palWriteLine(HAL_GPIO_PIN_nARMED, !b);
-#endif
 }
 
 void Util::thread_info(ExpandingString& str)

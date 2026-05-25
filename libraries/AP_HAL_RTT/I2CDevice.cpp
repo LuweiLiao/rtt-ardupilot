@@ -1,226 +1,288 @@
 /*
  * AP_HAL_RTT — I2C device driver implementation
- * CMSIS register-level I2C3 driver for CUAV V5 (STM32F767).
- * Registered with RT-Thread I2C framework so existing rt_i2c_master_send/recv work.
+ * Direct CMSIS register-level I2C transfers (no RT-Thread I2C framework).
+ * For CUAV V5 (STM32F767): bus 0 = I2C3 (PH7=SCL AF4, PH8=SDA AF4).
  *
- * Pinout (hwdef.dat): PH7=I2C3_SCL(AF4), PH8=I2C3_SDA(AF4)
- * Periodic callbacks delegated to DeviceBus.
+ * All four STM32F7 I2C peripherals are on APB1 (PCLK1=54 MHz).
+ * TIMINGR values computed with STM32CubeMX for 54 MHz PCLK1.
  */
 
 #include "I2CDevice.h"
 #include <AP_HAL/AP_HAL.h>
 #include <rtthread.h>
-#include <drivers/dev_i2c.h>
 
 #include <stm32f7xx.h>
 
 using namespace RTT;
 
-#ifndef HAL_RTT_I2C_BUS_NAMES
-/* I2C_ORDER from hwdef.dat: I2C3 I2C1 I2C2 I2C4
- * Bus 0 = I2C3 (IST8310 internal compass, PH7/PH8)
- * Bus 1 = I2C1, Bus 2 = I2C2, Bus 3 = I2C4
- */
-#define HAL_RTT_I2C_BUS_NAMES "i2c3", "i2c1", "i2c2", "i2c4"
-#endif
-
-static const char *const _i2c_bus_names[] = { HAL_RTT_I2C_BUS_NAMES };
-#define HAL_RTT_I2C_BUS_COUNT (sizeof(_i2c_bus_names) / sizeof(_i2c_bus_names[0]))
-
-/* ------------------------------------------------------------------ */
-/*  CMSIS register-level I2C3 driver                                  */
-/* ------------------------------------------------------------------ */
-#if defined(HAL_MCU_STM32F7XX) || defined(SOC_SERIES_STM32F7)
+extern const AP_HAL::HAL& hal;
 
 #ifndef I2C_TIMEOUT_MAX
 #define I2C_TIMEOUT_MAX    50000U
 #endif
 
-static bool _i2c3_bus_registered = false;
-
-/*
- * I2C TIMINGR for PCLK1=54MHz, 100kHz Standard Mode (RM0410 §30.4.2):
- *   PRESC=3 → tI2CCLK = 4 * 18.5ns ≈ 74ns
- *   SCLL=67 → 68 * 74ns ≈ 5.03us, SCLH=66 → 67 * 74ns ≈ 4.96us
- *   SDADEL=2, SCLDEL=3
- */
-#define I2C3_TIMINGR_100KHZ  0x30812E3E
-
-/*
- * Initialize I2C3 hardware — clocks, GPIO AF4, timing, enable.
- */
-static void _i2c3_hw_init(void)
-{
-    if (_i2c3_bus_registered) return;
-
-    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOHEN;
-    (void)RCC->AHB1ENR;
-    RCC->APB1ENR |= RCC_APB1ENR_I2C3EN;
-    (void)RCC->APB1ENR;
-
-    RCC->APB1RSTR |= RCC_APB1RSTR_I2C3RST;
-    __NOP(); __NOP(); __NOP();
-    RCC->APB1RSTR &= ~RCC_APB1RSTR_I2C3RST;
-
-    GPIOH->MODER = (GPIOH->MODER & ~((3U << 14) | (3U << 16))) |
-                    ((2U << 14) | (2U << 16));
-    GPIOH->AFR[0] = (GPIOH->AFR[0] & ~(0xFU << 28)) | (4U << 28);
-    GPIOH->AFR[1] = (GPIOH->AFR[1] & ~(0xFU << 0))  | (4U << 0);
-    GPIOH->OTYPER |= (1U << 7) | (1U << 8);
-    GPIOH->PUPDR   = (GPIOH->PUPDR & ~((3U << 14) | (3U << 16))) |
-                     ((1U << 14) | (1U << 16));
-
-    I2C3->CR1 &= ~I2C_CR1_PE;
-    (void)I2C3->CR1;
-    I2C3->TIMINGR = I2C3_TIMINGR_100KHZ;
-    I2C3->OAR1 = (1U << 15);
-    I2C3->CR1 |= I2C_CR1_PE;
-    (void)I2C3->CR1;
-}
-
-/* Forward declaration for ops struct */
-static rt_ssize_t _i2c3_master_xfer(struct rt_i2c_bus_device *bus,
-                                     struct rt_i2c_msg msgs[], rt_uint32_t num);
-
-/* RT-Thread I2C bus operations */
-static const struct rt_i2c_bus_device_ops _i2c3_ops = {
-    .master_xfer  = _i2c3_master_xfer,
-    .slave_xfer   = nullptr,
-    .i2c_bus_control = nullptr,
-};
-
-static struct rt_i2c_bus_device _i2c3_bus_dev = {
-    .ops = &_i2c3_ops,
-};
-
-/*
- * Register I2C3 bus with RT-Thread framework.
- */
-static void _i2c3_register(void)
-{
-    if (_i2c3_bus_registered) return;
-    _i2c3_hw_init();
-    /* rt_i2c_bus_device_register() initialises the device, mutex and linked list.
-     * Must be called after RT-Thread kernel is ready (after scheduler start). */
-    if (rt_i2c_bus_device_register(&_i2c3_bus_dev, "i2c3") == RT_EOK) {
-        _i2c3_bus_registered = true;
-    }
-}
-
-/*
- * I2C3 master transfer — CMSIS register-level per RM0410 §30.4.3.
- * Called by RT-Thread I2C framework via ops->master_xfer.
- * Supports combined transfers (multi-message write+read with repeated start).
- */
-static rt_ssize_t _i2c3_master_xfer(struct rt_i2c_bus_device *bus,
-                                     struct rt_i2c_msg msgs[], rt_uint32_t num)
-{
-    (void)bus;
-
-    /* Track I2C transactions (ChibiOS compat for persistent_data) */
-    extern const AP_HAL::HAL& hal;
-    hal.util->persistent_data.i2c_count++;
-
-    /* Wait for bus not busy before first transaction */
-    uint32_t timeout = I2C_TIMEOUT_MAX;
-    while ((I2C3->ISR & I2C_ISR_BUSY) && --timeout) { __NOP(); }
-    if (timeout == 0) {
-        rt_kprintf("I2CX: BUSY timeout!\n");
-        return -1;
-    }
-
-    /* Clear all sticky error flags once at the start */
-    I2C3->ICR = I2C_ICR_NACKCF | I2C_ICR_STOPCF |
-                I2C_ICR_BERRCF | I2C_ICR_ARLOCF | I2C_ICR_OVRCF;
-
-    for (rt_uint32_t m = 0; m < num; m++) {
-        struct rt_i2c_msg *msg = &msgs[m];
-        uint8_t *buf = msg->buf;
-        uint32_t remaining = msg->len;
-        bool last_msg = (m == num - 1);
-
-        /* Build CR2: SADD[7:1] at bits 7:1, direction, NBYTES, START */
-        uint32_t cr2 = (((uint32_t)(msg->addr) << 1) & 0x000000FEU); /* SADD[7:1] */
-        if (msg->flags & RT_I2C_RD) {
-            cr2 |= I2C_CR2_RD_WRN;
-        }
-        cr2 |= ((remaining & 0xFF) << I2C_CR2_NBYTES_Pos);
-        cr2 |= I2C_CR2_START;
-        if (last_msg) {
-            cr2 |= I2C_CR2_AUTOEND;      /* last message: auto STOP */
-        }
-        /* RELOAD must be 0 for NBYTES <= 255 single-shot */
-
-        I2C3->CR2 = cr2;
-
-        if (msg->flags & RT_I2C_RD) {
-            /* Receive — poll RXNE, NACKF, BERR, OVR */
-            while (remaining > 0) {
-                timeout = I2C_TIMEOUT_MAX;
-                while (!(I2C3->ISR & (I2C_ISR_RXNE |
-                                      I2C_ISR_NACKF |
-                                      I2C_ISR_BERR  |
-                                      I2C_ISR_OVR)) && --timeout) { __NOP(); }
-                if (timeout == 0) {
-                    I2C3->CR2 |= I2C_CR2_STOP;
-                    return -1;
-                }
-                if (I2C3->ISR & (I2C_ISR_NACKF | I2C_ISR_BERR | I2C_ISR_OVR)) {
-                    I2C3->ICR = I2C_ICR_NACKCF | I2C_ICR_BERRCF | I2C_ICR_OVRCF;
-                    I2C3->CR2 |= I2C_CR2_STOP;
-                    return -1;
-                }
-                *buf++ = (uint8_t)I2C3->RXDR;
-                remaining--;
-            }
-        } else {
-            /* Transmit — poll TXIS, NACKF, BERR, OVR */
-            while (remaining > 0) {
-                timeout = I2C_TIMEOUT_MAX;
-                while (!(I2C3->ISR & (I2C_ISR_TXIS |
-                                      I2C_ISR_NACKF |
-                                      I2C_ISR_BERR  |
-                                      I2C_ISR_OVR)) && --timeout) { __NOP(); }
-                if (timeout == 0) {
-                    I2C3->CR2 |= I2C_CR2_STOP;
-                    return -1;
-                }
-                if (I2C3->ISR & (I2C_ISR_NACKF | I2C_ISR_BERR | I2C_ISR_OVR)) {
-                    I2C3->ICR = I2C_ICR_NACKCF | I2C_ICR_BERRCF | I2C_ICR_OVRCF;
-                    I2C3->CR2 |= I2C_CR2_STOP;
-                    return -1;
-                }
-                I2C3->TXDR = *buf++;
-                remaining--;
-            }
-        }
-
-        if (last_msg) {
-            /* Last message with AUTOEND: wait for STOPF */
-            timeout = I2C_TIMEOUT_MAX;
-            while (!(I2C3->ISR & I2C_ISR_STOPF) && --timeout) { __NOP(); }
-            if (timeout == 0) return -1;
-            I2C3->ICR = I2C_ICR_STOPCF;
-        } else {
-            /* Intermediate message without AUTOEND: wait for TC */
-            timeout = I2C_TIMEOUT_MAX;
-            while (!(I2C3->ISR & I2C_ISR_TC) && --timeout) { __NOP(); }
-            if (timeout == 0) return -1;
-            /* TC is cleared by writing CR2 with START on next iteration */
-        }
-    }
-    return (rt_ssize_t)num;
-}
-#endif /* HAL_MCU_STM32F7XX || SOC_SERIES_STM32F7 */
+/* ------------------------------------------------------------------ */
+/*  TIMINGR values — STM32F7, PCLK1=54 MHz                            */
+/* ------------------------------------------------------------------ */
+#define I2C_TIMINGR_100KHZ  0x30812E3E
+#define I2C_TIMINGR_400KHZ  0x6000030D
 
 /* ------------------------------------------------------------------ */
-/*  I2CDevice class                                                    */
+/*  I2C bus descriptor                                                 */
+/* ------------------------------------------------------------------ */
+struct I2CBusDescr {
+    I2C_TypeDef *regs;              /* CMSIS register base              */
+    uint32_t     rcc_enr_bit;       /* RCC_APB1ENR enable bit          */
+    uint32_t     rcc_rst_bit;       /* RCC_APB1RSTR reset bit          */
+    GPIO_TypeDef *scl_port;         /* SCL GPIO port (NULL = skip GPIO) */
+    uint16_t     scl_pin;           /* SCL pin number                   */
+    uint8_t      scl_af;            /* SCL alternate function           */
+    GPIO_TypeDef *sda_port;         /* SDA GPIO port (NULL = skip GPIO) */
+    uint16_t     sda_pin;           /* SDA pin number                   */
+    uint8_t      sda_af;            /* SDA alternate function           */
+    uint32_t     timingr_100k;      /* TIMINGR for 100 kHz              */
+    uint32_t     timingr_400k;      /* TIMINGR for 400 kHz              */
+    bool         hw_inited;         /* has hardware been initialised?   */
+};
+
+/*
+ * Bus table — one entry per supported I2C bus.
+ * Order must match HAL_RTT_I2C_BUS_NAMES.
+ * GPIO ports filled only for physically-wired buses (CUAV V5: bus 0 only).
+ * Bus 1/2/3 (I2C1/2/4) have no physical pins on CUAV V5 per hwdef.dat,
+ * but the register definitions are present for code reuse.
+ */
+static I2CBusDescr _i2c_buses[] = {
+    /* Bus 0 — I2C3 (PH7=SCL AF4, PH8=SDA AF4) */
+    { I2C3, RCC_APB1ENR_I2C3EN, RCC_APB1RSTR_I2C3RST,
+      GPIOH, 7, 4, GPIOH, 8, 4,
+      I2C_TIMINGR_100KHZ, I2C_TIMINGR_400KHZ, false },
+
+    /* Bus 1 — I2C1 (PB6=SCL AF4, PB7=SDA AF4) — no physical pins on CUAV V5 */
+    { I2C1, RCC_APB1ENR_I2C1EN, RCC_APB1RSTR_I2C1RST,
+      GPIOB, 6, 4, GPIOB, 7, 4,
+      I2C_TIMINGR_100KHZ, I2C_TIMINGR_400KHZ, false },
+
+    /* Bus 2 — I2C2 (PB10=SCL AF4, PB11=SDA AF4) — no physical pins on CUAV V5 */
+    { I2C2, RCC_APB1ENR_I2C2EN, RCC_APB1RSTR_I2C2RST,
+      GPIOB, 10, 4, GPIOB, 11, 4,
+      I2C_TIMINGR_100KHZ, I2C_TIMINGR_400KHZ, false },
+
+    /* Bus 3 — I2C4 (PD12=SCL AF4, PD13=SDA AF4) — no physical pins on CUAV V5 */
+    { I2C4, RCC_APB1ENR_I2C4EN, RCC_APB1RSTR_I2C4RST,
+      GPIOD, 12, 4, GPIOD, 13, 4,
+      I2C_TIMINGR_100KHZ, I2C_TIMINGR_400KHZ, false },
+};
+#define I2C_BUS_COUNT (sizeof(_i2c_buses) / sizeof(_i2c_buses[0]))
+
+/* ------------------------------------------------------------------ */
+/*  GPIO helper — set pin to AF mode with open-drain + pull-up         */
+/* ------------------------------------------------------------------ */
+static void _gpio_set_af_od(GPIO_TypeDef *port, uint16_t pin, uint8_t af)
+{
+    uint32_t moder_shift = pin * 2;
+    uint32_t afr_index   = pin / 8;
+    uint32_t afr_shift   = (pin % 8) * 4;
+
+    port->MODER   = (port->MODER & ~(3U << moder_shift)) | (2U << moder_shift);
+    port->AFR[afr_index]  = (port->AFR[afr_index] & ~(0xFU << afr_shift)) | ((uint32_t)af << afr_shift);
+    port->OTYPER  |= (1U << pin);
+    port->PUPDR   = (port->PUPDR & ~(3U << moder_shift)) | (1U << moder_shift);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Hardware initialisation — clock, reset, GPIO, TIMINGR, enable     */
+/* ------------------------------------------------------------------ */
+static void _i2c_hw_init(uint8_t bus)
+{
+    if (bus >= I2C_BUS_COUNT) return;
+    I2CBusDescr *bd = &_i2c_buses[bus];
+    if (bd->hw_inited) return;
+    if (bd->regs == NULL) return;
+
+    /* Enable peripheral clock */
+    RCC->APB1ENR |= bd->rcc_enr_bit;
+    (void)RCC->APB1ENR;
+
+    /* Reset peripheral */
+    RCC->APB1RSTR |= bd->rcc_rst_bit;
+    __NOP(); __NOP(); __NOP();
+    RCC->APB1RSTR &= ~bd->rcc_rst_bit;
+
+    /* Enable GPIO port clock if GPIO pins are defined */
+    if (bd->scl_port != NULL && bd->sda_port != NULL) {
+        GPIO_TypeDef *ports[] = { GPIOA, GPIOB, GPIOC, GPIOD, GPIOE, GPIOF, GPIOG, GPIOH };
+        uint32_t enr_bits[]  = {
+            RCC_AHB1ENR_GPIOAEN, RCC_AHB1ENR_GPIOBEN,
+            RCC_AHB1ENR_GPIOCEN, RCC_AHB1ENR_GPIODEN,
+            RCC_AHB1ENR_GPIOEEN, RCC_AHB1ENR_GPIOFEN,
+            RCC_AHB1ENR_GPIOGEN, RCC_AHB1ENR_GPIOHEN
+        };
+        for (uint8_t i = 0; i < 8; i++) {
+            if (bd->scl_port == ports[i] || bd->sda_port == ports[i]) {
+                RCC->AHB1ENR |= enr_bits[i];
+            }
+        }
+        (void)RCC->AHB1ENR;
+
+        _gpio_set_af_od(bd->scl_port, bd->scl_pin, bd->scl_af);
+        _gpio_set_af_od(bd->sda_port, bd->sda_pin, bd->sda_af);
+    }
+
+    /* Disable peripheral before configuring */
+    bd->regs->CR1 &= ~I2C_CR1_PE;
+    (void)bd->regs->CR1;
+
+    /* Set timing and own address */
+    bd->regs->TIMINGR = bd->timingr_100k;
+    bd->regs->OAR1 = (1U << 15);    /* OA1EN — enable own address */
+
+    /* Enable peripheral */
+    bd->regs->CR1 |= I2C_CR1_PE;
+    (void)bd->regs->CR1;
+
+    bd->hw_inited = true;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Low-level I2C transfer — polling, register-only                    */
+/*  Returns true on success.                                           */
+/* ------------------------------------------------------------------ */
+static bool _i2c_master_xfer_ll(I2C_TypeDef *i2c, uint8_t addr,
+                                const uint8_t *send, uint32_t send_len,
+                                uint8_t *recv, uint32_t recv_len)
+{
+    uint32_t timeout;
+
+    /* Clear sticky error flags */
+    i2c->ICR = I2C_ICR_NACKCF | I2C_ICR_STOPCF |
+               I2C_ICR_BERRCF | I2C_ICR_ARLOCF | I2C_ICR_OVRCF;
+
+    /* Wait for bus not busy */
+    timeout = I2C_TIMEOUT_MAX;
+    while ((i2c->ISR & I2C_ISR_BUSY) && --timeout) { __NOP(); }
+    if (timeout == 0) {
+        i2c->CR2 |= I2C_CR2_STOP;
+        return false;
+    }
+
+    /* ================================================================== */
+    /*  Phase 1 — Transmit (if send_len > 0)                               */
+    /* ================================================================== */
+    if (send_len > 0 && send != NULL) {
+        uint32_t remaining = send_len;
+        bool has_recv = (recv_len > 0 && recv != NULL);
+
+        /* CR2: SADD = addr, NBYTES = send_len, START, WRITE (default),
+         * AUTOEND only if no receive phase follows (otherwise TC signals
+         * end-of-write and we set up the read phase from TC). */
+        uint32_t cr2 = ((uint32_t)addr << 1) & 0x000000FEU;
+        cr2 |= (remaining << 16) & I2C_CR2_NBYTES;
+        cr2 |= I2C_CR2_START;
+        if (!has_recv) {
+            cr2 |= I2C_CR2_AUTOEND;
+        }
+        /* RD_WRN = 0 for transmit */
+        i2c->CR2 = cr2;
+
+        /* Poll TXIS for each byte */
+        while (remaining > 0) {
+            timeout = I2C_TIMEOUT_MAX;
+            while (!(i2c->ISR & (I2C_ISR_TXIS | I2C_ISR_NACKF |
+                                 I2C_ISR_BERR | I2C_ISR_OVR |
+                                 I2C_ISR_ARLO)) && --timeout) { __NOP(); }
+            if (timeout == 0) {
+                i2c->CR2 |= I2C_CR2_STOP;
+                return false;
+            }
+            if (i2c->ISR & (I2C_ISR_NACKF | I2C_ISR_BERR |
+                            I2C_ISR_OVR | I2C_ISR_ARLO)) {
+                i2c->ICR = I2C_ICR_NACKCF | I2C_ICR_BERRCF |
+                           I2C_ICR_OVRCF | I2C_ICR_ARLOCF;
+                i2c->CR2 |= I2C_CR2_STOP;
+                return false;
+            }
+            i2c->TXDR = *send++;
+            remaining--;
+        }
+
+        if (has_recv) {
+            /* Wait for TC (transfer complete) before starting receive.
+             * TC is cleared by writing CR2 for the next transfer. */
+            timeout = I2C_TIMEOUT_MAX;
+            while (!(i2c->ISR & (I2C_ISR_TC | I2C_ISR_NACKF |
+                                 I2C_ISR_BERR | I2C_ISR_OVR |
+                                 I2C_ISR_ARLO)) && --timeout) { __NOP(); }
+            if (timeout == 0) {
+                i2c->CR2 |= I2C_CR2_STOP;
+                return false;
+            }
+            if (i2c->ISR & (I2C_ISR_NACKF | I2C_ISR_BERR |
+                            I2C_ISR_OVR | I2C_ISR_ARLO)) {
+                i2c->ICR = I2C_ICR_NACKCF | I2C_ICR_BERRCF |
+                           I2C_ICR_OVRCF | I2C_ICR_ARLOCF;
+                i2c->CR2 |= I2C_CR2_STOP;
+                return false;
+            }
+        }
+    }
+
+    /* ================================================================== */
+    /*  Phase 2 — Receive (if recv_len > 0)                                */
+    /* ================================================================== */
+    if (recv_len > 0 && recv != NULL) {
+        uint32_t remaining = recv_len;
+
+        /* CR2: SADD = addr, NBYTES = recv_len, RD_WRN, START, AUTOEND */
+        uint32_t cr2 = ((uint32_t)addr << 1) & 0x000000FEU;
+        cr2 |= I2C_CR2_RD_WRN;
+        cr2 |= (remaining << 16) & I2C_CR2_NBYTES;
+        cr2 |= I2C_CR2_START | I2C_CR2_AUTOEND;
+        i2c->CR2 = cr2;
+
+        /* Poll RXNE for each byte */
+        while (remaining > 0) {
+            timeout = I2C_TIMEOUT_MAX;
+            while (!(i2c->ISR & (I2C_ISR_RXNE | I2C_ISR_NACKF |
+                                 I2C_ISR_BERR | I2C_ISR_OVR |
+                                 I2C_ISR_ARLO)) && --timeout) { __NOP(); }
+            if (timeout == 0) {
+                i2c->CR2 |= I2C_CR2_STOP;
+                return false;
+            }
+            if (i2c->ISR & (I2C_ISR_NACKF | I2C_ISR_BERR |
+                            I2C_ISR_OVR | I2C_ISR_ARLO)) {
+                i2c->ICR = I2C_ICR_NACKCF | I2C_ICR_BERRCF |
+                           I2C_ICR_OVRCF | I2C_ICR_ARLOCF;
+                i2c->CR2 |= I2C_CR2_STOP;
+                return false;
+            }
+            *recv++ = (uint8_t)i2c->RXDR;
+            remaining--;
+        }
+    }
+
+    /* Wait for STOPF if AUTOEND was used */
+    if ((send_len > 0 && send != NULL && recv_len == 0) ||
+        (recv_len > 0 && recv != NULL)) {
+        timeout = I2C_TIMEOUT_MAX;
+        while (!(i2c->ISR & I2C_ISR_STOPF) && --timeout) { __NOP(); }
+        if (timeout == 0) {
+            return false;
+        }
+        i2c->ICR = I2C_ICR_STOPCF;
+    }
+
+    return true;
+}
+
+/* ------------------------------------------------------------------ */
+/*  I2CDevice methods                                                  */
 /* ------------------------------------------------------------------ */
 
 I2CDevice::I2CDevice(uint8_t bus, uint8_t address, uint32_t bus_clock,
                    bool use_smbus, uint32_t timeout_ms)
     : AP_HAL::I2CDevice()
-    , _bus(nullptr)
     , _address(address)
     , _busnum(bus)
     , _bus_clock(bus_clock)
@@ -231,33 +293,23 @@ I2CDevice::I2CDevice(uint8_t bus, uint8_t address, uint32_t bus_clock,
     set_device_bus(bus);
     set_device_address(address);
 
-#if defined(HAL_MCU_STM32F7XX) || defined(SOC_SERIES_STM32F7)
-    /* Bus 0 = I2C3 on CUAV V5. Register hardware I2C3 if not yet done. */
-    if (bus == 0) {
-        _i2c3_register();
+    if (bus < I2C_BUS_COUNT) {
+        _i2c_hw_init(bus);
 
-        /*
-         * Apply bus_clock to I2C3 TIMINGR.
-         * ChibiOS reference selects between 100kHz/400kHz TIMINGR
-         * based on requested clock (HAL_I2C_F7_100_TIMINGR / _400_TIMINGR).
-         */
-        if (_bus_clock > 100000) {
-            I2C3->TIMINGR = 0x6000030D;  /* 400 kHz (STMCubeMX, PCLK1=54 MHz) */
-        } else {
-            I2C3->TIMINGR = 0x30812E3E;  /* 100 kHz (default, already set by _i2c3_hw_init) */
+        /* Apply bus_clock to TIMINGR */
+        I2CBusDescr *bd = &_i2c_buses[bus];
+        if (bd->regs != NULL && (bd->regs->CR1 & I2C_CR1_PE)) {
+            if (_bus_clock > 100000) {
+                bd->regs->TIMINGR = bd->timingr_400k;
+            } else {
+                bd->regs->TIMINGR = bd->timingr_100k;
+            }
         }
 
-        /* Apply SMBus host enable if requested (ChibiOS compat: I2C_CR1_SMBHEN) */
-        if (use_smbus) {
-            I2C3->CR1 |= I2C_CR1_SMBHEN;
-        } else {
-            I2C3->CR1 &= ~I2C_CR1_SMBHEN;
+        /* Apply SMBus host enable if requested */
+        if (use_smbus && bd->regs != NULL) {
+            bd->regs->CR1 |= I2C_CR1_SMBHEN;
         }
-    }
-#endif
-
-    if (bus < HAL_RTT_I2C_BUS_COUNT) {
-        _bus = rt_i2c_bus_device_find(_i2c_bus_names[bus]);
     }
 
     (void)use_smbus;
@@ -269,93 +321,91 @@ I2CDevice::~I2CDevice()
 
 bool I2CDevice::set_speed(AP_HAL::Device::Speed speed)
 {
-    if (_bus == nullptr) {
+    if (_busnum >= I2C_BUS_COUNT) {
         return false;
     }
 
-#if defined(HAL_MCU_STM32F7XX) || defined(SOC_SERIES_STM32F7)
-    /* Reconfigure I2C3 TIMINGR based on requested speed */
-    if (_busnum == 0 && (I2C3->CR1 & I2C_CR1_PE)) {
-        if (speed == AP_HAL::Device::SPEED_HIGH) {
-            I2C3->TIMINGR = 0x6000030D;  /* 400 kHz */
-        } else {
-            I2C3->TIMINGR = 0x30812E3E;  /* 100 kHz */
-        }
+    I2CBusDescr *bd = &_i2c_buses[_busnum];
+    if (bd->regs == NULL || !(bd->regs->CR1 & I2C_CR1_PE)) {
+        return false;
     }
-#else
-    (void)speed;
-#endif
+
+    /* Disable PE before changing TIMINGR per RM0410 §30.4.2 */
+    bd->regs->CR1 &= ~I2C_CR1_PE;
+    (void)bd->regs->CR1;
+    if (speed == AP_HAL::Device::SPEED_HIGH) {
+        bd->regs->TIMINGR = bd->timingr_400k;
+    } else {
+        bd->regs->TIMINGR = bd->timingr_100k;
+    }
+    bd->regs->CR1 |= I2C_CR1_PE;
+    (void)bd->regs->CR1;
 
     return true;
+}
+
+/*
+ * Single-shot I2C transfer: (send) → device → (recv).
+ * Combined transfer when both send and recv are present (write then
+ * read with repeated start).  Retry on failure.
+ */
+bool I2CDevice::_do_transfer(const uint8_t *send, uint32_t send_len,
+                            uint8_t *recv, uint32_t recv_len)
+{
+    if (_busnum >= I2C_BUS_COUNT) {
+        return false;
+    }
+
+    I2CBusDescr *bd = &_i2c_buses[_busnum];
+    if (bd->regs == NULL) {
+        return false;
+    }
+
+    /* Ensure hardware is initialised */
+    if (!bd->hw_inited) {
+        _i2c_hw_init(_busnum);
+    }
+
+    return _i2c_master_xfer_ll(bd->regs, _address,
+                               send, send_len, recv, recv_len);
 }
 
 bool I2CDevice::transfer(const uint8_t *send, uint32_t send_len,
                         uint8_t *recv, uint32_t recv_len)
 {
-    if (_bus == nullptr) return false;
     if (_bus_dev == nullptr) return false;
     if (!_bus_dev->semaphore.take(HAL_SEMAPHORE_BLOCK_FOREVER)) return false;
 
     bool ok = false;
     for (uint8_t attempt = 0; attempt <= _retries; attempt++) {
-        rt_tick_t tick = rt_tick_from_millisecond(_timeout_ms > 0 ? _timeout_ms : 4);
-        if (rt_i2c_bus_lock(_bus, tick) != RT_EOK) {
-            continue;
-        }
-
-        bool xfer_ok = true;
-
-        if (send_len > 0 && recv_len > 0 && !_split) {
-            /* Combined transfer: send register addr then read data
-             * with repeated start (no STOP between messages).
-             * Aligned with ChibiOS I2CDevice::_transfer() which uses
-             * i2cMasterTransmitTimeout() for combined SENDRECV. */
-            struct rt_i2c_msg msgs[2];
-            msgs[0].addr = _address;
-            msgs[0].flags = RT_I2C_WR;
-            msgs[0].buf  = const_cast<uint8_t *>(send);
-            msgs[0].len  = send_len;
-            msgs[1].addr = _address;
-            msgs[1].flags = RT_I2C_RD;
-            msgs[1].buf  = recv;
-            msgs[1].len  = recv_len;
-            if (rt_i2c_transfer(_bus, msgs, 2) != 2) {
-                xfer_ok = false;
+        if (_split) {
+            /* Split transfer: separate write and read transactions.
+             * Avoids a stop condition with SCL low which some devices
+             * (e.g. LidarLite blue label) do not support. */
+            bool split_ok = true;
+            if (send_len > 0 && send != NULL) {
+                if (!_do_transfer(send, send_len, nullptr, 0)) {
+                    split_ok = false;
+                }
+            }
+            if (split_ok && recv_len > 0 && recv != NULL) {
+                if (!_do_transfer(nullptr, 0, recv, recv_len)) {
+                    split_ok = false;
+                }
+            }
+            if (split_ok) {
+                ok = true;
+                break;
             }
         } else {
-            if (send_len > 0 && send != nullptr) {
-                if (rt_i2c_master_send(_bus, _address, RT_I2C_WR, send, send_len) != (rt_ssize_t)send_len) {
-                    xfer_ok = false;
-                }
-            }
-            if (xfer_ok && recv_len > 0 && recv != nullptr) {
-                if (rt_i2c_master_recv(_bus, _address, RT_I2C_RD, recv, recv_len) != (rt_ssize_t)recv_len) {
-                    xfer_ok = false;
-                }
+            if (_do_transfer(send, send_len, recv, recv_len)) {
+                ok = true;
+                break;
             }
         }
-
-        rt_i2c_bus_unlock(_bus);
-
-        if (xfer_ok) {
-            ok = true;
-            break;
-        }
     }
 
-    /* If bus 0 and no bus found, try registering (STM32F7 only) */
-    if (!ok) {
-#if defined(HAL_MCU_STM32F7XX) || defined(SOC_SERIES_STM32F7)
-        _i2c3_register();
-#endif
-        _bus = rt_i2c_bus_device_find("i2c3");
-        if (_bus != nullptr) {
-            return transfer(send, send_len, recv, recv_len);
-        }
-    }
-    if (_bus_dev != nullptr) {
-        _bus_dev->semaphore.give();
-    }
+    _bus_dev->semaphore.give();
     return ok;
 }
 
@@ -363,7 +413,7 @@ bool I2CDevice::read_registers_multiple(uint8_t first_reg, uint8_t *recv,
                                         uint32_t recv_len, uint8_t times)
 {
     for (uint8_t i = 0; i < times; i++) {
-        if (!read_registers(first_reg, recv + i * recv_len, recv_len)) {
+        if (!transfer(&first_reg, 1, recv + i * recv_len, recv_len)) {
             return false;
         }
     }
@@ -372,7 +422,6 @@ bool I2CDevice::read_registers_multiple(uint8_t first_reg, uint8_t *recv,
 
 AP_HAL::Semaphore *I2CDevice::get_semaphore()
 {
-    // Align with ChibiOS: return bus-level semaphore (I2CBus::get_semaphore → &bus.semaphore)
     return &_bus_dev->semaphore;
 }
 
@@ -395,60 +444,62 @@ bool I2CDevice::adjust_periodic_callback(AP_HAL::Device::PeriodicHandle h, uint3
 
 /*
  * clear_bus — toggle SCL up to 9 times to recover a stuck I2C bus.
- * CMSIS register-level implementation for I2C3 (bus 0, PH7/PH8).
- * Only bus 0 is supported because CUAV V5 only has I2C3 physically wired;
- * buses 1-3 (i2c1/i2c2/i2c4) are registered with RT-Thread but have no
- * physical pins defined in hwdef.dat.
- *
- * D-Cache note: this function touches GPIO registers directly (non-cached
- * peripheral memory on STM32F7). No D-Cache maintenance needed for PIO
- * register access. If DMA is added in the future, bounce buffers or
- * cache clean/invalidate will be required (see DeviceBus::bouncebuffer_*).
+ * CMSIS register-level implementation for all supported buses.
+ * Temporarily switches SCL/SDA to GPIO output, open-drain, clocks SCL
+ * until SDA is released, then generates STOP and restores AF mode.
  */
 void I2CDevice::clear_bus(uint8_t busidx)
 {
-    if (busidx != 0) return;  /* only I2C3 (bus 0) is hardware-registered */
+    if (busidx >= I2C_BUS_COUNT) return;
+    I2CBusDescr *bd = &_i2c_buses[busidx];
+    if (bd->scl_port == NULL || bd->sda_port == NULL) return;
 
-    uint32_t scl_pin = 7;   /* PH7 */
-    uint32_t sda_pin = 8;   /* PH8 */
-    volatile uint32_t *moder = &GPIOH->MODER;
-    volatile uint32_t *bsrr  = &GPIOH->BSRR;
-    volatile uint32_t *idr   = &GPIOH->IDR;
+    GPIO_TypeDef *scl_port = bd->scl_port;
+    GPIO_TypeDef *sda_port = bd->sda_port;
+    uint16_t scl_pin = bd->scl_pin;
+    uint16_t sda_pin = bd->sda_pin;
+    uint32_t scl_moder_shift = scl_pin * 2;
+    uint32_t sda_moder_shift = sda_pin * 2;
 
-    /* Temporarily switch PH7 and PH8 to GPIO output, open-drain */
-    *moder = (*moder & ~((3U << 14) | (3U << 16))) |
-             ((1U << 14) | (1U << 16));          /* PH7,PH8 output */
-    GPIOH->OTYPER |= (1U << 7) | (1U << 8);      /* open-drain */
-    GPIOH->PUPDR   = (GPIOH->PUPDR & ~((3U << 14) | (3U << 16))) |
-                     ((1U << 14) | (1U << 16));  /* pull-up */
+    /* Save MODER and switch to GPIO output, open-drain */
+    uint32_t moder_saved = scl_port->MODER;
+    uint32_t pupdr_saved = scl_port->PUPDR;
+
+    scl_port->MODER = (scl_port->MODER & ~((3U << scl_moder_shift) | (3U << sda_moder_shift))) |
+                       ((1U << scl_moder_shift) | (1U << sda_moder_shift));
+    scl_port->OTYPER |= (1U << scl_pin) | (1U << sda_pin);
+    scl_port->PUPDR   = (scl_port->PUPDR & ~((3U << scl_moder_shift) | (3U << sda_moder_shift))) |
+                        ((1U << scl_moder_shift) | (1U << sda_moder_shift));
 
     /* Check SDA — if low, clock SCL up to 9 times to free bus */
-    if (!(*idr & (1U << sda_pin))) {
+    if (!(sda_port->IDR & (1U << sda_pin))) {
         for (uint8_t i = 0; i < 9; i++) {
-            *bsrr = 1U << (scl_pin + 16);          /* SCL LOW */
+            scl_port->BSRR = 1U << (scl_pin + 16);   /* SCL LOW */
             __NOP(); __NOP(); __NOP(); __NOP();
-            *bsrr = 1U << scl_pin;                   /* SCL HIGH (released) */
+            scl_port->BSRR = 1U << scl_pin;            /* SCL HIGH (released) */
             __NOP(); __NOP(); __NOP(); __NOP();
-            if (*idr & (1U << sda_pin)) break;       /* SDA released */
+            if (sda_port->IDR & (1U << sda_pin)) break;
         }
     }
 
     /* Generate STOP condition */
-    *bsrr = 1U << (scl_pin + 16);
-    *bsrr = 1U << (sda_pin + 16);         /* SDA LOW */
+    scl_port->BSRR = 1U << (scl_pin + 16);           /* SCL LOW */
+    sda_port->BSRR = 1U << (sda_pin + 16);            /* SDA LOW */
     __NOP();
-    *bsrr = 1U << scl_pin;                  /* SCL HIGH */
+    scl_port->BSRR = 1U << scl_pin;                    /* SCL HIGH */
     __NOP(); __NOP();
-    *bsrr = 1U << sda_pin;                  /* SDA HIGH → STOP */
+    sda_port->BSRR = 1U << sda_pin;                    /* SDA HIGH → STOP */
 
-    /* Restore I2C3 AF mode */
-    *moder = (*moder & ~((3U << 14) | (3U << 16))) |
-             ((2U << 14) | (2U << 16));
-    GPIOH->AFR[0] = (GPIOH->AFR[0] & ~(0xFU << 28)) | (4U << 28);
-    GPIOH->AFR[1] = (GPIOH->AFR[1] & ~(0xFU << 0))  | (4U << 0);
+    /* Restore AF mode */
+    scl_port->MODER = moder_saved;
+    scl_port->PUPDR = pupdr_saved;
+    _gpio_set_af_od(bd->scl_port, bd->scl_pin, bd->scl_af);
+    _gpio_set_af_od(bd->sda_port, bd->sda_pin, bd->sda_af);
 }
 
 void I2CDevice::clear_all_buses(void)
 {
-    clear_bus(0);  /* only bus 0 (I2C3) supported */
+    for (uint8_t i = 0; i < I2C_BUS_COUNT; i++) {
+        clear_bus(i);
+    }
 }

@@ -1,6 +1,9 @@
 /*
  * AP_HAL_RTT — Storage driver
  * Backend order: RAMTRON(FRAM) -> Flash -> RAM stub(last resort).
+ *
+ * Flash low-level operations use CMSIS register direct access
+ * (FLASH->CR/SR/KEYR) — no HAL_FLASH_* abstraction layer.
  */
 
 #include "Storage.h"
@@ -8,11 +11,94 @@
 #include <cstring>
 #include <stdio.h>
 
+#ifdef STM32F767xx
+#include <stm32f7xx.h>
+#endif
+
 extern volatile uint32_t rtt_dbg_setup_stage;
 
 extern const AP_HAL::HAL& hal;
 
 #define STORAGE_FLASH_RETRIES 5
+#define STM32_FLASH_BASE_ADDR  0x08000000U
+#define KB(x) ((x) * 1024U)
+
+/*
+ * Flash page layout for internal STM32F76xxx (2 MiB, 12 pages).
+ * Used to translate logical page -> physical address when bypassing
+ * hal.flash-> in CMSIS-direct storage operations.
+ */
+#ifndef BOARD_FLASH_SIZE
+#define BOARD_FLASH_SIZE 2048
+#endif
+
+#if BOARD_FLASH_SIZE == 2048
+#define STORAGE_FLASH_NPAGES 12
+static const uint32_t storage_flash_sizes[STORAGE_FLASH_NPAGES] = {
+    KB(32), KB(32), KB(32), KB(32), KB(128),
+    KB(256), KB(256), KB(256), KB(256), KB(256), KB(256), KB(256)
+};
+#elif BOARD_FLASH_SIZE == 1024
+#define STORAGE_FLASH_NPAGES 8
+static const uint32_t storage_flash_sizes[STORAGE_FLASH_NPAGES] = {
+    KB(32), KB(32), KB(32), KB(32), KB(128), KB(256), KB(256), KB(256)
+};
+#else
+#error "BOARD_FLASH_SIZE not supported"
+#endif
+
+/*
+ * Return the physical flash address for a logical page number.
+ */
+static uint32_t storage_page_addr(uint32_t page)
+{
+    if (page >= STORAGE_FLASH_NPAGES) {
+        return 0;
+    }
+    uint32_t addr = STM32_FLASH_BASE_ADDR;
+    for (uint32_t i = 0; i < page; i++) {
+        addr += storage_flash_sizes[i];
+    }
+    return addr;
+}
+
+/* ------------------------------------------------------------------
+ * CMSIS flash register helpers
+ * These mirror the low-level helpers in Flash.cpp but are kept local
+ * so Storage.cpp has a self-contained CMSIS path.
+ * --------------------------------------------------------------- */
+
+#ifdef STM32F767xx
+
+static inline int _storage_wait_bsy(uint32_t timeout_loops)
+{
+    while (FLASH->SR & FLASH_SR_BSY) {
+        if (--timeout_loops == 0) return -1;
+    }
+    return 0;
+}
+
+static inline void _storage_clear_errors(void)
+{
+    FLASH->SR = FLASH_SR_EOP | FLASH_SR_OPERR | FLASH_SR_WRPERR |
+                FLASH_SR_PGAERR | FLASH_SR_PGPERR | FLASH_SR_ERSERR;
+}
+
+static inline int _storage_flash_unlock(void)
+{
+    if (FLASH->CR & FLASH_CR_LOCK) {
+        FLASH->KEYR = FLASH_KEY1;
+        FLASH->KEYR = FLASH_KEY2;
+    }
+    return (FLASH->CR & FLASH_CR_LOCK) ? -1 : 0;
+}
+
+static inline void _storage_flash_lock(void)
+{
+    FLASH->CR |= FLASH_CR_LOCK;
+}
+
+#endif /* STM32F767xx */
 
 namespace RTT
 {
@@ -164,26 +250,96 @@ bool Storage::_flash_write(uint16_t line)
 #endif
 }
 
-bool Storage::_flash_write_data(uint8_t sector, uint32_t offset, const uint8_t *data, uint16_t length)
+/*
+  Write data to flash via CMSIS register direct access.
+  Uses FLASH_KEYR unlock, FLASH_CR_PG program, and FLASH_SR_BSY polling.
+ */
+bool Storage::_flash_write_data(uint8_t sector, uint32_t offset,
+                                const uint8_t *data, uint16_t length)
 {
 #ifdef STORAGE_FLASH_PAGE
-    size_t base_address = hal.flash->getpageaddr(_flash_page + sector);
-    for (uint8_t i=0; i<STORAGE_FLASH_RETRIES; i++) {
+    uint32_t base_address = storage_page_addr(_flash_page + sector);
+    if (base_address == 0) {
+        return false;
+    }
+    uint32_t addr = base_address + offset;
+
+#ifdef STM32F767xx
+    for (uint8_t i = 0; i < STORAGE_FLASH_RETRIES; i++) {
         EXPECT_DELAY_MS(1);
-        if (hal.flash->write(base_address + offset, data, length)) {
+
+        _storage_flash_unlock();
+        _storage_clear_errors();
+
+        bool ok = true;
+        const uint8_t *b = data;
+        uint32_t remaining = length;
+        uint32_t wa = addr;
+
+        while (remaining > 0 && ok) {
+            if (_storage_wait_bsy(0xFFFFFFU)) { ok = false; break; }
+
+            /* Aligned 32-bit write — preferred path */
+            if ((wa & 3) == 0 && remaining >= 4) {
+                uint32_t val;
+                memcpy(&val, b, 4);
+                FLASH->CR = FLASH_CR_PG | FLASH_CR_PSIZE_1;
+                rt_base_t level = rt_hw_interrupt_disable();
+                *(volatile uint32_t *)wa = val;
+                __DSB();
+                rt_hw_interrupt_enable(level);
+                if (_storage_wait_bsy(0xFFFFFFU)) { ok = false; break; }
+                FLASH->CR &= ~FLASH_CR_PG;
+                if (*(volatile uint32_t *)wa != val) { ok = false; break; }
+                wa += 4; b += 4; remaining -= 4;
+            }
+            /* Half-word */
+            else if ((wa & 1) == 0 && remaining >= 2) {
+                uint16_t val;
+                memcpy(&val, b, 2);
+                FLASH->CR = FLASH_CR_PG | FLASH_CR_PSIZE_0;
+                rt_base_t level = rt_hw_interrupt_disable();
+                *(volatile uint16_t *)wa = val;
+                __DSB();
+                rt_hw_interrupt_enable(level);
+                if (_storage_wait_bsy(0xFFFFFFU)) { ok = false; break; }
+                FLASH->CR &= ~FLASH_CR_PG;
+                wa += 2; b += 2; remaining -= 2;
+            }
+            /* Byte */
+            else {
+                FLASH->CR = FLASH_CR_PG;
+                rt_base_t level = rt_hw_interrupt_disable();
+                *(volatile uint8_t *)wa = *b;
+                __DSB();
+                rt_hw_interrupt_enable(level);
+                if (_storage_wait_bsy(0xFFFFFFU)) { ok = false; break; }
+                FLASH->CR &= ~FLASH_CR_PG;
+                wa++; b++; remaining--;
+            }
+        }
+
+        if (ok) {
             return true;
         }
+
         hal.scheduler->delay(1);
     }
+
     if (_flash_erase_ok()) {
         uint32_t now = AP_HAL::millis();
         if (now - _last_re_init_ms > 5000) {
             _last_re_init_ms = now;
-            bool ok = _flash.re_initialise();
+            bool re_ok = _flash.re_initialise();
             ::printf("RTT Storage: failed at %u:%u for %u - re-init %u\n",
-                     (unsigned)sector, (unsigned)offset, (unsigned)length, (unsigned)ok);
+                     (unsigned)sector, (unsigned)offset,
+                     (unsigned)length, (unsigned)re_ok);
         }
     }
+#else
+    (void)addr;
+#endif /* STM32F767xx */
+
     return false;
 #else
     (void)sector;
@@ -191,14 +347,23 @@ bool Storage::_flash_write_data(uint8_t sector, uint32_t offset, const uint8_t *
     (void)data;
     (void)length;
     return false;
-#endif
+#endif /* STORAGE_FLASH_PAGE */
 }
 
-bool Storage::_flash_read_data(uint8_t sector, uint32_t offset, uint8_t *data, uint16_t length)
+/*
+  Read data from flash — just a memory-mapped read via the computed
+  page address. No CMSIS register access required (reads are always
+  available from the flash memory map).
+ */
+bool Storage::_flash_read_data(uint8_t sector, uint32_t offset,
+                               uint8_t *data, uint16_t length)
 {
 #ifdef STORAGE_FLASH_PAGE
-    const uint32_t base_address = hal.flash->getpageaddr(_flash_page + sector);
-    memcpy(data, ((const uint8_t *)base_address) + offset, length);
+    const uint32_t base_address = storage_page_addr(_flash_page + sector);
+    if (base_address == 0) {
+        return false;
+    }
+    memcpy(data, (const uint8_t *)(base_address + offset), length);
     return true;
 #else
     (void)sector;
@@ -209,21 +374,60 @@ bool Storage::_flash_read_data(uint8_t sector, uint32_t offset, uint8_t *data, u
 #endif
 }
 
+/*
+  Erase a flash sector via CMSIS register direct access.
+  Uses FLASH_CR_SER + SNB + STRT sequence with BSY polling.
+ */
 bool Storage::_flash_erase_sector(uint8_t sector)
 {
 #ifdef STORAGE_FLASH_PAGE
-    for (uint8_t i=0; i<STORAGE_FLASH_RETRIES; i++) {
+#ifdef STM32F767xx
+    for (uint8_t i = 0; i < STORAGE_FLASH_RETRIES; i++) {
         EXPECT_DELAY_MS(1000);
-        if (hal.flash->erasepage(_flash_page + sector)) {
+
+        _storage_flash_unlock();
+        if (_storage_wait_bsy(0xFFFFFFU)) {
+            continue;
+        }
+        _storage_clear_errors();
+
+        /* PSIZE=10 (32-bit parallelism, VDD >= 2.7V) */
+        uint32_t cr = FLASH_CR_SER |
+                      ((uint32_t)(_flash_page + sector) << FLASH_CR_SNB_Pos) |
+                      FLASH_CR_PSIZE_1;
+        FLASH->CR = cr;
+
+        /* Only disable interrupts for the STRT register write itself.
+         * Re-enable immediately so RTT scheduler stays alive during
+         * the multi-second erase. */
+        rt_base_t level = rt_hw_interrupt_disable();
+        FLASH->CR = cr | FLASH_CR_STRT;
+        rt_hw_interrupt_enable(level);
+
+        /* Poll BSY, yielding periodically */
+        uint32_t yield_counter = 0;
+        while (FLASH->SR & FLASH_SR_BSY) {
+            if (++yield_counter >= 10000) {
+                rt_thread_yield();
+                yield_counter = 0;
+            }
+        }
+
+        FLASH->CR &= ~(FLASH_CR_SER | FLASH_CR_SNB_Msk);
+        bool ok = !(FLASH->SR & (FLASH_SR_OPERR | FLASH_SR_WRPERR | FLASH_SR_ERSERR));
+
+        if (ok) {
             return true;
         }
+
         hal.scheduler->delay(1);
     }
+#endif /* STM32F767xx */
     return false;
 #else
     (void)sector;
     return false;
-#endif
+#endif /* STORAGE_FLASH_PAGE */
 }
 
 bool Storage::_flash_erase_ok(void)
