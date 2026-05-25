@@ -167,5 +167,4 @@
 #define BSP_I2C4_SDA_PIN 95
 #define RT_USING_PWM
 #define RT_USING_SDIO
-#define BSP_USING_USB_DEVICE
 #endif /* RTCONFIG_H */

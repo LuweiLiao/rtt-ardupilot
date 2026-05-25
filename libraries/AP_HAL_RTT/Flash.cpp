@@ -105,6 +105,15 @@ bool Flash::erasepage(uint32_t page)
     _sem.take_blocking();
 
 #ifdef STM32F767xx
+    uint32_t page_addr = getpageaddr(page);
+    uint32_t page_sz = getpagesize(page);
+
+    /* STM32F7 Errata 2.1.11: Clean+Invalidate D-Cache before erase */
+#if __CORTEX_M == 7
+    SCB_CleanInvalidateDCache_by_Addr((uint32_t *)page_addr, page_sz);
+    __DSB();
+#endif
+
     _flash_unlock();
     if (_wait_bsy(0xFFFFFFU)) {
         if (!_keep_unlocked) _flash_lock();
@@ -162,6 +171,14 @@ bool Flash::write(uint32_t addr, const void *buf, uint32_t count)
     _sem.take_blocking();
 
 #ifdef STM32F767xx
+    /* STM32F7 Errata 2.1.11: Clean D-Cache before write.
+     * Prevents stale cache data from being written back, overwriting
+     * the freshly-programmed flash values. */
+#if __CORTEX_M == 7
+    SCB_CleanDCache_by_Addr((uint32_t *)(addr & ~0x1FUL), (count + 31) & ~0x1FUL);
+    __DSB();
+#endif
+
     _flash_unlock();
     _clear_errors();
 
