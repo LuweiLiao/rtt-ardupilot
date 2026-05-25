@@ -1169,6 +1169,8 @@ static void _otg_epout_handler(uint32_t ep)
 
 bool usb_lld_init_rtt(void)
 {
+    /* DEBUG: magic 0xDEAD0001 = function entered */
+    *(volatile uint32_t *)0x2001fff0 = 0xDEAD0001;
     if (_usb.initialized) {
         return true;
     }
@@ -1280,6 +1282,8 @@ bool usb_lld_init_rtt(void)
     __DSB();
 
     _usb.initialized = true;
+    /* DEBUG: magic 0xDEAD0002 = function completed */
+    *(volatile uint32_t *)0x2001fff0 = 0xDEAD0002;
     _usb.enumerated = false;
     _usb.device_addr = 0;
     _usb.configured = false;
