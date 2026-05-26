@@ -126,6 +126,13 @@ __attribute__((weak)) void MemManage_Handler(void)
 
 } // extern "C"
 
+/* Lightweight IWDG reload — no LSI/PR/RLR reconfig. Safe to call from
+ * rt_components_init before slow INIT_* handlers. */
+extern "C" void ap_rtt_iwdg_kick(void)
+{
+    IWDG->KR = 0xAAAA;
+}
+
 /* ----------------------------------------------------------------
  *  IWDG initialization — STM32F767 Independent Watchdog
  *  Uses LSI (~32 kHz). Prescaler /256, reload 1250 → ~10s timeout.
