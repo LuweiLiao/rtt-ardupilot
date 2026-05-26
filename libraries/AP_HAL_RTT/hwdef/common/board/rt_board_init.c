@@ -86,24 +86,26 @@ static void _mpu_config(void)
 
     /*
      * Region 1: Peripheral space (0x40000000, 512MB)
-     * Device, non-cacheable, Shareable, Full Access, XN
+     * Device Shareable - matches ARMv7-M default memory map.
+     * TEX=010, C=0, B=1, S=1 -> Device Shareable (ARM ARM B3-572).
+     * ChibiOS uses PRIVDEFENA default map instead of explicit region.
      */
     MPU->RNR  = 1;
     MPU->RBAR = 0x40000000U;
     MPU->RASR = (1U  << 28) |  /* XN=1 no exec */
                 (3U  << 24) |  /* AP=011 full access */
-                (0U  << 19) |  /* TEX=000 */
+                (2U  << 19) |  /* TEX=010 = Device */
                 (1U  << 18) |  /* S=1 shareable */
-                (0U  << 17) |  /* C=0 not cacheable */
-                (1U  << 16) |  /* B=1 bufferable */
+                (0U  << 17) |  /* C=0 */
+                (1U  << 16) |  /* B=1 (required for Device Shareable) */
                 (0U  <<  8) |  /* SRD=0 */
                 (28U <<  1) |  /* SIZE=28 → 512MB */
                 (1U  <<  0);   /* ENABLE */
 
     /*
-     * Region 2: SDIO DMA buffer (cache_buf in .sram1_bss) — non-cacheable.
-     * 16KB at 0x20020000, but only sub-regions 3-5 enabled (0x20021800–0x20022FFF)
-     * via SRD mask. Higher region number overrides Region 0 for this range.
+     * Region 2: .sram1_bss DMA buffers (e.g. SDIO cache_buf) — non-cacheable.
+     * Linker places .sram1_bss at 0x20020000; cover full 64KB SRAM1 tail.
+     * Higher region number overrides Region 0 for this range.
      */
     MPU->RNR  = 2;
     MPU->RBAR = 0x20020000U;
@@ -113,8 +115,8 @@ static void _mpu_config(void)
                 (0U  << 18) |  /* S=0 */
                 (0U  << 17) |  /* C=0 */
                 (0U  << 16) |  /* B=0 */
-                (0xC7U << 8) | /* SRD=11000111: disable sub 0,1,2,6,7; enable 3,4,5 */
-                (13U <<  1) |  /* SIZE=13 → 16KB */
+                (0U  <<  8) |  /* SRD=0: all sub-regions enabled */
+                (15U <<  1) |  /* SIZE=15 → 64KB */
                 (1U  <<  0);   /* ENABLE */
 
     MPU->CTRL = MPU_CTRL_PRIVDEFENA_Msk | MPU_CTRL_ENABLE_Msk;
@@ -312,6 +314,13 @@ void rt_hw_board_init(void)
     rt_components_board_init();
 #endif
 
+        /* 强制重新使能GPIOE时钟 — AHB1ENR |= GPIOEEN 在 stm32f7_clock_ll.c 中可能因
+         * D-Cache/同步问题未生效。加上DSB屏障保证写管道清空。 */
+        RCC->AHB1ENR |= RCC_AHB1ENR_GPIOEEN;
+        __DSB();
+        __ISB();
+        (void)RCC->AHB1ENR;  /* 强制读，保证写管道清空 */
+
         /* Sensor power PE3 re-apply (SPI4 HAL init can clobber it) */
     {
         volatile uint32_t *moder = (volatile uint32_t *)0x40021000; /* GPIOE */
@@ -324,30 +333,55 @@ void rt_hw_board_init(void)
     }
 
     /*
-     * SPI1 GPIO early init — configure PA5(SCK)/PA6(MISO)/PA7(MOSI) as AF5.
+     * SPI1 GPIO early init — configure PG11(SCK)/PA6(MISO)/PD7(MOSI) as AF5.
      * Must happen here (before SPI/IMU probe in setup()) rather than lazily
-     * in SPIDevice.cpp's _spi1_gpio_init(), because the lazy init is only
+     * in SPIDevice.cpp _spi1_gpio_init(), because the lazy init is only
      * triggered on first SPI transfer — setup() probes the IMU before that.
      *
-     * Pinout (CUAV V5): PA5=SCK(AF5), PA6=MISO(AF5), PA7=MOSI(AF5)
+     * Pinout (CUAV V5, confirmed from ChibiOS fmuv5):
+     *   PG11=SCK(AF5), PA6=MISO(AF5), PD7=MOSI(AF5)
+     *   NOT PA5/PA7 (those are FMU_CAP1 and HEATER_EN respectively!)
      */
 #ifdef BSP_USING_SPI1
     {
-        RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+        RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIODEN | RCC_AHB1ENR_GPIOGEN;
         (void)RCC->AHB1ENR;
-        /* PA5 SCK: MODE=AF, AF=5 */
-        GPIOA->MODER = (GPIOA->MODER & ~(3U << 10)) | (2U << 10);
-        GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << 20)) | (5U << 20);
-        /* PA6 MISO */
+        /* PG11 SCK: MODE=AF(10), AF=AF5(0101) */
+        GPIOG->MODER = (GPIOG->MODER & ~(3U << 22)) | (2U << 22);
+        GPIOG->AFR[1] = (GPIOG->AFR[1] & ~(0xFU << 12)) | (5U << 12);
+        GPIOG->OSPEEDR = (GPIOG->OSPEEDR & ~(3U << 22)) | (3U << 22);
+        /* PA6 MISO: MODE=AF(10), AF=AF5(0101) */
         GPIOA->MODER = (GPIOA->MODER & ~(3U << 12)) | (2U << 12);
         GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << 24)) | (5U << 24);
-        /* PA7 MOSI */
-        GPIOA->MODER = (GPIOA->MODER & ~(3U << 14)) | (2U << 14);
-        GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << 28)) | (5U << 28);
+        GPIOA->OSPEEDR = (GPIOA->OSPEEDR & ~(3U << 12)) | (3U << 12);
+        /* PD7 MOSI: MODE=AF(10), AF=AF5(0101) */
+        GPIOD->MODER = (GPIOD->MODER & ~(3U << 14)) | (2U << 14);
+        GPIOD->AFR[0] = (GPIOD->AFR[0] & ~(0xFU << 28)) | (5U << 28);
+        GPIOD->OSPEEDR = (GPIOD->OSPEEDR & ~(3U << 14)) | (3U << 14);
+
+        /*
+         * SPI1 CS — drive all inactive (HIGH) before IMU/SPI probe.
+         * ChibiOS fmuv5 SPI1 CS: PF2(ICM20689), PF3(ICM20602), PF4(BMI055_G),
+         * PG10(BMI055_A).  Also PH5(AUXMEM_CS), PF11(SPARE/ICM42688 on RTT).
+         */
+        RCC->AHB1ENR |= RCC_AHB1ENR_GPIOFEN | RCC_AHB1ENR_GPIOHEN;
+        (void)RCC->AHB1ENR;
+        __DSB();
+        GPIOF->MODER = (GPIOF->MODER & ~((3U << 4) | (3U << 6) | (3U << 8) | (3U << 22)))
+                     | ((1U << 4) | (1U << 6) | (1U << 8) | (1U << 22));
+        GPIOF->BSRR = (1U << 2) | (1U << 3) | (1U << 4) | (1U << 11);
+        GPIOG->MODER = (GPIOG->MODER & ~(3U << 20)) | (1U << 20);
+        GPIOG->BSRR = (1U << 10);
+        GPIOH->MODER = (GPIOH->MODER & ~(3U << 10)) | (1U << 10);
+        GPIOH->BSRR = (1U << 5);
     }
 #endif
 
     rt_kprintf("[BOARD-INIT] Board initialization complete\n");
+
+    /* Feed IWDG at end of board_init — covers RT-Thread scheduler startup
+     * and transition into the main thread before ap_rtt_iwdg_init() takes over. */
+    IWDG->KR = 0xAAAAU;
 }
 
 #if defined(BSP_USING_SPI) && defined(HAL_RTT_SPI_ATTACH_LIST)
@@ -441,14 +475,25 @@ static void _sd_try_mount_once(void)
     }
 }
 
+extern void ap_rtt_iwdg_kick(void);
+
 static void _sd_mount_thread(void *arg)
 {
     (void)arg;
+    rtt_sd_mount_stage = 1;
+    rt_pin_mode(SD_POWER_PIN, PIN_MODE_OUTPUT);
+    rt_pin_write(SD_POWER_PIN, PIN_HIGH);
+    rt_thread_mdelay(300);
+    ap_rtt_iwdg_kick();
+
+    rtt_sd_mount_stage = 2;
     for (int round = 0; round < 120; round++) {
+        ap_rtt_iwdg_kick();
         if (rtt_sd_mount_result == 0) break;
         _sd_try_mount_once();
         if (rtt_sd_mount_result == 0) break;
         rt_thread_mdelay(500);
+        ap_rtt_iwdg_kick();
     }
     if (rtt_sd_mount_result != 0) {
         rtt_sd_mount_stage = -4;
@@ -458,28 +503,18 @@ static void _sd_mount_thread(void *arg)
 }
 
 /*
- * SD mount: quick try in INIT_ENV_EXPORT, then spawn background thread for
- * retries so main() (ArduPilot) is not blocked for 60s when no card present.
+ * SD mount: INIT_APP_EXPORT spawns background thread only — no sync power
+ * delay or mount retries in rt_components_init (ArduPilot main() unblocked).
  */
-static int sd_card_mount_sync(void)
+static int sd_card_mount_init(void)
 {
-    rtt_sd_mount_stage = 1;
-    rt_pin_mode(SD_POWER_PIN, PIN_MODE_OUTPUT);
-    rt_pin_write(SD_POWER_PIN, PIN_HIGH);
-    rt_thread_mdelay(300);
-
-    rtt_sd_mount_stage = 2;
-    _sd_try_mount_once();
-    if (rtt_sd_mount_result == 0) return 0;
-
-    /* Card not ready yet — spawn background retry thread */
     rt_thread_t th = rt_thread_create("sdmnt", _sd_mount_thread,
                                       RT_NULL, 2048,
                                       RT_THREAD_PRIORITY_MAX - 2, 20);
     if (th) rt_thread_startup(th);
     return 0;
 }
-INIT_ENV_EXPORT(sd_card_mount_sync);
+INIT_APP_EXPORT(sd_card_mount_init);
 #endif
 
 /* ----------------------------------------------------------------
