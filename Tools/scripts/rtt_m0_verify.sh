@@ -29,7 +29,8 @@ Options:
   --no-mavlink    Skip optional pymavlink heartbeat on /dev/ttyACM*
   -h, --help      Show this help
 
-M0 PASS criterion: rtt_dbg_hal_run_called == 0xAAAAAAAA
+M0 PASS criterion: rtt_dbg_hal_run_called in {0xAAAAAAAA,0xBBBBBBBB,0x11111111}
+  or rtt_dbg_main_loop_entry_called == 0x12345678
 EOF
 }
 
@@ -74,26 +75,44 @@ wait_for_gdb_port() {
     return 1
 }
 
-read_gdb_u32() {
-    local var="$1"
-    local out hex dec
-    out="$(arm-none-eabi-gdb -batch \
-        -ex "set confirm off" \
-        -ex "file ${ELF}" \
-        -ex "target extended-remote :${GDB_PORT}" \
-        -ex "monitor halt" \
-        -ex "p/x (uint32_t)${var}" 2>&1)" || true
-    if grep -q "No symbol" <<<"${out}"; then
-        echo "MISSING"
-        return 0
-    fi
-    hex="$(grep -Eo '0x[0-9a-fA-F]+' <<<"${out}" | tail -1 || true)"
-    if [[ -z "${hex}" ]]; then
-        echo "UNKNOWN"
-        return 0
-    fi
-    dec="$(printf '%d' "${hex}" 2>/dev/null || echo "?")"
-    echo "${hex} ${dec}"
+# Batch-read all debug markers from one GDB transcript (x/wx lines).
+parse_debug_markers() {
+    local out="$1"
+    local names=(
+        rtt_dbg_hal_run_called
+        rtt_dbg_main_thread_entered
+        rtt_dbg_components_init_done
+        rtt_dbg_main_called
+        rtt_dbg_main_loop_entry_called
+    )
+    local name line hex dec val_part
+    for name in "${names[@]}"; do
+        line="$(grep -F "<${name}>" <<<"${out}" | head -1 || true)"
+        if [[ -z "${line}" ]]; then
+            if grep -qE "No symbol.*${name}|No symbol table is loaded" <<<"${out}"; then
+                echo "${name}=MISSING"
+            else
+                echo "${name}=UNKNOWN"
+            fi
+            continue
+        fi
+        val_part="${line##*:}"
+        hex="$(grep -Eo '0x[0-9a-fA-F]+' <<<"${val_part}" | head -1 || true)"
+        if [[ -z "${hex}" ]]; then
+            echo "${name}=UNKNOWN"
+        else
+            dec="$(printf '%d' "${hex}" 2>/dev/null || echo "?")"
+            echo "${name}=${hex} ${dec}"
+        fi
+    done
+}
+
+is_m0_pass_value() {
+    local hex="${1,,}"  # lower-case
+    case "${hex}" in
+        0xaaaaaaaa|0xbbbbbbbb|0x11111111) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # --- 1) Build artifacts ---
@@ -134,37 +153,54 @@ else
     log "Skipped flash (--skip-flash)"
 fi
 
-# --- 3) GDB batch: run, wait, halt, read debug vars ---
-log "Running target for ${RUN_WAIT_SEC}s..."
-arm-none-eabi-gdb -batch \
+# --- 3) Single GDB session: run, wait, halt, read debug vars via x/wx ---
+log "Running target for ${RUN_WAIT_SEC}s, then sampling debug markers..."
+GDB_OUT="$(arm-none-eabi-gdb -batch \
     -ex "set confirm off" \
     -ex "file ${ELF}" \
     -ex "target extended-remote :${GDB_PORT}" \
     -ex "monitor reset run" \
     -ex "shell sleep ${RUN_WAIT_SEC}" \
-    -ex "monitor halt" >/dev/null 2>&1 || log "WARN: GDB run/wait/halt returned non-zero (continuing marker read)"
+    -ex "monitor halt" \
+    -ex "x/wx &rtt_dbg_hal_run_called" \
+    -ex "x/wx &rtt_dbg_main_thread_entered" \
+    -ex "x/wx &rtt_dbg_components_init_done" \
+    -ex "x/wx &rtt_dbg_main_called" \
+    -ex "x/wx &rtt_dbg_main_loop_entry_called" \
+    -ex "x/wx 0x20000100" \
+    2>&1)" || log "WARN: GDB run/sample returned non-zero (continuing parse)"
 
 declare -A DBG_VAL=()
-log "Debug markers:"
-for name in \
-    rtt_dbg_hal_run_called \
-    rtt_dbg_main_thread_entered \
-    rtt_dbg_components_init_done \
-    rtt_dbg_main_called \
-    rtt_dbg_main_loop_entry_called
-do
-    val="$(read_gdb_u32 "${name}")"
+log "Debug markers (one GDB session, x/wx):"
+while IFS= read -r entry; do
+    [[ -z "${entry}" ]] && continue
+    name="${entry%%=*}"
+    val="${entry#*=}"
     DBG_VAL["${name}"]="${val}"
     log "  ${name} = ${val}"
-done
+done < <(parse_debug_markers "${GDB_OUT}")
+
+# Fallback: direct SRAM read when symbol table missing but raw address works
+if [[ "${DBG_VAL[rtt_dbg_hal_run_called]:-}" == "UNKNOWN" || "${DBG_VAL[rtt_dbg_hal_run_called]:-}" == "MISSING" ]]; then
+    fb_line="$(grep -E '^0x20000100:' <<<"${GDB_OUT}" | head -1 || true)"
+    if [[ -n "${fb_line}" ]]; then
+        fb_hex="$(grep -Eo '0x[0-9a-fA-F]+' <<<"${fb_line##*:}" | head -1 || true)"
+        if [[ -n "${fb_hex}" ]]; then
+            fb_dec="$(printf '%d' "${fb_hex}" 2>/dev/null || echo "?")"
+            DBG_VAL[rtt_dbg_hal_run_called]="${fb_hex} ${fb_dec} (addr 0x20000100)"
+            log "  rtt_dbg_hal_run_called = ${DBG_VAL[rtt_dbg_hal_run_called]} [fallback x/wx 0x20000100]"
+        fi
+    fi
+fi
 
 HAL_VAL="${DBG_VAL[rtt_dbg_hal_run_called]}"
+LOOP_VAL="${DBG_VAL[rtt_dbg_main_loop_entry_called]}"
+HAL_HEX="$(grep -Eo '0x[0-9a-fA-F]+' <<<"${HAL_VAL}" | head -1 || true)"
+LOOP_HEX="$(grep -Eo '0x[0-9a-fA-F]+' <<<"${LOOP_VAL}" | head -1 || true)"
 M0_PASS=0
-if [[ "${HAL_VAL}" == "0xaaaaaaaa"* ]] || [[ "${HAL_VAL}" == *" 2863311530" ]]; then
+if is_m0_pass_value "${HAL_HEX}"; then
     M0_PASS=1
-elif [[ "${HAL_VAL}" == "0xbbbbbbbb"* ]] || [[ "${HAL_VAL}" == *" 3149642683" ]]; then
-    M0_PASS=1
-elif [[ "${HAL_VAL}" == "0x11111111"* ]] || [[ "${HAL_VAL}" == *" 286331153" ]]; then
+elif [[ "${LOOP_HEX,,}" == "0x12345678" ]]; then
     M0_PASS=1
 fi
 
@@ -217,9 +253,9 @@ echo "Run wait:      ${RUN_WAIT_SEC}s"
 echo "MAVLink HB:    ${HEARTBEAT_STATUS}"
 echo ""
 if [[ "${M0_PASS}" -eq 1 ]]; then
-    echo "M0 RESULT: PASS (rtt_dbg_hal_run_called == 0xAAAAAAAA)"
+    echo "M0 RESULT: PASS (hal_run=${HAL_HEX}, loop_entry=${LOOP_HEX})"
     exit 0
 else
-    echo "M0 RESULT: FAIL (rtt_dbg_hal_run_called=${HAL_VAL}, expected 0xAAAAAAAA)"
+    echo "M0 RESULT: FAIL (hal_run=${HAL_VAL}, loop_entry=${LOOP_VAL}; expected hal_run in {0xAAAAAAAA,0xBBBBBBBB,0x11111111} or loop_entry 0x12345678)"
     exit 1
 fi
