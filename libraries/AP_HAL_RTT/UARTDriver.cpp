@@ -407,26 +407,19 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
             uint32_t pclk = uart_pclk(usart);
             uint32_t brr = uart_brr_value(pclk, _baudrate);
 
+            /* CMSIS poll path: disable BSP/RT-Thread DMA so RXNE/RDR polling works.
+             * IOMCU (1.5 Mbaud unbuffered) relies on uart_poll_read/write; leaving
+             * DMAR/DMAT set steals bytes from RDR and breaks wait_timeout(). */
+            usart->CR3 &= ~(USART_CR3_DMAR | USART_CR3_DMAT);
+
             /* Enable USART, receiver, transmitter */
             usart->CR1 = USART_CR1_UE | USART_CR1_RE | USART_CR1_TE;
             usart->BRR = brr;
-
-            /* Enable DMA for TX on USART CR3 */
-            usart->CR3 |= USART_CR3_DMAT;
-            /* Enable RX DMA if the DMA info table has a valid entry */
-            const char *dp = name;
-            int un = 0;
-            while (*dp && (*dp < '0' || *dp > '9')) dp++;
-            if (*dp) un = *dp - '0';
-            if (un > 0 && (size_t)un < sizeof(uart_dma_rx_info)/sizeof(uart_dma_rx_info[0]) &&
-                uart_dma_rx_info[un].stream != 0) {
-                usart->CR3 |= USART_CR3_DMAR;
-            }
         }
     } else {
         /* Just enable the USART at the current (BSP-configured) baud rate */
+        usart->CR3 &= ~(USART_CR3_DMAR | USART_CR3_DMAT);
         usart->CR1 |= USART_CR1_UE | USART_CR1_RE | USART_CR1_TE;
-        usart->CR3 |= USART_CR3_DMAT;   /* Enable TX DMA */
     }
 
     _initialized = true;
@@ -579,7 +572,7 @@ void UARTDriver::_drain_writebuf_to_dev()
         }
 
         /* --- DMA TX path --- */
-        if (usart_num > 0 && (size_t)usart_num < sizeof(uart_dma_tx_info)/sizeof(uart_dma_tx_info[0]) &&
+        if (0 && usart_num > 0 && (size_t)usart_num < sizeof(uart_dma_tx_info)/sizeof(uart_dma_tx_info[0]) &&
             uart_dma_tx_info[usart_num].stream != 0) {
 
             uint32_t n = _writebuf.peekbytes(dma_tx_bounce, sizeof(dma_tx_bounce));
@@ -648,7 +641,7 @@ void UARTDriver::_drain_writebuf_to_dev()
             }
         }
 
-        /* --- Polling fallback (original path) --- */
+        /* --- Polling fallback --- */
         uint32_t n = _writebuf.peekbytes(_tx_bounce, sizeof(_tx_bounce));
         if (n == 0) {
             _last_drain_wrote = true;
@@ -703,7 +696,7 @@ bool UARTDriver::wait_timeout(uint16_t n, uint32_t timeout_ms)
         }
         return true;
     } else {
-        /* UART path: poll directly (no semaphore) */
+        /* UART path: poll hardware, yield like ChibiOS chEvtWaitAnyTimeout() */
         uint32_t t0 = AP_HAL::millis();
         while (_readbuf.available() < n) {
             _drain_rx_to_readbuf();
@@ -714,6 +707,7 @@ bool UARTDriver::wait_timeout(uint16_t n, uint32_t timeout_ms)
             if (elapsed >= timeout_ms) {
                 return false;
             }
+            rt_thread_mdelay(1);
         }
         return true;
     }
@@ -792,7 +786,7 @@ uint32_t UARTDriver::txspace()
 
 bool UARTDriver::_check_usb_connected() const
 {
-    return usb_lld_get_connected_rtt();
+    return usb_lld_is_configured_rtt();
 }
 
 volatile uint32_t rtt_uart_dbg_tick_calls = 0;
