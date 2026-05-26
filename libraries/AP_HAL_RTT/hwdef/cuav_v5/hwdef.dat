@@ -140,23 +140,21 @@ PH7  I2C3_SCL I2C3 AF4
 PH8  I2C3_SDA I2C3 AF4
 
 # ---- IOMCU UART (UART8 PE0/PE1) ----
-# IOMCU_UART UART8    # disabled for root-cause verification (RP1)
-# PE0  UART8_RX  UART8 AF8
-# PE1  UART8_TX  UART8 AF8
+PE0  UART8_RX  UART8 AF8
+PE1  UART8_TX  UART8 AF8
+IOMCU_UART UART8
 
 # ---- SPI device table ----
 # SPIDEV name      bus   devid    cs_pin        mode    lowspeed  highspeed
-SPIDEV icm20689    SPI1  DEVID1   ICM20689_CS   MODE3   2*MHZ     8*MHZ
+SPIDEV icm20689     SPI1  DEVID1   ICM20689_CS   MODE3   2*MHZ     8*MHZ
 #SPIDEV icm20602    SPI1  DEVID2   ICM20602_CS   MODE3   2*MHZ     8*MHZ    -- not on CUAV V5 HW
-#SPIDEV bmi055_g    SPI1  DEVID3   BMI055_G_CS   MODE3  10*MHZ    10*MHZ   -- not on CUAV V5 HW
-#SPIDEV bmi055_a    SPI1  DEVID4   BMI055_A_CS   MODE3  10*MHZ    10*MHZ   -- not on CUAV V5 HW
-SPIDEV icm42688     SPI1  DEVID2   ICM42688_CS   MODE3   2*MHZ     8*MHZ
-SPIDEV ramtron     SPI2  DEVID1   RAMTRON_CS    MODE3   8*MHZ     8*MHZ
-SPIDEV ms5611      SPI4  DEVID1   MS5611_CS     MODE3  20*MHZ    20*MHZ
+#SPIDEV icm42688     SPI1  DEVID1   ICM42688_CS   MODE3   2*MHZ     8*MHZ
+IMU Invensense SPI:icm20689 ROTATION_NONE
+#IMU Invensensev3 SPI:icm42688 ROTATION_PITCH_180_YAW_270
 
 # ---- Sensor probe lists ----
-IMU Invensense SPI:icm20689 ROTATION_NONE
-IMU Invensensev3 SPI:icm42688 ROTATION_PITCH_180_YAW_270
+#IMU Invensense SPI:icm20689 ROTATION_NONE  -- not on CUAV V5 HW
+#IMU Invensensev3 SPI:icm42688 ROTATION_PITCH_180_YAW_270
 # No sensors defined for now — prevent AP_InertialSensor from expecting probe macros.
 # Re-enable when SPI spinlock is resolved.
 
@@ -211,7 +209,7 @@ define SCRIPTING_DIRECTORY "/APM/scripts_rtt"
 # RTT DFS provides POSIX FS interface (open/close/read/write/stat/mkdir)
 define AP_FILESYSTEM_POSIX_ENABLED 1
 # Allow boot without any IMU (temporary, debugging SPI polled IMU init)
-define AP_INERTIALSENSOR_ALLOW_NO_SENSORS 1
+define AP_INERTIALSENSOR_ALLOW_NO_SENSORS 0
 # ---- RGB LED (PixRacer scheme: PH10/PH11/PH12, open-drain active-low) ----
 # RTT uses GET_PIN(port, num) = port*16+num: H=7 → PH10=122, PH11=123, PH12=124
 # ChibiOS CUAVv5 leaves HAL_GPIO_LED_ON undefined, so AP_HAL_Boards.h falls
