@@ -146,6 +146,9 @@ HAL_RTT::HAL_RTT() :
 {}
 
 /* Debug flags to track initialization */
+volatile uint32_t rtt_dbg_main_thread_entered = 0;
+volatile uint32_t rtt_dbg_components_init_done = 0;
+volatile uint32_t rtt_dbg_main_called = 0;
 volatile uint32_t rtt_dbg_hal_run_called = 0xDEADBEEF;
 volatile uint32_t rtt_dbg_main_loop_entry_called = 0xCAFEBABE;
 volatile uint32_t rtt_dbg_main_loop_iterations = 0;
@@ -158,6 +161,8 @@ volatile uint32_t rtt_dbg_overrun_count = 0;
 volatile uint32_t rtt_dbg_fast_loop_count = 0;
 volatile uint32_t rtt_dbg_boost_calls_per_loop = 0;
 volatile uint32_t rtt_dbg_boost_total_us_per_loop = 0;
+volatile uint32_t rtt_dbg_mpu_whoami = 0;
+volatile uint32_t rtt_dbg_spi_ok = 0;
 volatile uint32_t rtt_dbg_wait_sample_us = 0;
 volatile uint32_t rtt_dbg_run_tasks_us = 0;
 volatile uint32_t rtt_dbg_extra_loop = 0;
