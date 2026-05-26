@@ -268,6 +268,11 @@
 #define CDC_SCS_ACM                 0x02
 #define CDC_SCS_UNION               0x06
 
+/* CDC ACM class requests (PSTN subclass) */
+#define CDC_GET_LINE_CODING           0x21U
+#define CDC_SET_LINE_CODING           0x20U
+#define CDC_SET_CONTROL_LINE_STATE    0x22U
+
 /* EP0 state machine */
 #define EP0_STATE_IDLE              0
 #define EP0_STATE_DATA_IN           1   /* Sending data to host */
@@ -466,6 +471,14 @@ static struct {
     volatile uint32_t serial_state; /* CDC SERIAL_STATE_* bits */
 } _cdc;
 
+/* Default 57600 8N1 — matches SERIAL0_BAUD on CUAV V5 */
+static uint8_t _cdc_line_coding[7] = {
+    0x00, 0xE1, 0x00, 0x00,  /* dwDTERate = 57600 */
+    0,                       /* bCharFormat = 1 stop bit */
+    0,                       /* bParityType = none */
+    8                        /* bDataBits = 8 */
+};
+
 /* User callbacks */
 static usb_rx_callback_t _rx_cb = NULL;
 static void *_rx_cb_arg = NULL;
@@ -498,6 +511,7 @@ static void _otg_fifo_read(volatile uint32_t *fifop, uint8_t *buf, size_t n);
 static void _usb_reset(void);
 static void _ep0_handle_setup(void);
 static int _ep0_handle_std_request(void);
+static int _ep0_handle_class_request(void);
 static void _ep0_send_data(const uint8_t *data, uint32_t len);
 static void _ep0_send_status(void);
 static void _ep0_stall(void);
@@ -709,6 +723,11 @@ static void _usb_reset(void)
     _usb.enumerated = false;
     _usb.device_addr = 0;
     _usb.configured = false;
+    /* DCTL.SDIS must be cleared: core auto-sets SDIS when host sends USB reset.
+     * If not cleared, device stays in soft-disconnect and never enumerates.
+     * ChibiOS reference: same approach — DCTL=0 after reset. */
+    _DEV->DCTL = 0;
+    __DSB();
 }
 
 /* ========================================================================== */
@@ -960,6 +979,58 @@ static int _ep0_handle_std_request(void)
 }
 
 /* ========================================================================== */
+/* Internal: Handle CDC class requests on EP0 (ChibiOS sduRequestsHook)      */
+/* ========================================================================== */
+
+static int _ep0_handle_class_request(void)
+{
+    uint8_t bmReqType = _ep0.setup[0];
+    uint8_t bRequest  = _ep0.setup[1];
+    uint16_t wValue   = _ep0.setup[2] | ((uint16_t)_ep0.setup[3] << 8);
+    uint16_t wLength  = _ep0.setup[6] | ((uint16_t)_ep0.setup[7] << 8);
+
+    if ((bmReqType & 0x60U) != 0x20U) {
+        return -1;
+    }
+
+    switch (bRequest) {
+    case CDC_GET_LINE_CODING:
+        if (wLength > sizeof(_cdc_line_coding)) {
+            wLength = sizeof(_cdc_line_coding);
+        }
+        _ep0_send_data(_cdc_line_coding, wLength);
+        _ep0.ep0state = EP0_STATE_DATA_IN;
+        return 0;
+
+    case CDC_SET_LINE_CODING:
+        _ep0.data_ptr = _cdc_line_coding;
+        _ep0.data_len = (wLength > sizeof(_cdc_line_coding)) ?
+                        sizeof(_cdc_line_coding) : wLength;
+        _ep0.data_sent = 0;
+        _ep0.ep0state = EP0_STATE_DATA_OUT;
+        return 0;
+
+    case CDC_SET_CONTROL_LINE_STATE:
+        if (wValue & 0x0001U) {
+            _cdc.serial_state |= 0x0001U;
+        } else {
+            _cdc.serial_state &= ~0x0001U;
+        }
+        if (wValue & 0x0002U) {
+            _cdc.serial_state |= 0x0002U;
+        } else {
+            _cdc.serial_state &= ~0x0002U;
+        }
+        _ep0_send_status();
+        _ep0.ep0state = EP0_STATE_STATUS_IN;
+        return 0;
+
+    default:
+        return -1;
+    }
+}
+
+/* ========================================================================== */
 /* Internal: Handle setup packet from RX FIFO                                */
 /* ========================================================================== */
 
@@ -978,9 +1049,12 @@ static void _ep0_handle_setup(void)
 
     /* If there's a pending setup on EP0, handle it */
     int handled = _ep0_handle_std_request();
+    if (handled != 0) {
+        handled = _ep0_handle_class_request();
+    }
 
     if (handled != 0) {
-        /* Not a standard request (or class request not yet handled) */
+        /* Not a standard or class request */
         _ep0_stall();
     }
 }
@@ -991,30 +1065,46 @@ static void _ep0_handle_setup(void)
 
 static void _otg_rxfifo_handler(void)
 {
-    /* Pop all entries from RX FIFO */
-    while ((_OTG->GINTSTS & GINTMSK_RXFLVLM) != 0) {
-        uint32_t sts = _OTG->GRXSTSP;
-        (void)_OTG->GRXSTSP; /* Consume */
+    /* Pop one entry from RX FIFO (ChibiOS otg_rxfifo_handler) */
+    if ((_OTG->GINTSTS & GINTSTS_RXFLVL) == 0) {
+        return;
+    }
 
-        uint32_t cnt  = (sts & GRXSTSP_BCNT_MASK) >> GRXSTSP_BCNT_SHIFT;
-        uint32_t ep   = (sts & GRXSTSP_EPNUM_MASK) >> GRXSTSP_EPNUM_SHIFT;
-        uint32_t pkt  = (sts & GRXSTSP_PKTSTS_MASK) >> GRXSTSP_PKTSTS_SHIFT;
+    uint32_t sts = _OTG->GRXSTSP;
+    (void)_OTG->GRXSTSP;
 
-        switch (pkt) {
-        case GRXSTSP_SETUP_DATA: {
-            /* Read 8-byte setup packet from RX FIFO */
-            _otg_fifo_read(&_FIFO(0), _ep0.setup, 8);
-            /* Track what we just received */
-            _ep0_setup_term();
-            break;
-        }
-        case GRXSTSP_SETUP_COMP: {
-            /* Setup completed — handle the request now */
-            _ep0_handle_setup();
-            break;
-        }
+    uint32_t cnt  = (sts & GRXSTSP_BCNT_MASK) >> GRXSTSP_BCNT_SHIFT;
+    uint32_t ep   = (sts & GRXSTSP_EPNUM_MASK) >> GRXSTSP_EPNUM_SHIFT;
+    uint32_t pkt  = (sts & GRXSTSP_PKTSTS_MASK) >> GRXSTSP_PKTSTS_SHIFT;
+
+    switch (pkt) {
+    case GRXSTSP_SETUP_DATA: {
+        _otg_fifo_read(&_FIFO(0), _ep0.setup, 8);
+        _ep0_setup_term();
+        break;
+    }
+    case GRXSTSP_SETUP_COMP: {
+        /* Setup handling is done on DOEPINT_STUP (ChibiOS path) */
+        break;
+    }
         case GRXSTSP_OUT_DATA: {
-            if (ep == 2) {
+            if (ep == 0 && _ep0.ep0state == EP0_STATE_DATA_OUT &&
+                _ep0.data_ptr != NULL) {
+                uint32_t space = _ep0.data_len - _ep0.data_sent;
+                uint32_t rd = cnt;
+                if (rd > space) {
+                    rd = space;
+                }
+                _otg_fifo_read(&_FIFO(0), _ep0.data_ptr + _ep0.data_sent, rd);
+                _ep0.data_sent += rd;
+                if (cnt > rd) {
+                    _otg_fifo_read(&_FIFO(0), NULL, cnt - rd);
+                }
+                if (_ep0.data_sent >= _ep0.data_len) {
+                    _ep0_send_status();
+                    _ep0.ep0state = EP0_STATE_STATUS_IN;
+                }
+            } else if (ep == 2) {
                 /* CDC data from host — read into bounce buffer */
                 if (_rx_cb != NULL) {
                     uint8_t buf[EP2_MAX_PACKET];
@@ -1044,7 +1134,6 @@ static void _otg_rxfifo_handler(void)
         default:
             break;
         }
-    }
 }
 
 /* ========================================================================== */
@@ -1099,9 +1188,12 @@ static void _ep0_in_term(bool success)
 static void _ep0_out_term(bool success)
 {
     (void)success;
-    /* OUT transfer complete on EP0 = status OUT from host.
-     * This happens during control write transfers (host sends data,
-     * device receives, then host sends ZLP status). */
+    if (_ep0.ep0state == EP0_STATE_DATA_OUT) {
+        _ep0_send_status();
+        _ep0.ep0state = EP0_STATE_STATUS_IN;
+        return;
+    }
+    /* Status OUT from host after control read — transfer complete */
     _ep0.ep0state = EP0_STATE_IDLE;
 }
 
@@ -1141,11 +1233,9 @@ static void _otg_epout_handler(uint32_t ep)
     _OUT_EP(ep)->DOEPINT = epint;
 
     if (epint & DOEPINT_STUP) {
-        /* Setup packet received on EP0.
-         * The RX FIFO handler already read it; no need to read again.
-         * But the STUP interrupt signals the host completed the setup. */
-        /* Some cores fire STUP before RXFLVL — we need to handle this.
-         * The setup packet is already in _ep0.setup[], so just call handler. */
+        if (ep == 0) {
+            _ep0_handle_setup();
+        }
     }
 
     if (epint & DOEPINT_XFRC) {
@@ -1186,6 +1276,21 @@ bool usb_lld_init_rtt(void)
     SCB->VTOR = (uint32_t)g_pfnVectors;
     __DSB();
     __ISB();
+
+    /* ---- Step 0a: PWR clock + USB PHY supply ---- */
+    /* Per RM0410 §5.2.3: PWR_CR2.USV (bit 0) enables the USB PHY internal
+     * linear regulator. This MUST be set before accessing the OTG_FS peripheral.
+     * The bootloader does this but the firmware jump does not carry it over. */
+    RCC->APB1ENR |= RCC_APB1ENR_PWREN;
+    (void)RCC->APB1ENR;
+    __DSB();
+    { volatile uint32_t _d = 100; while (_d--) { __NOP(); } }
+
+    /* Enable USB Supply Valid on PHY internal regulator */
+    PWR->CR2 |= (1UL << 0);   /* USV: USB Supply Valid (RM0410 §5.2.3) */
+    (void)PWR->CR2;
+    __DSB();
+    { volatile uint32_t _d = 1000; while (_d--) { __NOP(); } }
 
     /* ---- Step 1: Enable OTG_FS clock and reset ---- */
     RCC->AHB2ENR |= RCC_AHB2ENR_OTGFSEN;
@@ -1244,9 +1349,42 @@ bool usb_lld_init_rtt(void)
     (void)_OTG->GUSBCFG;
     __DSB();
 
-    /* ---- Step 6: Soft disconnect → reconnect cycle ---- */
-    /* Force D+ low so the host detects a clean disconnect. Without this
-     * cycle the host may never see the device after bootloader hand-off. */
+    /* ---- Step 6: GAHBCFG — no DMA, no global int yet ---- */
+    _OTG->GAHBCFG = 0;
+    __DSB();
+
+    /* ---- Step 7: Disable endpoints + clear pending ---- */
+    _otg_disable_endpoints();
+    _DEV->DIEPMSK = 0;
+    _DEV->DOEPMSK = 0;
+    _DEV->DAINTMSK = 0;
+
+    /* Set GINTMSK — include RX/EP from start so setup works before USBRST */
+    _OTG->GINTMSK = GINTMSK_ENUMDNEM | GINTMSK_USBRSTM |
+                    GINTMSK_USBSUSPM | GINTMSK_ESUSPM |
+                    GINTMSK_SRQM | GINTMSK_WKUPM |
+                    GINTMSK_IISOIXFRM | GINTMSK_IISOOXFRM |
+                    GINTMSK_RXFLVLM | GINTMSK_OEPM | GINTMSK_IEPM;
+
+    /* Clear all pending interrupts BEFORE enabling global int */
+    _OTG->GINTSTS = 0xFFFFFFFFU;
+    (void)_OTG->GINTSTS;
+
+    /* ---- Step 8: Enable global interrupt ---- */
+    _OTG->GAHBCFG |= GAHBCFG_GINTMSK;
+    __DSB();
+
+    /* ---- Step 9: VBUS sensing + transceiver (AFTER global int enabled) ---- */
+    /* GCCFG = VBDEN | VBUSBSEN (NOT PWRDWN! PWRDWN powers down the PHY). */
+    _OTG->GOTGCTL = GOTGCTL_BVALOEN | GOTGCTL_BVALOVAL;
+    _OTG->GCCFG = GCCFG_VBDEN | GCCFG_VBUSBSEN;
+    __DSB();
+
+    /* ---- Step 10: Soft disconnect → reconnect cycle (AFTER all config!) ---- */
+    /* CRITICAL: Must be done AFTER GINTSTS is cleared and GINTMSK is enabled,
+     * otherwise the USBRST event that follows reconnect will fire during init
+     * and get lost in the GINTSTS=0xFFFFFFFF clear at Step 8. The host detects
+     * connect → sends 10ms reset → USBRST → poll loop handles it properly. */
     _DEV->DCTL = DCTL_SDIS;                    /* pull D+ low */
     __DSB();
     { volatile uint32_t _d = 50000; while (_d--) { __NOP(); } }
@@ -1254,39 +1392,17 @@ bool usb_lld_init_rtt(void)
     __DSB();
     { volatile uint32_t _d = 50000; while (_d--) { __NOP(); } }
 
-    /* ---- Step 7: VBUS sensing + transceiver (AFTER core reset) ---- */
-    /* GCCFG = VBDEN | VBUSBSEN (NOT PWRDWN! PWRDWN powers down the PHY). */
-    _OTG->GOTGCTL = GOTGCTL_BVALOEN | GOTGCTL_BVALOVAL;
-    _OTG->GCCFG = GCCFG_VBDEN | GCCFG_VBUSBSEN;
-    __DSB();
-
-    /* ---- Step 8: GAHBCFG — no DMA, no global int yet ---- */
-    _OTG->GAHBCFG = 0;
-    __DSB();
-
-    /* ---- Step 8: Disable endpoints + clear pending ---- */
-    _otg_disable_endpoints();
-    _DEV->DIEPMSK = 0;
-    _DEV->DOEPMSK = 0;
-    _DEV->DAINTMSK = 0;
-
-    /* Set GINTMSK */
-    _OTG->GINTMSK = GINTMSK_ENUMDNEM | GINTMSK_USBRSTM |
-                    GINTMSK_USBSUSPM | GINTMSK_ESUSPM |
-                    GINTMSK_SRQM | GINTMSK_WKUPM |
-                    GINTMSK_IISOIXFRM | GINTMSK_IISOOXFRM;
-
-    /* Clear all pending interrupts */
-    _OTG->GINTSTS = 0xFFFFFFFFU;
-    (void)_OTG->GINTSTS;
-
-    /* ---- Step 9: Enable global interrupt ---- */
-    _OTG->GAHBCFG |= GAHBCFG_GINTMSK;
-    __DSB();
-
     _usb.initialized = true;
     /* DEBUG: magic = 2 = function completed */
     rtt_dbg_usb_init = 2;
+
+    /* ---- Step 12: Enable NVIC interrupt for OTG_FS ---- */
+    /* ChibiOS reference: hal_usb_lld.c:770
+     * nvicEnableVector(STM32_OTG1_NUMBER, STM32_USB_OTG1_IRQ_PRIORITY)
+     * Priority 5 = below timer(4) but above main loop(5).
+     * Group 3 = 4 bits for preempt priority (STM32F7 default). */
+    NVIC_SetPriority(OTG_FS_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(), 5, 0));
+    NVIC_EnableIRQ(OTG_FS_IRQn);
     _usb.enumerated = false;
     _usb.device_addr = 0;
     _usb.configured = false;
@@ -1310,8 +1426,8 @@ void usb_lld_poll_rtt(void)
         return;
     }
 
-    /* Clear pending bits by writing them back */
-    _OTG->GINTSTS = sts;
+    /* Clear pending bits — defer RXFLVL until FIFO drained */
+    _OTG->GINTSTS = sts & ~GINTSTS_RXFLVL;
     (void)_OTG->GINTSTS;
 
     /* ---- USB Reset ---- */
@@ -1357,7 +1473,11 @@ void usb_lld_poll_rtt(void)
 
     /* ---- RX FIFO data available ---- */
     if (sts & GINTSTS_RXFLVL) {
-        _otg_rxfifo_handler();
+        do {
+            _otg_rxfifo_handler();
+        } while (_OTG->GINTSTS & GINTSTS_RXFLVL);
+        _OTG->GINTSTS = GINTSTS_RXFLVL;
+        (void)_OTG->GINTSTS;
     }
 
     /* ---- IN endpoint interrupts ---- */
@@ -1533,4 +1653,13 @@ void usb_lld_rearm_cdc_out(void)
             __DSB();
         }
     }
+}
+
+/* ========================================================================== */
+/* OTG_FS_IRQHandler — ChibiOS 1:1 interrupt-driven USB event dispatching    */
+/* ChibiOS reference: hal_usb_lld.c:531-722                                   */
+/* ========================================================================== */
+void OTG_FS_IRQHandler(void)
+{
+    usb_lld_poll_rtt();
 }
