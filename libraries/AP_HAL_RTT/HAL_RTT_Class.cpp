@@ -279,13 +279,12 @@ extern "C" void ap_rtt_iwdg_init(void);
 
 void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
 {
-    rtt_dbg_hal_run_called = 0xAAAAAAAA;
-
-    /* Feed + reconfigure IWDG IMMEDIATELY — hardware IWDG is active from reset
-     * with ~512ms timeout because FLASH_OPTCR_IWDG_SW=0 on CUAV V5.
-     * This must happen before any long-running init, timer, or USB enumeration.
-     * ap_rtt_iwdg_init() reconfigures timeout to ~10s and feeds the counter. */
+    /* Feed + reconfigure IWDG before anything else — hardware IWDG is active from
+     * reset with ~512ms timeout (FLASH_OPTCR_IWDG_SW=0 on CUAV V5).  Must run
+     * before debug markers or init that can exceed the remaining margin. */
     ap_rtt_iwdg_init();
+    rtt_dbg_hal_run_called = 0xAAAAAAAA;
+    rt_kprintf("HAL_RTT::run\n");
 
     /* Strategic feed — PVU/RVU stuck means IWDG still at ~512ms timeout.
      * SysTick feeds every 1ms from here on, but ap_rtt_iwdg_init() may have
@@ -358,6 +357,12 @@ void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
     rtt_dbg_setup_trace = 30;
     usb_lld_init_rtt();
     rtt_dbg_setup_trace = 31;
+
+    /* Poll immediately — USB bus reset from host happens right after device
+     * connects (microseconds), but usb_lld_init_rtt clears GINTSTS. If we
+     * don't poll here, the USBRST event is lost forever and USB never
+     * enumerates.  Subsequent polls happen in the main loop. */
+    usb_lld_poll_rtt();
 
     hal.serial(0)->begin(SERIAL0_BAUD);
     rtt_dbg_setup_trace = 32;
