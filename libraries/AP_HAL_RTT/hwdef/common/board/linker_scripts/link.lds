@@ -7,7 +7,8 @@
 MEMORY
 {
     ROM (rx) : ORIGIN = 0x08008000, LENGTH = 2016k /* 2048KB full flash with 32KB bootloader reserve — patched by deploy from hwdef FLASH_ORIGIN/FLASH_LENGTH_KB */
-    RAM (rw) : ORIGIN = 0x20000000, LENGTH =  512k /* 512K sram */
+    DTCM (rw) : ORIGIN = 0x20000000, LENGTH = 128K /* DTCM — CPU-only, not DMA-accessible */
+    SRAM1 (rw) : ORIGIN = 0x20020000, LENGTH = 384K /* SRAM1 — DMA-accessible */
 }
 ENTRY(Reset_Handler)
 _system_stack_size = 0x4000;
@@ -107,7 +108,7 @@ SECTIONS
         . = ALIGN(4);
         /* This is used by the startup in order to initialize the .data secion */
         _edata = . ;
-    } >RAM
+    } > DTCM
 
     .stack :
     {
@@ -116,7 +117,7 @@ SECTIONS
         . = . + _system_stack_size;
         . = ALIGN(4);
         _estack = .;
-    } >RAM
+    } > DTCM
 
     __bss_start = .;
     .bss :
@@ -134,11 +135,11 @@ SECTIONS
         _ebss = . ;
 
         *(.bss.init)
-    } > RAM
+    } > DTCM
     __bss_end = .;
 
-    /* DMA-safe BSS: force into SRAM1 (>= 0x20020000) even if .bss is in DTCM */
-    .sram1_bss (NOLOAD) :
+    /* DMA-safe BSS: must live in SRAM1 (general DMA cannot access DTCM) */
+    .sram1_bss 0x20020000 (NOLOAD) :
     {
         . = ALIGN(32);
         _sram1_bss_start = .;
@@ -146,7 +147,7 @@ SECTIONS
         *(.sram1_bss.*)
         . = ALIGN(32);
         _sram1_bss_end = .;
-    } > RAM
+    } > SRAM1
 
     _end = .;
 

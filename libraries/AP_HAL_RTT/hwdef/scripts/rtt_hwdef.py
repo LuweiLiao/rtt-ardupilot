@@ -895,7 +895,12 @@ class RTTHWDef(HWDef):
 
             f.write('MEMORY\n{\n')
             f.write('    ROM (RX) : ORIGIN = 0x%08x, LENGTH = %dK\n' % (flash_origin, flash_length // 1024))
-            f.write('    RAM (RW) : ORIGIN = 0x%08x, LENGTH = %dK\n' % (ram_base, ram_kb))
+            # STM32F7: split DTCM (128K, no DMA) + SRAM1 (remainder, DMA-safe)
+            if ram_base == 0x20000000 and ram_kb >= 512:
+                f.write('    DTCM (RW) : ORIGIN = 0x20000000, LENGTH = 128K\n')
+                f.write('    SRAM1 (RW) : ORIGIN = 0x20020000, LENGTH = %dK\n' % (ram_kb - 128))
+            else:
+                f.write('    RAM (RW) : ORIGIN = 0x%08x, LENGTH = %dK\n' % (ram_base, ram_kb))
             f.write('}\n\n')
 
             # Read existing linker script for section layout template

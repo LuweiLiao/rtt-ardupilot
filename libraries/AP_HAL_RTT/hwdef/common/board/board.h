@@ -29,17 +29,15 @@
  *   0x20000000 – 0x2001FFFF  DTCM  128 KB  (CPU-only, DMA cannot access)
  *   0x20020000 – 0x2007FFFF  SRAM1 384 KB  (DMA-accessible)
  *
- * BSS/data starts in DTCM but may spill into SRAM1 when the firmware
- * is large.  The heap MUST start after _ebss so it never overlaps BSS.
- * We also enforce a minimum of SRAM1 start to keep heap DMA-accessible.
+ * link.lds places .bss in DTCM and .sram1_bss in SRAM1; _end follows both.
+ * Heap lives in the remaining SRAM1 after _end (DMA-accessible).
  */
 #define STM32F7_SRAM1_START  0x20020000UL
+#define STM32F7_SRAM1_END    0x20080000UL
 
-extern int _end;  /* after .bss AND .sram1_bss in linker script */
-#define _HEAP_AFTER_ALL  ((rt_ubase_t)&_end)
-#define HEAP_BEGIN       ((void *)((_HEAP_AFTER_ALL > STM32F7_SRAM1_START) \
-                                    ? _HEAP_AFTER_ALL : STM32F7_SRAM1_START))
-#define HEAP_END         STM32_SRAM_END
+extern int _end;  /* after .bss and .sram1_bss in linker script */
+#define HEAP_BEGIN       ((void *)&_end)
+#define HEAP_END         ((void *)STM32F7_SRAM1_END)
 
 void rtt_clock_init(void);
 void rtt_enable_peripheral_clocks(void);
