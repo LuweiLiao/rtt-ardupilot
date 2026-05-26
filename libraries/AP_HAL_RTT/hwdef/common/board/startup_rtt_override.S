@@ -23,7 +23,23 @@
     .section .text.Reset_Handler
     .type Reset_Handler, %function
 Reset_Handler:
+    /* Enable FPU (CP10, CP11 full access) — required before any C code runs,
+     * otherwise the first FPU instruction (e.g. VSTR) triggers NOCP / HardFault. */
+    ldr   r0, =0xE000ED88
+    ldr   r1, [r0]
+    orr.w r1, r1, #0x00F00000
+    str   r1, [r0]
+    dsb
+    isb
+
     ldr   sp, =_estack
+
+    /* Feed IWDG immediately — hardware IWDG has ~512ms timeout from reset.
+     * This must happen before any C init (.data copy, .bss zero, SystemInit). */
+    ldr   r0, =0xAAAA
+    ldr   r1, =0x40003000
+    str   r0, [r1]
+    dsb
 
     /* Set VTOR to app vector table BEFORE anything else.
      * The boot_stub leaves VTOR pointing at 0x200000 (SRAM copy of
@@ -67,6 +83,14 @@ Reset_Handler:
 
     /* __libc_init_array is deferred to rt_board_init.c via INIT_COMPONENT_EXPORT,
        so C++ ctors run AFTER RTT heap is initialized. */
+
+    /* Feed IWDG again — .data copy, .bss init, SystemInit, and entry()'s
+     * rt_components_init + __libc_init_array can exceed 512ms combined. */
+    ldr   r0, =0xAAAA
+    ldr   r1, =0x40003000
+    str   r0, [r1]
+    dsb
+
     bl    entry
     bx    lr
     .size Reset_Handler, .-Reset_Handler
