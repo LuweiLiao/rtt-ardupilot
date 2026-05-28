@@ -50,6 +50,12 @@ COPTER_LIBRARIES = [
 
 SOURCE_EXTS = ('*.S', '*.c', '*.cpp')
 
+# Root-level SPI LLD experiments; production SPI uses hwdef/common board drv_spi_lld + SPIDevice CMSIS.
+_AP_HAL_RTT_ROOT_EXCLUDE = frozenset([
+    'hal_spi_lld.c',
+    'hal_spi_lld_rtt.c',
+])
+
 
 def _libs_for_copter(with_can=True):
     out = list(COMMON_VEHICLE_DEPENDENT_LIBRARIES)
@@ -91,10 +97,29 @@ def _glob_subdir_sources(ap_root, rel_dir):
     return collected
 
 
+def _usb_backend_for_collect():
+    scripts = os.path.join(os.path.dirname(os.path.abspath(__file__)))
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import rtt_usb_backend
+    return rtt_usb_backend.resolve_usb_backend()['backend']
+
+
+def _append_bsp_include(paths, bsp_dir, hwdef_common, *rel_parts):
+    """Prefer deploy BSP paths; fall back to hwdef/common when deploy is incomplete."""
+    rel = os.path.join(*rel_parts)
+    for base in (bsp_dir, hwdef_common):
+        d = os.path.join(base, rel)
+        if os.path.isdir(d) and d not in paths:
+            paths.append(d)
+            return
+
+
 def _collect_sources(ap_root, bsp_dir, rtt_root):
     ap_root = os.path.abspath(ap_root)
     bsp_dir = os.path.abspath(bsp_dir)
     rtt_root = os.path.abspath(rtt_root)
+    usb_backend = os.environ.get('RTT_USB_BACKEND', '').strip().lower() or _usb_backend_for_collect()
     sources = []
 
     # ArduCopter/*.cpp
@@ -119,16 +144,25 @@ def _collect_sources(ap_root, bsp_dir, rtt_root):
 
     # AP_HAL_RTT: root-level .c and .cpp only (no rtt_bsp_*); exclude rtt_board_init.c (BSP provides rt_hw_board_init)
     hal_rtt = os.path.join(ap_root, 'libraries', 'AP_HAL_RTT')
+    scripts = os.path.join(ap_root, 'Tools', 'scripts')
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import rtt_usb_backend
     if os.path.isdir(hal_rtt):
         for ext in SOURCE_EXTS:
             for p in glob.glob(os.path.join(hal_rtt, ext)):
                 if os.path.isfile(p):
                     name = os.path.basename(p)
+                    if name in _AP_HAL_RTT_ROOT_EXCLUDE:
+                        continue
                     if name == 'rtt_board_init.c':
                         continue
                     rel = os.path.relpath(p, ap_root)
-                    if not rel.startswith('libraries/AP_HAL_RTT/rtt_bsp_'):
-                        sources.append(rel)
+                    if rel.startswith('libraries/AP_HAL_RTT/rtt_bsp_'):
+                        continue
+                    if not rtt_usb_backend.filter_ap_hal_rtt_source(rel, usb_backend):
+                        continue
+                    sources.append(rel)
 
     # SCons full-build for RTT can enable scripting from hwdef.h, so include
     # both AP_Scripting wrappers and bundled Lua runtime sources.
@@ -141,6 +175,11 @@ def _collect_sources(ap_root, bsp_dir, rtt_root):
     # BSP HAL, HAL_Drivers, system_stm32h7xx: not added here; RTT BSP already builds
     # board/ and packages/ via its SConscript, so we avoid duplicate symbols.
 
+    if usb_backend == 'cherryusb':
+        for rel in rtt_usb_backend.cherryusb_extra_sources(ap_root):
+            if rel not in sources:
+                sources.append(rel)
+
     return sources
 
 
@@ -149,6 +188,7 @@ def _collect_cpppath(ap_root, bsp_dir, rtt_root, build_root, board="rtt_pixhawk6
     bsp_dir = os.path.abspath(bsp_dir)
     rtt_root = os.path.abspath(rtt_root)
     build_root = os.path.abspath(build_root) if build_root else ap_root
+    usb_backend = os.environ.get('RTT_USB_BACKEND', '').strip().lower() or _usb_backend_for_collect()
     paths = []
 
     paths.append(build_root)
@@ -170,6 +210,8 @@ def _collect_cpppath(ap_root, bsp_dir, rtt_root, build_root, board="rtt_pixhawk6
         paths.append(rtdevice)
     paths.append(bsp_dir)
     paths.append(os.path.join(bsp_dir, 'board'))
+    _hwdef_common = os.path.join(ap_root, 'libraries', 'AP_HAL_RTT', 'hwdef', 'common')
+    _append_bsp_include(paths, bsp_dir, _hwdef_common, 'board', 'drivers_ll')
     stm32_lib = os.path.join(rtt_root, 'bsp', 'stm32', 'libraries', 'HAL_Drivers')
     for sub in ('', 'drivers', 'config', 'drivers/config'):
         d = os.path.join(stm32_lib, sub) if sub else stm32_lib
@@ -182,18 +224,21 @@ def _collect_cpppath(ap_root, bsp_dir, rtt_root, build_root, board="rtt_pixhawk6
         paths.append(_cmsis_dsp)
 
     if board == 'rtt_cuav_v5':
-        # F7 BSP: packages from pkgs --update
-        paths.append(os.path.join(bsp_dir, 'packages', 'stm32f7_hal_driver-latest', 'Inc'))
-        paths.append(os.path.join(bsp_dir, 'board', 'CubeMX_Config', 'Inc'))
-        paths.append(os.path.join(bsp_dir, 'packages', 'stm32f7_cmsis_driver-latest', 'Include'))
-        paths.append(os.path.join(bsp_dir, 'packages', 'CMSIS-Core-latest', 'Include'))
+        for rel in (
+            ('packages', 'stm32f7_hal_driver-latest', 'Inc'),
+            ('board', 'CubeMX_Config', 'Inc'),
+            ('packages', 'stm32f7_cmsis_driver-latest', 'Include'),
+            ('packages', 'CMSIS-Core-latest', 'Include'),
+        ):
+            _append_bsp_include(paths, bsp_dir, _hwdef_common, *rel)
     else:
-        # H7 pixhawk6c_mini
-        paths.append(os.path.join(bsp_dir, 'packages', 'stm32h7_hal_driver-latest', 'Inc'))
-        paths.append(os.path.join(bsp_dir, 'board', 'CubeMX_Config', 'Inc'))
-        paths.append(os.path.join(bsp_dir, 'packages', 'stm32h7_cmsis_driver-latest', 'Include'))
-        paths.append(os.path.join(bsp_dir, 'packages', 'CMSIS-Core-latest', 'Include'))
-        paths.append(os.path.join(bsp_dir, 'packages', 'stm32h7_cmsis_driver-latest', 'Include'))
+        for rel in (
+            ('packages', 'stm32h7_hal_driver-latest', 'Inc'),
+            ('board', 'CubeMX_Config', 'Inc'),
+            ('packages', 'stm32h7_cmsis_driver-latest', 'Include'),
+            ('packages', 'CMSIS-Core-latest', 'Include'),
+        ):
+            _append_bsp_include(paths, bsp_dir, _hwdef_common, *rel)
     # DroneCAN/libcanard include path (needed by AP_DroneCAN/AP_Canard_iface.h)
     dronecan_dir = os.path.join(ap_root, 'modules', 'DroneCAN', 'libcanard')
     if os.path.isdir(dronecan_dir):
@@ -202,6 +247,12 @@ def _collect_cpppath(ap_root, bsp_dir, rtt_root, build_root, board="rtt_pixhawk6
     dronecan_gen = os.path.join(ap_root, 'build', board, 'dronecan-gen', 'include')
     if os.path.isdir(dronecan_gen):
         paths.append(dronecan_gen)
+    if usb_backend == 'cherryusb':
+        scripts = os.path.join(ap_root, 'Tools', 'scripts')
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        import rtt_usb_backend
+        paths.extend(rtt_usb_backend.cherryusb_extra_cpppath(ap_root))
     return paths
 
 

@@ -22,21 +22,23 @@
 ## 生成 hwdef.h
 - 用途：从 `hwdef.dat` 重新生成 `hwdef.h`
 - 命令：`python3 libraries/AP_HAL_RTT/hwdef/scripts/rtt_hwdef.py`
-- 成功判据：`libraries/AP_HAL_RTT/rtt_bsp_cuav_v5/hwdef.h` 刷新
+- 成功判据：`libraries/AP_HAL_RTT/hwdef/cuav_v5/hwdef.h` 刷新（部署后亦见于 `build/rtt_deploy/cuav_v5/hwdef.h`）
 - 注意：修改 `hwdef.dat` 后必须手动执行此命令再编译
 
 ## OpenOCD 一步烧录（推荐）
-- 用途：直接烧录 + 验证 + 复位，无需持久 OpenOCD 服务器
-- 命令：`openocd -f interface/stlink.cfg -f target/stm32f7x.cfg -c "program build/rtt_deploy/cuav_v5/rtthread.bin verify 0x08008000 reset exit"`
-- 成功判据：`Verified OK` + `Resetting Target`
-- 常见失败：旧 OpenOCD 进程占端口（`pkill -f openocd`）；首次使用需 `sudo udevadm control --reload-rules && sudo udevadm trigger` 或直接 `sudo` 运行
-- 环境：Ubuntu 24.04 物理机直接可用，无需 usbipd
+- 用途：直接烧录 + 验证 + 复位，**命令结束即退出**，不占用 ST-Link
+- 命令：`openocd -f interface/stlink.cfg -f target/stm32f7x.cfg -c "program build/rtt_cuav_v5/rtthread.bin 0x08008000 verify reset" -c "resume" -c "exit"`
+- 成功判据：`Verified OK` + `Resetting Target`；**进程必须退出**（`pgrep openocd` 为空）
+- **强制规范**：调试会话结束必须关 OpenOCD（`Ctrl+C` 或 `pkill -f openocd`）；禁止留 `openocd ... -c init -c reset run` 后台占 ST-Link，否则后续烧录/GDB 会 `init failed`
+- 烧录前检查：`pgrep -a openocd || echo OK`
+- 常见失败：旧 OpenOCD 进程占 ST-Link（`pkill -f openocd`）；首次使用需 udev 规则或 `sudo`
 
 ## OpenOCD 启动调试服务器
-- 用途：启动 GDB 调试服务器
+- 用途：长时间 GDB 调试；**用完必须关闭**
 - 命令：`openocd -f interface/stlink.cfg -f target/stm32f7x.cfg`
 - 成功判据：端口 `:3333` 可被 GDB 连接
-- 常见失败：`claim interface failed`、旧 openocd 占用
+- **结束**：调试完成后 `pkill -f openocd` 或终端 `Ctrl+C`；提交 trace/切换任务前执行 `pgrep openocd` 确认无残留
+- 常见失败：`claim interface failed`、旧 openocd 占用（根因同上）
 
 ## GDB 单次快速检查（推荐）
 - 用途：不启动持久 OpenOCD 服务器，一次性连接检查后断开
@@ -83,9 +85,56 @@
 |------|---------|-----------|-------------|------|
 | ST-LINK V2 | 0483:3748 | — | — | OpenOCD 烧录/调试 |
 | CH343 USB-TTL | 1A86:55D3 | /dev/ttyACM0 | usb-1a86_USB_Single_Serial_* | UART7 msh 控制台 |
-| ArduPilot CDC | 1209:5741 | /dev/ttyACM1 | usb-ArduPilot_CUAVv5_RTT_* | MAVLink 通信 |
+| ArduPilot CDC | 1209:5741 | /dev/ttyACM1 | `usb-ArduPilot_CUAVv5_RTT_*` 或 Cherry 下 `usb-APM_CUAV_V5_CDC_1_*` | MAVLink 通信 |
+
+## 分层模块测试构建（bring-up / USB gate）
+
+- 用途：全量验证前，按 `libraries/AP_HAL_RTT/test/README.md` 与 `Tools/scripts/rtt_test_manifest.py` 做**可构建**门禁（不替代实机分层跑测）
+- 命令（**串行**执行，勿并行两个 `--test=`）：
+  ```bash
+  cd /home/llw/firmare/pogo-apm
+  python3 -m SCons --target=cuav_v5 --test=L0_system -j$(nproc)
+  python3 -m SCons --target=cuav_v5 --test=L4_spi -j$(nproc)
+  python3 -m SCons --target=cuav_v5 --test=L7_cherryusb_cdc -j$(nproc)
+  ```
+- 成功判据：`scons: done building targets`；产物 `build/rtt_deploy/cuav_v5/rtthread.bin` 与 `rt-thread.elf`
+- 常见失败：并行 `--test=` 导致 `build/kernel/...` 对象缺失 → 对失败项**单独重跑**该 test
+
+## USB 后端选择与 L0 验证（2026-05-28）
+
+- 用途：在 **native / cherryusb / tinyusb** 间切换 SERIAL0 栈（互斥编译，单一 `OTG_FS_IRQHandler`）
+- 环境变量：`RTT_USB_BACKEND` = `native`（默认，省略即可）| `cherryusb` | `tinyusb`
+- 编译示例（主仓 Cherry L0 基线）：
+  ```bash
+  RTT_USB_BACKEND=cherryusb python3 -m SCons --target=cuav-v5 -j8
+  # 全量机型：RTT_USB_BACKEND=cherryusb python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)
+  # 默认 native：不设 RTT_USB_BACKEND
+  ```
+- 成功判据（构建）：生成 `build/rtt_cuav_v5/rtthread.bin`（或 `build/rtt_deploy/cuav_v5/rt-thread.elf`）；`arm-none-eabi-nm build/rtt_deploy/cuav_v5/rt-thread.elf | rg OTG_FS_IRQHandler` 仅 **一行**
+- **主仓 Cherry L0 一键 gate**（脚本在 `/tmp`，非仓库内；需 ST-Link + CDC）：
+  ```bash
+  POGO_APM_ROOT=/home/llw/firmare/pogo-apm \
+  RTT_USB_BACKEND=cherryusb \
+  /tmp/cherryusb_main_l0_gate.sh --skip-build --skip-bl --json --wait 30
+  ```
+  - 成功判据：**exit 0**；JSON 内 STANDBY(3)、参数达标、30s 流 types≥预期、post-L0 VTOR=`0x08008000`、CFSR/HFSR=0、IWDGRSTF=0
+  - 已构建时加 `--skip-build`；仅重烧 app 时可配合 OpenOCD `0x08008000`
+- L0 烧录（手工）：BL `0x08000000` + app `0x08008000`，上电等待 **≥12s**（bootloader 窗口）
+- L0 MAVLink（**仅 L0，非全量回归**）：
+  - `lsusb -d 1209:5741` 可见 CUAV V5 CDC
+  - 设备 by-id（**两种枚举名均可能**，gate 已兼容）：
+    - `usb-APM_CUAV_V5_CDC_1_*`（CherryUSB 主仓 L0 实测）
+    - `usb-ArduPilot_CUAVv5_RTT_*`（历史 native 命名）
+  - 常为 **`/dev/ttyACM1`**（勿与 ST-Link/CH343 的 ACM0 混淆）
+  - ```bash
+    python3 -c "from pymavlink import mavutil; m=mavutil.mavlink_connection('/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00', baud=115200); m.wait_heartbeat(timeout=15); print(m.target_system)"
+    ```
+  - 主仓 Cherry L0 实测：STANDBY(3)、FORMAT_VERSION=120.0、**904/904** 参数、30s 约 1798 msg / 22 types
+  - Post-L0：OpenOCD halt → VTOR/CFSR/HFSR/IWDGRSTF（gate 经 SCB 读 fault）
+- 常见失败：gate 要求旧 `usb-ArduPilot_*` 而固件枚举为 `usb-APM_*`（已修 gate）；resolve 把日志打进 stdout 污染设备路径（已改 stderr）；`ACM0` 非 ArduPilot CDC；并行 scons 无 `rtt_ar_archive` 时 ARG_MAX
+- 清理清单：`.cursor/usb-cleanup-inventory.md`
 
 ## 当前推荐的验证顺序
 1. **UART7 msh**：`picocom -b 115200 /dev/ttyACM0` — RT-Thread 底层状态
-2. **MAVLink**：`mavproxy.py --master=/dev/ttyACM1` — 参数 / 传感器验证
+2. **MAVLink**：`mavproxy.py --master=/dev/ttyACM1` — 参数 / 传感器验证（**确认 backend 与预期一致**）
 3. **GDB**：`arm-none-eabi-gdb -batch -ex "target remote | openocd ..." ...` — 底层诊断

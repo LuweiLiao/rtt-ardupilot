@@ -1,0 +1,11 @@
+import os
+from building import *
+
+cwd = GetCurrentDir()
+src = Glob('*.c')
+common_dir = os.path.normpath(os.path.join(cwd, '..', '..', '..', '_common'))
+src += Glob(os.path.join(common_dir, 'test_runner.c'))
+src += Glob(os.path.join(common_dir, 'test_stubs.c'))
+CPPPATH = [cwd, common_dir]
+group = DefineGroup('test_L6_cdc', src, depend = [''], CPPPATH = CPPPATH)
+Return('group')

@@ -1,0 +1,4 @@
+CherryUSB (minimal device CDC + DWC2 subset)
+Upstream: https://github.com/cherry-embedded/CherryUSB
+Version: v1.5.0 (see VERSION)
+License: Apache-2.0 (see LICENSE)

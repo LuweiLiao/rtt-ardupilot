@@ -1,0 +1,40 @@
+from building import *
+import os
+
+cwd = GetCurrentDir()
+common_dir = os.path.normpath(os.path.join(cwd, '..', '..', '_common'))
+board_dir = os.path.join(cwd, 'board')
+
+ap_root = os.environ.get('AP_ROOT', os.path.abspath(os.path.join(cwd, '..', '..', '..', '..', '..')))
+cherry_root = os.path.join(ap_root, 'libraries', 'AP_HAL_RTT', 'thirdparty', 'cherryusb')
+
+cherry_src = [
+    os.path.join(cherry_root, 'core', 'usbd_core.c'),
+    os.path.join(cherry_root, 'class', 'cdc', 'usbd_cdc_acm.c'),
+    os.path.join(cherry_root, 'port', 'dwc2', 'usb_dc_dwc2.c'),
+    os.path.join(cherry_root, 'osal', 'usb_osal_rtthread.c'),
+]
+
+src = Glob('*.c') + Glob(os.path.join(board_dir, '*.c'))
+src += Glob(os.path.join(common_dir, 'test_stubs.c'))
+src += Glob(os.path.join(common_dir, 'test_runner.c'))
+src += cherry_src
+
+CPPPATH = [
+    cwd,
+    board_dir,
+    common_dir,
+    os.path.join(cherry_root, 'common'),
+    os.path.join(cherry_root, 'core'),
+    os.path.join(cherry_root, 'class', 'cdc'),
+    os.path.join(cherry_root, 'port', 'dwc2'),
+    os.path.join(cherry_root, 'osal'),
+]
+
+CPPDEFINES = [
+    'L7_CHERRYUSB_CDC_TEST=1',
+]
+
+group = DefineGroup('test_L7_cherryusb_cdc', src, depend=[''], CPPPATH=CPPPATH, CPPDEFINES=CPPDEFINES)
+
+Return('group')
