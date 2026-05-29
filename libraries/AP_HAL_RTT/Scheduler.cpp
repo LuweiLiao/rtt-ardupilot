@@ -23,6 +23,7 @@
 #include "AP_HAL_RTT/RCOutput.h"
 #include "AP_HAL_RTT/RCInput.h"
 #include "AP_HAL_RTT/GPIO.h"
+#include "hal_usb_lld_rtt.h"
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Math/AP_Math.h>
 #include <AP_InternalError/AP_InternalError.h>
@@ -67,6 +68,8 @@ Scheduler::Scheduler()
  * ---------------------------------------------------------------- */
 extern "C" uint32_t SystemCoreClock;
 
+static void _poll_usb_if_active(void);
+
 void Scheduler::_delay_microseconds_dwt(uint16_t us)
 {
     SCB_DEMCR_REG |= (1U << 24);
@@ -74,7 +77,11 @@ void Scheduler::_delay_microseconds_dwt(uint16_t us)
 
     const uint32_t cycles = us * (SystemCoreClock / 1000000U);
     const uint32_t start = DWT_CYCCNT_REG;
+    uint32_t poll_div = 0;
     while ((DWT_CYCCNT_REG - start) < cycles) {
+        if (!usb_lld_is_configured_rtt() && ((++poll_div & 0x3FU) == 0U)) {
+            _poll_usb_if_active();
+        }
         /* spin — compiler barrier only, no DSB.
          * DSB stalls the ~14-cycle pipeline on every iteration
          * without improving wall-clock timing (which is governed
@@ -435,10 +442,17 @@ void Scheduler::init()
  *    < 1 tick : DWT busy-wait (true sub-tick delay; avoids 100us -> 1tick inflation)
  *    >= 1 tick: sleep whole ticks, then busy-wait the remaining sub-tick tail
  * ---------------------------------------------------------------- */
+/* Poll USB during setup delays so EP0 enumeration completes before main loop. */
+static void _poll_usb_if_active(void)
+{
+    usb_lld_poll_rtt();
+}
+
 void Scheduler::delay(uint16_t ms)
 {
     uint64_t start = AP_HAL::micros64();
     while ((AP_HAL::micros64() - start) / 1000 < ms) {
+        _poll_usb_if_active();
         delay_microseconds(1000);
         if (_min_delay_cb_ms <= ms) {
             if (in_main_thread()) {
@@ -483,6 +497,7 @@ void Scheduler::delay_microseconds(uint16_t us)
         return;
     }
 
+    _poll_usb_if_active();
     /* ≥200 µs: yield CPU.  us < tick_us (i.e. 201-999µs) rounds up to 1
      * tick (1000 µs), which is a necessary compromise given RTT's coarse
      * 1 kHz system timer.  The caller always has a micros64-based backup

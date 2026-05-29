@@ -794,6 +794,11 @@ volatile uint32_t rtt_uart_dbg_tick_calls = 0;
 volatile uint32_t rtt_uart_dbg_port_ticks[10] = {};
 volatile uint32_t rtt_uart_dbg_crash_port = 0xFFFFFFFF;  /* set to port_num on crash entry */
 
+/* USB TX backpressure diagnostics (GDB / ctl telemetry; cumulative) */
+volatile uint32_t rtt_uart_usb_diag_clears = 0;
+volatile uint32_t rtt_uart_usb_diag_write_fails = 0;
+volatile uint16_t rtt_uart_usb_diag_fail_streak = 0;
+
 void UARTDriver::_timer_tick(void)
 {
     rtt_uart_dbg_tick_calls++;
@@ -828,10 +833,14 @@ void UARTDriver::_timer_tick(void)
     }
 
     if (_is_usb && !_check_usb_connected()) {
-        /* Don't aggressively clear buffers — the USB configured check may
-         * briefly return false during normal operation (e.g. USB bus reset),
-         * causing all queued MAVLink data to be dropped. Instead, just skip
-         * draining and let the write-fail counter handle true disconnections. */
+        /* Drop queued TX only when the link is truly down — not on brief
+         * de-configure during bus reset while still connected. */
+        if (!usb_lld_get_connected_rtt() && _writebuf.available() > 0) {
+            _writebuf.clear();
+            _usb_write_fail_count = 0;
+            rtt_uart_usb_diag_fail_streak = 0;
+            rtt_uart_usb_diag_clears++;
+        }
         return;
     }
 
@@ -839,42 +848,33 @@ void UARTDriver::_timer_tick(void)
     _drain_writebuf_to_dev();
 
     if (_is_usb) {
-        /* Track consecutive write failures: drain returned 0 bytes while data
-         * was queued.  Only clear the write buffer if the USB endpoint is truly
-         * stuck (no progress for 5 seconds at 1 kHz tick = 5000 ticks). */
-        static uint32_t _diag_last_ms = 0;
-        static uint32_t _diag_clears = 0;
+        /* Track consecutive write failures (endpoint backpressure). Never discard
+         * queued MAVLink while the link is up — CherryUSB 64B packets can stall
+         * for hundreds of ticks without indicating disconnect. */
         if (_writebuf.available() == 0) {
             _usb_write_fail_count = 0;
+            rtt_uart_usb_diag_fail_streak = 0;
         } else if (!_last_drain_wrote) {
-            /* drain was attempted but wrote 0 bytes → endpoint full/stuck */
+            /* drain attempted but wrote 0 bytes → endpoint full/stuck */
             _usb_write_fail_count++;
-            if (_usb_write_fail_count > 500) {
+            rtt_uart_usb_diag_write_fails++;
+            if (_usb_write_fail_count > rtt_uart_usb_diag_fail_streak) {
+                rtt_uart_usb_diag_fail_streak = _usb_write_fail_count;
+            }
+            /* milestone backpressure relief: if the endpoint makes no progress
+             * for >500 ticks (~0.5s @ 1kHz), discard the queued TX even while
+             * still connected.  Without this the writebuf grows monotonically
+             * under bursty load (MAVFTP), pushing end-to-end latency past the
+             * client timeout and causing successive-round degradation. */
+            if (_usb_write_fail_count > 500 || !usb_lld_get_connected_rtt()) {
                 _writebuf.clear();
                 _usb_write_fail_count = 0;
-                _diag_clears++;
+                rtt_uart_usb_diag_fail_streak = 0;
+                rtt_uart_usb_diag_clears++;
             }
         } else {
-            _usb_write_fail_count = 0;  /* write succeeded */
-        }
-        // Diagnostic: every 5s print USB write stats + DWC2 debug counters
-        if (AP_HAL::millis() - _diag_last_ms > 5000) {
-            // rt_kprintf("[USB%d] wb=%u fail=%u clr=%u iep=%u xfrc=%u txfe=%u/%u kick=%u bin=%u w=%u busy=%u rec=%u\n",
-            //            (unsigned)_port_num,
-            //            (unsigned)_writebuf.available(),
-            //            (unsigned)_usb_write_fail_count,
-            //            (unsigned)_diag_clears,
-            //            (unsigned)dbg_iepint_calls,
-            //            (unsigned)dbg_iepint_ep1_xfrc,
-            //            (unsigned)dbg_txfe_ep1_calls,
-            //            (unsigned)dbg_txfe_ep1_wrote,
-            //            (unsigned)dbg_serial_tx_kick,
-            //            (unsigned)dbg_serial_bulkin_cnt,
-            //            (unsigned)dbg_serial_write_calls,
-            //            (unsigned)dbg_ep_busy_cnt,
-            //            (unsigned)dbg_ep_recover_cnt);
-            _diag_clears = 0;
-            _diag_last_ms = AP_HAL::millis();
+            _usb_write_fail_count = 0;
+            rtt_uart_usb_diag_fail_streak = 0;
         }
     } else {
         _usb_write_fail_count = 0;
