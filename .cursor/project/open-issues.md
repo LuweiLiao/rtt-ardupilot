@@ -82,6 +82,27 @@
 - **仍未闭环（残留）**：**MAVFTP 背靠背连跑**未稳定 6/6×N——含两因：(a) 测试每轮重连/会话争用（fresh≈6/6 vs 10s 重连≈2/6），(b) 固件 FTP/SD 多轮背靠背 session/EOF 恢复残留（单持久连接 R1 后仍退到 ~3/6，T2/T3/T4 Nack err=6）。milestone 当时只验证**单轮 6/6**，未验证背靠背 N 轮，故残留属**超出 milestone 基线的额外强化项**，非"未达 milestone"。
 - **下一步（待定）**：(A) 接受 milestone 同等水平，按 commit 拆分计划固化 #1+#2 + 工作区（待用户明确 push/CI）；或 (B) 继续攻 GCS_FTP 多轮 session/EOF 恢复（新子课题）。`#3 FRAM sync 写`已评估为**死路**（只在 param SET 触发，MAVFTP 不 set 参数）。
 
+#### 背靠背残留：ChibiOS 对比 + 实机取证（2026-05-29，fd 耗尽已证伪 → CDC 背压坐实）
+
+> 用 ChibiOS 对比法排查背靠背 MAVFTP 残留。静态对比头号嫌疑是「RTT `AP_FILESYSTEM_POSIX` 全局 DFS fd 表 `DFS_FD_MAX=16` + `opendir` 占 fd，劣于 ChibiOS `f_opendir` 独立 FatFS 池」。**GDB 取证证伪该假设**。
+
+- **fd 耗尽证伪**：R1/R2/4 轮各 halt 点 `_fdtab.used=0`、`maxfd≤8`，从未接近 16；`@PARAM` 4 槽在 ResetSessions 后全 0。即便失败态见 `param[0].open=1`、异常 `ftp.fd=512`，fdtab 仍空（AP::FS fd 与 DFS 表计数不同步，但**非耗尽**）。
+- **CDC TX 背压坐实（主因）**：`rtt_uart_usb_diag_write_fails` 18030→20169、失败轮 `fail_streak→71`；失败形态为 read timeout（如 offset 7887）、写后读回空、size 头污染（1330926404↔10944 交替）；T6 心跳恒 PASS、CFSR/HFSR=0 无 HardFault。`clears` 38→41（#2 背压泄放仍触发但不足）。
+- **次要伴生**：T2 偶发 `err=6`（`gen_dir_entry` stat 失败假 EOF）、R4 目录条目乱码——属背压下传输/会话退化，非独立稳定 bug。
+- **结论**：背靠背 N 轮残留 = **CherryUSB CDC TX 持续高吞吐背压**（同 `rtt_uart_usb_diag_write_fails` 长期观察项），**非** fd 泄漏/会话/stat 缺陷。GCS_FTP / AP_Filesystem_Param 为 ArduPilot 共享代码、相对 milestone 无 diff。
+- **未改码**（取证后纪律性结论）：**不增 `DFS_FD_MAX`**（无 fd 打满证据）。真正的修复杠杆是 **CherryUSB CDC IN 端点队列深度**（当前 shim 仅 1 in-flight + 1 pending ×64B、TX1 FIFO≈16 words）——属 CDC TX 吞吐设计改动，单独评估。
+- **待用户决策**：是否投入 CherryUSB CDC TX 吞吐改造（深化端点 pending 队列/FIFO）以提升背靠背稳定，还是接受单轮 6/6（= milestone）基线、把背靠背 N 轮列为已知 CDC 限制。
+
+#### CDC TX ring+kick 修复（2026-05-29，已落地工作区、未 commit、显著改善）
+
+> 据上条根因（pending 仅 1 槽 + 与 8192B `_writebuf` 断链 + producer 1kHz tick 与 ISR 解耦）实施修复。
+
+- **修复内容（仅改 `libraries/AP_HAL_RTT/hal_usb_cherryusb_shim.c`）**：把单 1×64B pending 槽升级为 **32×64B shim TX ring**；新增 `cherry_tx_kick()`（`!busy && ring 非空` 时 peek→`cdc_tx_buf`→`usbd_ep_start_write` 一包）；`usb_lld_send_rtt()` 入 ring 后 kick；**`usbd_cdc_acm_bulk_in()`（TX 完成 ISR）连续 kick**，摆脱对 1kHz tick 的依赖。仍一次只在途一包、EPENA/busy 时不重 arm；新增 `rtt_dbg_cherry_tx_ring_{enqueued,dropped}`/`tx_kick_calls` 诊断。
+- **实测改善（CherryUSB，st-flash 烧录）**：单轮 `tests/test_mavftp.py` **仍 6/6**（回归护栏未破）；背靠背 4 轮 **6/6·6/6·4/6·6/6**（修复前 3/4/3/2）、6 轮 **6/6·6/6·6/6·4/6·3/6·6/6**；`rtt_uart_usb_diag_write_fails` 由 ~20000 降到 **~2341**（约 10×）；`tx_start_fail=0`、`bulk_in≈tx_start_ok`（ISR 链式 kick 生效）；CFSR/HFSR=0、VTOR=0x08008000、无 HardFault；L0 HEARTBEAT+STANDBY+30s 流 PASS。
+- **收尾增量（ring 32→64 + TX1 FIFO 64→128B）：已证伪并回退**——单轮护栏掉到 4-5/6、6 轮 5/4/6/5/3/2 反而更差（疑 TX1 FIFO 128B 副作用），按回退条件已退回 `ring32 + TX1=16` 基础版。
+- **残留**：背靠背极端持续突发下偶有单轮 3-4/6（`ring_dropped≈2343`，CDC 吞吐抖动），已大幅改善但非 100% 全 6/6；进一步 FIFO 调优无效。判为当前 CDC TX 实践最优。
+- **状态**：ring+kick 基础版**在工作区、未 commit**；可按用户决策像 #1+#2 一样本地固化。
+
 ### 分层驱动测试 — HAL smoke 构建已闭环；上板部分通过（2026-05-29 起）
 
 - [x] **BUILD_ONLY 占位已替换（构建门禁）**：`D_uart_hal`、`D_spi_hal`、`D_i2c_hal`、`D_storage`、`D_rcoutput`、`D_rcinput`、`E_sdcard`、`E_wspi_flash` — **2026-05-29 manifest 自检 + 串行 scons 8/8 PASS**；固件调用真实 `hal.*` 或 SD POSIX 路径（**非**旧版单步 `test_runner` 占位）

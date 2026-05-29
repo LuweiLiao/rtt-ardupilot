@@ -1506,3 +1506,35 @@ CherryUSB: 1209:5745 /dev/sdf README RWTEST SMOKE umount OK; FAT lists README. T
 - 动作：GDB halt 读 CFSR/HFSR/VTOR/IWDGRSTF + USB diag
 - 结果：CFSR=0 HFSR=0 VTOR=0x08008000 IWDGRSTF=0；write_fails=0x165a(5722) fail_streak=0x41(65) clears=0xe(14)；pkill openocd 无残留
 - 结论：方法 A 单连接 R1 后稳定 2/6（T6 脚本 bug 未计，补测 T6 PASS）；方法 B R1=5/6→修正 6/6、R2=1/6→修正 2/6（R3 型重连退化复现）；判定为 **(a)+(b) 并存**
+
+### 2026-05-29 19:13 MAVFTP R1/R2 取证 + 4轮复验（独占 ST-Link/CDC）
+- 动作：Read rtt-build-flash-debug + rtt-mavlink-verification；pgrep 独占；GDB 脚本 gdb_mavftp_snap.py（_fdtab/GCS_MAVLINK::ftp/fs_param/ftp_dbg/usb_diag）；run_mavftp_forensics.sh R1→halt→R2；4轮 mavftp_backback_4round.py；末快照 OpenOCD
+- 阶段1 证据（R1 vs R2 边界 GDB halt，轮间非传输中）：
+  - baseline/post_R1/post_R2：fdtab **used=0** maxfd=4~8（远未满 16）；param 槽 **全 0**（ResetSessions 后）；ftp.fd=-1
+  - post_R1_no_reset（失败态）：param[0].open=**1**、ftp.fd=**512**（异常）、fdtab 仍 used=0
+  - usb_diag：write_fails **18031→18102→20169**；clears=38→41（#2 背压泄放仍触发）；fail_streak R2 后 **71**
+  - R2 失败形态：T3 read timeout@7887 / T4 空数据；另轮 R2 T2 **Nack err=6**；R4 全面 err=6 + T1 目录条目乱码
+- 主因判定：**CDC 背压主导**（write_fails 高且随失败轮次上升、timeout/空读/会话污染）；**非 fd 耗尽主导**（halt 时 fdtab 始终 used≈0）；**stat/会话假 EOF(err=6) 与 size 垃圾(1330926404) 并存**为次要/伴生现象（R4 T2–T5 err=6）
+- 阶段2：**未改码**（纪律：仅修证实主因；CDC 背压不在本次快速修复范围；fd 表未打满无 DFS_FD_MAX 证据）
+- 4轮背靠背（单连接）：R1 **3/6** R2 **4/6** R3 **3/6** R4 **2/6**（T6 各轮 PASS；退化 R3/R4 加剧，非稳定「R2 即崩」）
+- OpenOCD 末快照：VTOR=**0x08008000** CFSR=**0** HFSR=**0** IWDGRSTF=**0**；write_fails=20169；pkill -x openocd **CLEAN**
+- 下一步：父代理决策 — CherryUSB TX 吞吐/背压深化 或 单独排 stat shim/ftp.fd 异常；**不建议**在无 fd 打满证据时仅增 DFS_FD_MAX
+
+### 2026-05-29 19:37（CherryUSB TX ring+kick 修复验证）
+- 动作：仅改 `hal_usb_cherryusb_shim.c` — 32×64B TX ring 替代单 pending 槽；新增 `cherry_tx_kick()`（send + bulk_in ISR 链式装包）；peek→start_write→discard 防 start_fail 丢包
+- 构建：`python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)` PASS；唯一 `OTG_FS_IRQHandler`；无 `hal_usb_lld_rtt` 符号
+- 烧录：`st-flash write rtthread.bin 0x08008000` verify OK；CDC `/dev/ttyACM0` 枚举
+- L0：HEARTBEAT+STANDBY(3)+30s 流 1568 msgs PASS
+- 回归护栏：单轮 `test_mavftp.py` **6/6 PASS**
+- 背靠背 4 轮（单连接）：R1 **6/6** R2 **6/6** R3 **4/6**（T3 offset 1673 timeout + T4 create timeout）R4 **6/6**（修复前 3/4/3/2）
+- GDB 末快照：VTOR=0x08008000 CFSR=0 HFSR=0 RCC@0x58004800=0；write_fails=**2341** clears=7 fail_streak=81；bulk_in=7554 tx_start_ok=7555 **tx_start_fail=0**；ring_enq=7587 ring_drop=2343 kick=15141
+- 结论：**显著改善**背靠背稳定与 write_fails（~20k→~2.3k）；R3 偶发仍失败 → 可评估 #4 TX1 FIFO 128B 或 ring 深度/背压策略
+- 下一步：可选复跑 4 轮确认 R3 偶发；或叠加 TX1 FIFO
+
+### 2026-05-29（CherryUSB ring64+TX1 FIFO128 收尾增量）
+- 动作：#1 `CDC_TX_RING_DEPTH` 32→64（4KB ring，逻辑不变）；#2 `CONFIG_USB_DWC2_TX1_FIFO_SIZE` 16→32 words（128B）；FIFO 求和 128+16+32+4+16=196 < 320 words 上限
+- 依据：增量前 R3 偶发 T3/T4 timeout；ring_drop≈write_fails≈2343
+- 下一步：SCons 构建→st-flash→单轮 6/6→L0→背靠背 6 轮→GDB 快照
+- 修正：DTCM .bss 溢出 876B；`cherry_tx_ring`/`cherry_tx_ring_len` 改链入 `.sram1_bss`（4KB+64B 在 SRAM1，不占 DTCM）
+- ring64+TX1FIFO128 烧录后：单轮护栏 4/6→5/6（T4 create 超时）；背靠背 6 轮 5/6,4/6,6/6,5/6,3/6,2/6；L0 通过；触发回退条件→已回退 ring32+TX1=16
+- 回退烧录后：单轮 6/6（复位后）；背靠背 6 轮 6/6,6/6,6/6,4/6,3/6,6/6；OpenOCD init 挂起未能采 GDB
