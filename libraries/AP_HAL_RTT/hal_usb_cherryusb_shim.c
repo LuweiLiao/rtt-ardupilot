@@ -15,10 +15,32 @@
 #include "usbd_cdc_acm.h"
 
 #include <rthw.h>
+#include <rtthread.h>
 
 #include "rtt_dbg_bkp.h"
 
 #define CHERRY_USB_OTG_FS_BASE  0x50000000UL
+
+/* DWC2 device-mode register access (CDC bulk IN = physical ep 1). */
+#define CHERRY_CDC_IN_EP_IDX    1U
+
+#define CHERRY_OTG_REG32(off) \
+    (*(volatile uint32_t *)(CHERRY_USB_OTG_FS_BASE + (off)))
+
+#define CHERRY_DIEPCTL(ep)      CHERRY_OTG_REG32(0x900U + (uint32_t)(ep) * 0x20U)
+#define CHERRY_DIEPINT(ep)      CHERRY_OTG_REG32(0x908U + (uint32_t)(ep) * 0x20U)
+#define CHERRY_DIEPEMPMSK       CHERRY_OTG_REG32(0x834U)
+#define CHERRY_GRSTCTL          CHERRY_OTG_REG32(0x010U)
+
+#define CHERRY_DIEPCTL_EPENA    (1UL << 31)
+#define CHERRY_DIEPCTL_EPDIS    (1UL << 30)
+#define CHERRY_DIEPCTL_SNAK     (1UL << 27)
+#define CHERRY_DIEPINT_XFRC     (1UL << 0)
+#define CHERRY_DIEPINT_EPDISD   (1UL << 1)
+#define CHERRY_GRSTCTL_TXFFLSH  (1UL << 5)
+#define CHERRY_GRSTCTL_TXFNUM1  (1UL << 6)
+
+#define CHERRY_TX_BUSY_TIMEOUT_MS  100U
 
 #define CDC_IN_EP   0x81
 #define CDC_OUT_EP  0x02
@@ -31,6 +53,7 @@
 
 #define USB_CONFIG_SIZE (9 + CDC_ACM_DESCRIPTOR_LEN)
 #define CDC_MAX_MPS     64
+#define CDC_TX_CHUNK_MAX  512
 #define CDC_RX_QUEUE_DEPTH 8
 #define CDC_TX_RING_DEPTH  32
 
@@ -50,7 +73,7 @@ static const uint8_t cherry_cdc_descriptor[] = {
 };
 
 USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX static uint8_t cdc_read_buf[CDC_MAX_MPS];
-USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX static uint8_t cdc_tx_buf[CDC_MAX_MPS];
+USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX static uint8_t cdc_tx_buf[CDC_TX_CHUNK_MAX];
 static uint8_t cherry_rx_queue[CDC_RX_QUEUE_DEPTH][CDC_MAX_MPS];
 static uint8_t cherry_tx_ring[CDC_TX_RING_DEPTH][CDC_MAX_MPS];
 static volatile uint8_t cherry_tx_ring_len[CDC_TX_RING_DEPTH];
@@ -88,6 +111,13 @@ volatile uint32_t rtt_dbg_cherry_bkp_witness       = 0;
 volatile uint32_t rtt_dbg_cherry_tx_ring_enqueued  = 0;
 volatile uint32_t rtt_dbg_cherry_tx_ring_dropped   = 0;
 volatile uint32_t rtt_dbg_cherry_tx_kick_calls     = 0;
+volatile uint32_t rtt_dbg_cherry_epena_guard_hits    = 0;
+volatile uint32_t rtt_dbg_cherry_epdis_recovery_count = 0;
+volatile uint32_t rtt_dbg_cherry_tx_busy_max_ms      = 0;
+
+static uint32_t cherry_tx_busy_since_ms;
+static uint32_t cherry_tx_bulk_in_arm_gen;
+static uint32_t cherry_epena_stuck_since_ms;
 
 enum {
     RTT_DBG_CHERRY_EVT_NONE       = 0,
@@ -107,6 +137,24 @@ static inline void cherry_dbg_sync_configured(void)
 {
     rtt_dbg_cherry_configured_state = cherry_configured ? 1U : 0U;
 }
+
+static inline uint32_t cherry_now_ms(void)
+{
+    return (uint32_t)((rt_tick_get() * 1000U) / RT_TICK_PER_SECOND);
+}
+
+static inline void cherry_tx_track_busy_max(uint32_t now_ms)
+{
+    if (cherry_tx_busy_since_ms == 0U) {
+        return;
+    }
+    const uint32_t elapsed = now_ms - cherry_tx_busy_since_ms;
+    if (elapsed > rtt_dbg_cherry_tx_busy_max_ms) {
+        rtt_dbg_cherry_tx_busy_max_ms = elapsed;
+    }
+}
+
+static void cherry_tx_epdis_recovery(void);
 
 static usb_rx_callback_t cherry_rx_cb;
 static void *cherry_rx_arg;
@@ -141,6 +189,7 @@ static bool cherry_tx_ring_enqueue(const uint8_t *data, uint32_t len)
         return false;
     }
     if (cherry_tx_ring_count >= CDC_TX_RING_DEPTH) {
+        /* Backpressure: ring full, head packet retained (not a silent drop). */
         rtt_dbg_cherry_tx_ring_dropped++;
         return false;
     }
@@ -151,24 +200,6 @@ static bool cherry_tx_ring_enqueue(const uint8_t *data, uint32_t len)
     cherry_tx_ring_head = (uint8_t)((slot + 1U) % CDC_TX_RING_DEPTH);
     cherry_tx_ring_count++;
     rtt_dbg_cherry_tx_ring_enqueued++;
-    return true;
-}
-
-static bool cherry_tx_ring_peek_to_buf(uint8_t *out_len)
-{
-    if (out_len == NULL || cherry_tx_ring_count == 0) {
-        return false;
-    }
-
-    const uint8_t slot = cherry_tx_ring_tail;
-    const uint8_t n = cherry_tx_ring_len[slot];
-    if (n == 0 || n > CDC_MAX_MPS) {
-        *out_len = 0;
-        return false;
-    }
-
-    memcpy(cdc_tx_buf, cherry_tx_ring[slot], n);
-    *out_len = n;
     return true;
 }
 
@@ -186,21 +217,67 @@ static void cherry_tx_ring_discard_head(void)
 
 static bool cherry_tx_start_write(uint32_t len);
 
+/*
+ * Copy consecutive ring slots into cdc_tx_buf without modifying the ring.
+ * Returns total bytes (<= max_len); sets *out_slots to slot count merged.
+ */
+static uint32_t cherry_tx_ring_drain_to_buf(uint32_t max_len, uint8_t *out_slots)
+{
+    if (out_slots == NULL || max_len == 0 || cherry_tx_ring_count == 0) {
+        if (out_slots != NULL) {
+            *out_slots = 0;
+        }
+        return 0;
+    }
+
+    uint32_t total = 0;
+    uint8_t slots = 0;
+    uint8_t idx = cherry_tx_ring_tail;
+    uint8_t remaining = cherry_tx_ring_count;
+
+    while (remaining > 0) {
+        const uint8_t n = cherry_tx_ring_len[idx];
+        if (n == 0 || n > CDC_MAX_MPS) {
+            break;
+        }
+        if (total + (uint32_t)n > max_len) {
+            break;
+        }
+        memcpy(cdc_tx_buf + total, cherry_tx_ring[idx], n);
+        total += n;
+        slots++;
+        idx = (uint8_t)((idx + 1U) % CDC_TX_RING_DEPTH);
+        remaining--;
+    }
+
+    *out_slots = slots;
+    return total;
+}
+
+static void cherry_tx_ring_discard_n(uint8_t n)
+{
+    while (n > 0 && cherry_tx_ring_count > 0) {
+        cherry_tx_ring_discard_head();
+        n--;
+    }
+}
+
 static void cherry_tx_kick(void)
 {
     rtt_dbg_cherry_tx_kick_calls++;
 
     while (!cherry_tx_busy && cherry_tx_ring_count > 0) {
-        uint8_t len = 0;
-        if (!cherry_tx_ring_peek_to_buf(&len) || len == 0) {
+        uint8_t slots = 0;
+        const uint32_t len = cherry_tx_ring_drain_to_buf(CDC_TX_CHUNK_MAX, &slots);
+        if (slots == 0 || len == 0) {
             cherry_tx_ring_discard_head();
             continue;
         }
         if (!cherry_tx_start_write(len)) {
             break;
         }
-        cherry_tx_ring_discard_head();
-        /* One IN transfer in flight; next packet starts from bulk_in ISR. */
+        cherry_tx_ring_discard_n(slots);
+        /* One IN transfer in flight; next chunk starts from bulk_in ISR. */
         break;
     }
 }
@@ -250,19 +327,57 @@ static bool cherry_rx_dequeue(uint8_t *data, uint32_t *len)
 
 static bool cherry_tx_start_write(uint32_t len)
 {
-    if (len == 0 || len > CDC_MAX_MPS) {
+    if (len == 0 || len > CDC_TX_CHUNK_MAX) {
         return false;
     }
+
+    if (CHERRY_DIEPCTL(CHERRY_CDC_IN_EP_IDX) & CHERRY_DIEPCTL_EPENA) {
+        rtt_dbg_cherry_epena_guard_hits++;
+        return false;
+    }
+
     cherry_tx_busy = 1;
     cherry_dbg_sync_tx_busy();
+    cherry_tx_busy_since_ms = cherry_now_ms();
+    cherry_tx_bulk_in_arm_gen = rtt_dbg_cherry_bulk_in_calls;
+
     if (usbd_ep_start_write(0, CDC_IN_EP, cdc_tx_buf, len) != 0) {
         cherry_tx_busy = 0;
         cherry_dbg_sync_tx_busy();
+        cherry_tx_busy_since_ms = 0U;
         rtt_dbg_cherry_tx_start_fail++;
         return false;
     }
     rtt_dbg_cherry_tx_start_ok++;
     return true;
+}
+
+static void cherry_tx_epdis_recovery(void)
+{
+    CHERRY_DIEPEMPMSK &= ~(1UL << CHERRY_CDC_IN_EP_IDX);
+    CHERRY_DIEPCTL(CHERRY_CDC_IN_EP_IDX) |= (CHERRY_DIEPCTL_SNAK | CHERRY_DIEPCTL_EPDIS);
+
+    uint32_t timeout = 50000U;
+    while ((CHERRY_DIEPINT(CHERRY_CDC_IN_EP_IDX) & CHERRY_DIEPINT_EPDISD) == 0U) {
+        if (--timeout == 0U) {
+            break;
+        }
+    }
+
+    CHERRY_DIEPINT(CHERRY_CDC_IN_EP_IDX) = (CHERRY_DIEPINT_EPDISD | CHERRY_DIEPINT_XFRC);
+    CHERRY_GRSTCTL = CHERRY_GRSTCTL_TXFFLSH | CHERRY_GRSTCTL_TXFNUM1;
+    timeout = 50000U;
+    while ((CHERRY_GRSTCTL & CHERRY_GRSTCTL_TXFFLSH) != 0U) {
+        if (--timeout == 0U) {
+            break;
+        }
+    }
+
+    cherry_tx_busy = 0;
+    cherry_dbg_sync_tx_busy();
+    cherry_tx_busy_since_ms = 0U;
+    rtt_dbg_cherry_epdis_recovery_count++;
+    cherry_tx_kick();
 }
 
 static void cherry_usbd_event_handler(uint8_t busid, uint8_t event)
@@ -277,6 +392,8 @@ static void cherry_usbd_event_handler(uint8_t busid, uint8_t event)
         cherry_tx_ring_reset();
         cherry_tx_busy = 0;
         cherry_dbg_sync_tx_busy();
+        cherry_tx_busy_since_ms = 0U;
+        cherry_epena_stuck_since_ms = 0U;
         usbd_ep_start_read(busid, CDC_OUT_EP, cdc_read_buf, sizeof(cdc_read_buf));
         break;
     case USBD_EVENT_RESET:
@@ -290,6 +407,8 @@ static void cherry_usbd_event_handler(uint8_t busid, uint8_t event)
         cherry_tx_ring_reset();
         cherry_tx_busy = 0;
         cherry_dbg_sync_tx_busy();
+        cherry_tx_busy_since_ms = 0U;
+        cherry_epena_stuck_since_ms = 0U;
         break;
     case USBD_EVENT_DEINIT:
         rtt_dbg_cherry_last_event = RTT_DBG_CHERRY_EVT_DEINIT;
@@ -300,6 +419,8 @@ static void cherry_usbd_event_handler(uint8_t busid, uint8_t event)
         cherry_tx_ring_reset();
         cherry_tx_busy = 0;
         cherry_dbg_sync_tx_busy();
+        cherry_tx_busy_since_ms = 0U;
+        cherry_epena_stuck_since_ms = 0U;
         break;
     default:
         break;
@@ -326,6 +447,7 @@ void usbd_cdc_acm_bulk_in(uint8_t busid, uint8_t ep, uint32_t nbytes)
     rt_base_t level = rt_hw_interrupt_disable();
     cherry_tx_busy = 0;
     cherry_dbg_sync_tx_busy();
+    cherry_tx_busy_since_ms = 0U;
     cherry_tx_kick();
     rt_hw_interrupt_enable(level);
 }
@@ -423,11 +545,35 @@ void usb_lld_poll_rtt(void)
         }
     }
 
-    if (cherry_tx_ring_count > 0 && !cherry_tx_busy) {
-        rt_base_t level = rt_hw_interrupt_disable();
-        cherry_tx_kick();
-        rt_hw_interrupt_enable(level);
+    rt_base_t level = rt_hw_interrupt_disable();
+    const uint32_t now_ms = cherry_now_ms();
+
+    if (cherry_configured && !cherry_tx_busy &&
+        cherry_tx_ring_count > 0U &&
+        (CHERRY_DIEPCTL(CHERRY_CDC_IN_EP_IDX) & CHERRY_DIEPCTL_EPENA)) {
+        if (cherry_epena_stuck_since_ms == 0U) {
+            cherry_epena_stuck_since_ms = now_ms;
+        } else if ((now_ms - cherry_epena_stuck_since_ms) > CHERRY_TX_BUSY_TIMEOUT_MS) {
+            cherry_epena_stuck_since_ms = 0U;
+            cherry_tx_epdis_recovery();
+        }
+    } else {
+        cherry_epena_stuck_since_ms = 0U;
     }
+
+    if (cherry_configured && cherry_tx_busy && cherry_tx_busy_since_ms != 0U) {
+        cherry_tx_track_busy_max(now_ms);
+        const uint32_t elapsed = now_ms - cherry_tx_busy_since_ms;
+        if (elapsed > CHERRY_TX_BUSY_TIMEOUT_MS &&
+            rtt_dbg_cherry_bulk_in_calls == cherry_tx_bulk_in_arm_gen) {
+            cherry_tx_epdis_recovery();
+        }
+    }
+
+    if (cherry_tx_ring_count > 0 && !cherry_tx_busy) {
+        cherry_tx_kick();
+    }
+    rt_hw_interrupt_enable(level);
 }
 
 bool usb_lld_send_rtt(uint8_t ep, const uint8_t *data, uint32_t len)

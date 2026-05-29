@@ -1538,3 +1538,134 @@ CherryUSB: 1209:5745 /dev/sdf README RWTEST SMOKE umount OK; FAT lists README. T
 - 修正：DTCM .bss 溢出 876B；`cherry_tx_ring`/`cherry_tx_ring_len` 改链入 `.sram1_bss`（4KB+64B 在 SRAM1，不占 DTCM）
 - ring64+TX1FIFO128 烧录后：单轮护栏 4/6→5/6（T4 create 超时）；背靠背 6 轮 5/6,4/6,6/6,5/6,3/6,2/6；L0 通过；触发回退条件→已回退 ring32+TX1=16
 - 回退烧录后：单轮 6/6（复位后）；背靠背 6 轮 6/6,6/6,6/6,4/6,3/6,6/6；OpenOCD init 挂起未能采 GDB
+
+### 2026-05-29 20:33–21:05（Phase0 A/B：cherryusb vs native MAVFTP）
+- 前置：`pgrep pymavlink|mavftp|openocd` 空；独占 CDC
+- **A cherryusb（默认 scons）**：构建 PASS；唯一 `OTG_FS_IRQHandler` @ 0x080e860d；`cherry_tx_*`/`rtt_dbg_cherry_*` 存在；无 `usb_lld_*`
+- A 烧录：`st-flash write rtthread.bin 0x08008000` verify OK；冷启 15s；CDC `usb-APM_CUAV_V5_CDC_1_00001-if00`
+- A 单轮 `test_mavftp.py`：**3/6**（T1 timeout；T3 size 垃圾 1330926404+read timeout；T4 空数据；T5/T6 PASS）
+- A 背靠背 6 轮（单连接，轮间 ResetSessions+drain 5s）：**R1 6/6, R2 4/6, R3 6/6, R4 5/6, R5 4/6, R6 4/6**；T6 各轮 **PASS**（无 R1 后全死）；退化集中在 T3/T4
+- A GDB：测试窗口内 SWD 被 hung upload 占用未能采；**未记录 A 时刻 CFSR/HFSR/write_fails**
+- **B native（RTT_USB_BACKEND=native scons）**：构建 PASS；唯一 `OTG_FS_IRQHandler` @ 0x080e3a7d；`usb_lld_*` 齐全；无 `cherry_tx_*`
+- B 烧录：st-flash verify OK；冷启后 CDC/BL **交替枚举**（~3s 周期 CUAV V5 CDC ↔ CUAVv5-BL）
+- B 单轮/背靠背：**FATAL** — 开串口即 disconnect/no heartbeat；5 次重试均失败
+- B GDB：boot-loop 态 halt PC=0x080fcf48（`rt_thread_defunct_dequeue`）；CFSR=**0** HFSR=**0**；write_fails=0 fail_streak=7；cherry 符号为 0（ELF 为 cherry 恢复后快照混读 — native ELF 时未成功 halt 在 app）
+- 收尾：默认 cherryusb 重建+重烧 verify OK；板子进入 **CDC/BL ping-pong**，MAVLink 无法再连（需物理断电/拔插恢复 host 侧枚举）
+- pkill openocd：**CLEAN**
+- 判定：A 在首轮背靠背可达 6/6 且 T6 永不 FAIL；B 未能完成任何 MAVFTP → **native 本轮明显劣于 cherry**；但 B 不完整（app 无法驻留，疑会话后 hysteresis/需断电，非纯 USB 栈 A/B）
+- 建议方向：**(b)** 把 native EPENA/XFRC/多包守卫迁入 cherry（A 已部分改善但仍 T3/T4 退化）；native 默认化需先解 BL 乒乓
+
+###  停止 Phase1 硬件操作并交还
+- 动作：按父代理指令立即 pkill openocd/st-flash；停止 MAVFTP/构建/烧录
+- 现状：板子枚举为 app CDC (1209:5741 CUAV V5 CDC 1 -> ttyACM0)；ST-Link 0483:3748 在线；无烧录/调试残留
+- 单次 halt 读到 PC=0x0800ea5e（app 区 0x08008000+ 运行中，非 BL、非 HardFault handler）；VTOR/CFSR/HFSR 因 grep/shutdown 时序未取到，未再重试以避免循环
+- 结论：策略变更，不再恢复/验证 Phase1 全量固件；硬件交还父代理
+### 2026-05-29 21:39 L1 D_storage
+- 动作：build PASS，flash FAIL
+- 结果：FAIL（烧录）
+### 2026-05-29 21:39 L1 E_fram
+- 动作：build PASS，flash FAIL
+- 结果：FAIL（烧录）
+### 2026-05-29 21:39 L1 E_sdcard
+- 动作：build PASS，flash FAIL
+- 结果：FAIL（烧录）
+### 2026-05-29 21:39 L1 D_spi_hal
+- 动作：build→st-flash 0x08008000→UART7 16s→OpenOCD CFSR/HFSR/VTOR
+- 结果：BUILD=PASS FLASH=PASS UART_RESULT=PASS VTOR=0xe00fdfec CFSR=0x01000000 HFSR=0x08028774 stable=no
+- 下一步：定位 D_spi_hal 失败根因
+### 2026-05-29 21:40 L1 E_imu
+- 动作：build→st-flash 0x08008000→UART7 16s→OpenOCD CFSR/HFSR/VTOR
+- 结果：BUILD=PASS FLASH=PASS UART_RESULT=PASS VTOR=0xe00fdfec CFSR=0x41000000 HFSR=0x08003628 stable=no
+- 下一步：定位 E_imu 失败根因
+### 2026-05-29 21:40 L1 E_ms5611
+- 动作：build→st-flash 0x08008000→UART7 16s→OpenOCD CFSR/HFSR/VTOR
+- 结果：BUILD=PASS FLASH=PASS UART_RESULT=PASS VTOR=0xe00fdfec CFSR=0x61000000 HFSR=0x0802b0f0 stable=no
+- 下一步：定位 E_ms5611 失败根因
+### 2026-05-29 21:40 L1 D_i2c_hal
+- 动作：build FAIL，跳过上板
+- 结果：FAIL（构建）
+- 下一步：查 build log /tmp/build_D_i2c_hal.log
+### 2026-05-29 21:41 L1 E_ist8310
+- 动作：build FAIL，跳过上板
+- 结果：FAIL（构建）
+- 下一步：查 build log /tmp/build_E_ist8310.log
+### 2026-05-29 21:41 L1 rerun D_storage
+- 动作：openocd flash→UART7 16s→fault check
+- 结果：RESULT=PASS VTOR=0x08008000 CFSR=0x00000000 HFSR=0x00000000 stable=yes
+### 2026-05-29 21:42 L1 rerun E_fram
+- 动作：openocd flash→UART7 16s→fault check
+- 结果：RESULT=PASS VTOR=0x08008000 CFSR=0x00000000 HFSR=0x00000000 stable=yes
+### 2026-05-29 21:42 L1 rerun E_sdcard
+- 动作：openocd flash→UART7 16s→fault check
+- 结果：RESULT=PASS VTOR=0x08008000 CFSR=0x00000000 HFSR=0x00000000 stable=yes
+### 2026-05-29 21:43 L1 rerun D_i2c_hal
+- 动作：openocd flash→UART7 16s→fault check
+- 结果：RESULT=PASS VTOR=0x08008000 CFSR=0x00000000 HFSR=0x00000000 stable=yes
+### 2026-05-29 21:43 L1 rerun E_ist8310
+- 动作：openocd flash→UART7 16s→fault check
+- 结果：RESULT=PASS VTOR=0x08008000 CFSR=0x00000000 HFSR=0x00000000 stable=yes
+
+### 2026-05-29 21:45 L1 地基验证收口
+- 动作：8/8 `--test=` 串行 build→flash→UART7→OpenOCD fault；首轮 D_storage/E_fram/E_sdcard st-flash claim 失败（mavftp 占 ST-Link），改 openocd 重跑；D_i2c_hal/E_ist8310 构建 race 重跑成功；E_imu 首轮 fault VTOR=0x08000000 复验为 0x08008000
+- 结果：**L1 全绿** — flash/SD/SPI/I2C 地基全部 RESULT: PASS，CFSR/HFSR=0，无最小固件 CDC/BL 乒乓或 HardFault
+- 下一步：父代理可进 L2 CDC（L7_cherryusb_cdc echo）/ L0 全量
+
+### 2026-05-29 21:33 CherryUSB Phase1 EPENA/EPDIS（hal_usb_cherryusb_shim.c）
+- 动作：#1 EPENA 守卫；#2 busy 100ms 看门狗+EPDIS 恢复；#3 ring 满背压注释；desync 改为 cherry_epena_stuck_since_ms（不再伪造 busy）
+- 依据：native hal_usb_lld_rtt.c EPENA+XFRC 超时 EPDIS 参考
+- 结果：build PASS；st-flash 恢复 app CDC；单轮 MAVFTP 6/6 PASS
+- 下一步：背靠背 6 轮 + GDB 计数器
+
+### 2026-05-29 21:37 背靠背 MAVFTP 6 轮
+- 动作：mavftp_backback_6round.py 单连接 ResetSessions+drain 5s
+- 结果：R1=6/6 R2=6/6 R3=6/6 R4=4/6（T3 timeout@7887 T4 mismatch）R5 USB 断开；修复前 cherry 曾 R1 后单调塌陷
+- 下一步：GDB 快照；L0 单独复验
+
+### 2026-05-29 21:44 板级 USB 消失
+- 动作：R5 崩溃后多次 st-flash reset；1209 设备不再枚举（仅 ST-Link）
+- 结果：阻塞 L0/GDB 末快照；需 USB hub 复位或物理重插
+- 下一步：恢复枚举后再采 epena/epdis 计数器
+
+### 2026-05-29 21:52 L2 L7_cherryusb_cdc
+- 动作：scons --test=L7_cherryusb_cdc → st-flash 0x08008000 verify → reset → 等 15s → pyserial echo → 30s stress → OpenOCD VTOR/CFSR/HFSR
+- 结果：枚举 `1209:5741 Generic L7 CherryUSB`（by-id `usb-PogoAPM_L7_CherryUSB_0001`→ttyACM0）；**无需 unbind/bind**；`HELLO_L7\r\n` echo 回读一致；30s stress ok=15 fail=0 disconnects=0；VTOR=0x08008000 CFSR=0 HFSR=0
+- 下一步：D_usb_serial
+
+### 2026-05-29 21:54 L2 D_usb_serial
+- 动作：scons --test=D_usb_serial → st-flash 0x08008000 verify → reset → 等 15s → ACM@921600 beacon+echo → 30s stress → OpenOCD fault
+- 结果：枚举 `1209:5741 Generic CUAV V5 CDC 1`（by-id `usb-APM_CUAV_V5_CDC_1_00001`→ttyACM0）；收到 `D_usb_serial CDC beacon`；`HELLO_D_USB\r\n` echo 13B 回读；30s stress ok=15 fail=0 disconnects=0；VTOR=0x08008000 CFSR=0 HFSR=0
+- 结论：**L2 CDC 物理链路绿** — 裸栈 L7 与 HAL D_usb_serial 均枚举+echo 稳定 30s 无掉线；问题域在上层（MAVLink/背靠背）而非 CDC 物理层本身
+- 板子终态：D_usb_serial 固件运行中，CDC ttyACM0 在线
+
+### 2026-05-29 22:00 L3 S_mavlink_usb（单发 HEARTBEAT smoke）
+- 动作：`scons --target=cuav_v5 --test=S_mavlink_usb` PASS（bin 230124B）→ st-flash 0x08008000 verify → st-flash reset → 等 15s → pymavlink @921600
+- 结果：首次 host 脚本误选 ttyACM1（by-id 不含 1209:5741 字面量）；改 `/dev/ttyACM0` 后 **PASS HEARTBEAT msgid=0 sys=1 comp=1 type=2 status=3**；OpenOCD CFSR/HFSR=0 VTOR=0x08008000 IWDGRSTF=0
+- 下一步：全量 ArduCopter L0 gate
+
+### 2026-05-29 22:02 L3 全量 ArduCopter + L0 gate（单发，非背靠背）
+- 动作：`scons --v=ArduCopter --target=cuav_v5` PASS（bin 1303780B）；ELF 唯一 `OTG_FS_IRQHandler` + `hal_usb_cherryusb_shim.c` 链入；st-flash 0x08008000 verify → reset → 冷启 15s → `/tmp/cherryusb_main_l0_gate.sh --skip-build --skip-bl --skip-flash --json --device by-id`
+- 结果：**GATE exit 0 PASS** — STANDBY(3)；912/912 参数 FORMAT_VERSION=120.0；30s 流 total=1890 types=23 hb=63；末快照 CFSR/HFSR=0 VTOR=0x08008000 IWDGRSTF=0 POST_L0_FAULT=0
+- 结论：**L3 单发 L0 全绿** — 地基+CDC+MAVLink 单发链路成立；崩溃域收窄至 L4 背靠背压力
+- 板子终态：全量 ArduCopter CherryUSB Phase1 固件运行，CDC `1209:5741` ttyACM0 在线
+
+### 2026-05-29 22:09 L4 Phase2 多包 TX（hal_usb_cherryusb_shim.c）
+- 动作：CDC_TX_CHUNK_MAX=512；cdc_tx_buf[512]；cherry_tx_ring_drain_to_buf+discard_n；cherry_tx_kick 合并≤8×64B 单次 usbd_ep_start_write；保留 Phase1 EPENA/100ms EPDIS/ring 背压
+- 依据：CherryUSB usbd_ep_start_write 原生 PKTCNT 多包；systemic-escalation Phase2 设计
+- 结果：SCons ArduCopter cuav_v5 PASS（bin 1303836B +56B）；唯一 OTG_FS_IRQHandler；cdc_tx_buf@0x2001a4c4 USB_NOCACHE_RAM_SECTION
+- 下一步：单轮 6/6→背靠背 6 轮→GDB
+
+### 2026-05-29 22:10 Phase2 单轮 MAVFTP 护栏
+- 动作：st-flash 0x08008000 verify+reset；冷启 15s；test_mavftp.py ttyACM0
+- 结果：**6/6 PASS**（T1–T6 含 param.pck 10944B、写读删、ResetSessions、3s 稳定性 68 msgs）
+- 下一步：背靠背 6 轮
+
+### 2026-05-29 22:16 Phase2 背靠背 MAVFTP 6 轮
+- 动作：mavftp_backback_6round.py 单连接 ResetSessions+drain 5s
+- 结果：**R1=6/6 R2=5/6 R3=5/6 R4=3/6 R5=6/6 R6=4/6**；R4 T3 size=1330926404（帧错乱）；**R5 未 USB 消失**（vs Phase1 R5 crash）；测试后 CDC heartbeat 仍 STANDBY(3)
+- 下一步：GDB 末快照计数器
+
+### 2026-05-29 22:18 Phase2 GDB 末快照（背靠背后，无崩溃态）
+- 动作：OpenOCD halt+GDB（PC/CFSR/HFSR/VTOR + rtt_dbg_cherry_*）
+- 结果：PC=0x080e2fce adc_lld_convert_channel_rtt（正常运行）；CFSR=0 HFSR=0 VTOR=0x08008000；bulk_in=3631 tx_start_ok=3933 fail=0 epena_guard=0 **epdis_recovery=301** tx_busy_max_ms=**2923** kick=17013 enqueued=13081 dropped=701
+- 结论：Phase2 **消除 R5 USB 崩溃**；仍有多轮退化（timeout/帧错乱），301 次 EPDIS 恢复说明 busy 看门狗频繁触发；下一步 Phase3 OTG 优先级或 BASEPRI
+- 板子终态：Phase2 全量固件运行，CDC ttyACM0 在线

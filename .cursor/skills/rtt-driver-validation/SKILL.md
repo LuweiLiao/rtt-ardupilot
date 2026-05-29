@@ -7,16 +7,24 @@ description: 对 AP_HAL_RTT 做逐驱动、逐总线、逐子系统验证，适�
 
 正式方法论以 `docs/AP_HAL_RTT_DRIVER_VALIDATION.md` 为准；本 Skill 只负责入口、分层顺序和使用约束。当前登记状态以 `.cursor/project/driver-validation-matrix.md` 为准。
 
+> **何时优先回到本分层验证（反固着）**：当在某个上层（如 CDC 背靠背/整机）反复修不好、越改越糟时，按 `rtt-systemic-escalation` 的规则**自底向上重验**——先确认 flash/SD/SPI/I2C 地基模块单独 `RESULT: PASS`，再 CDC，再 CDC+MAVLink，最后才碰压力项；地基未绿不碰上层。
+
 ## 作用
 
 把复杂项目从“整机是否能跑”拆成“驱动、总线、子系统是否逐层成立”。
 
 ## 验证层级
 
-1. Host tests：纯逻辑、无需真实硬件
-2. Board examples：单驱动或单总线最小验证
-3. Subsystem smoke：多驱动协同验证
-4. Full vehicle milestone：整机里程碑
+六层模型（执行顺序）见 `docs/AP_HAL_RTT_DRIVER_VALIDATION.md`：
+
+1. **Host/static (`H*`)** — hwdef、设备表等
+2. **STM32 internal (`L*`)** — 寄存器 bring-up / USB 栈
+3. **HAL abstract (`D*`)** — `UARTDriver`、`SPIDevice` 等
+4. **External module (`E*`)** — IMU、Baro、FRAM、SD 卡等
+5. **Subsystem smoke (`S*`)** — 多驱动链
+6. **Full vehicle** — ArduCopter L0
+
+旧四段金字塔仍适用；`L*`/`D*`/`E*` 是对 “Board examples” 的拆分。
 
 ## 当前首批对象
 

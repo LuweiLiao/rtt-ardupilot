@@ -103,6 +103,32 @@
 - **残留**：背靠背极端持续突发下偶有单轮 3-4/6（`ring_dropped≈2343`，CDC 吞吐抖动），已大幅改善但非 100% 全 6/6；进一步 FIFO 调优无效。判为当前 CDC TX 实践最优。
 - **状态**：ring+kick 基础版**在工作区、未 commit**；可按用户决策像 #1+#2 一样本地固化。
 
+#### 策略转向：自底向上重验（2026-05-29，反固着）
+
+> 在 CDC 背靠背单点反复修复（裸poll→背压→ring→FIFO→多包→守卫）越改越糟、并一度把板子搞进 CDC/BL 乒乓后，用户要求**回到自底向上分步验证**。经验已沉淀为新 skill `.cursor/skills/rtt-systemic-escalation/SKILL.md`（含反固着升维规则、自底向上顺序、CDC/USB 系统级根因知识库）。
+
+- **新主线**：L1 地基(flash/SD/SPI/I2C 各 `--test=` 上板 PASS) → L2 CDC 单独(echo) → L3 CDC+MAVLink(L0 gate) → L4 背靠背压力。任一层未绿不碰上层。
+- **Phase 1 守卫改动**（EPENA 守卫 + busy 看门狗 EPDIS 恢复 + ring 背压）在工作区 `hal_usb_cherryusb_shim.c`（+111 行）**保留未提交**，待 L1-L3 验绿后在 L4 复验。
+- **Phase 2 多包**（`CDC_TX_CHUNK_MAX=512` + `cherry_tx_ring_drain_to_buf` 合并多槽一笔发）已设计未实施。
+- **已证伪死路**：native 默认化（当前树 app 无法驻留/BL 乒乓）；CDC TX1 FIFO 单独 128B（更差）。
+
+#### 自底向上重验 L1-L4 结果（2026-05-29，分步验证）
+
+> 按 `rtt-systemic-escalation` 自底向上逐层验绿，干净隔离崩溃域。
+
+- **L1 地基（全绿）**：`D_storage`/`E_fram`/`E_sdcard`/`D_spi_hal`/`E_imu`/`E_ms5611`/`D_i2c_hal`/`E_ist8310` 8/8 上板 `RESULT: PASS`、CFSR/HFSR=0，**无任何最小固件出现 CDC/BL 乒乓或 HardFault** → flash/SD/SPI/I2C 地基稳固。
+- **L2 CDC 单独（全绿）**：`L7_cherryusb_cdc` + `D_usb_serial` 枚举 + echo，30s 压力 ok=15/fail=0/**掉线=0**、CFSR/HFSR=0、无需 unbind/bind → CDC 物理链路本身稳。
+- **L3 CDC+MAVLink 单发（全绿）**：`S_mavlink_usb` HEARTBEAT(**comp=1** 正常) + 全量 ArduCopter L0 gate **exit 0**（STANDBY、**912/912 参数**、30s 流 1890/23types、fault=0）。
+- **结论**：崩溃/乒乓**既非地基、非 CDC 物理、非单发 L0**，**唯一出现在 L4 背靠背压力**。`comp=0`/`CRITICAL` 再次确认是背靠背帧损坏的症状（L3 单发为 comp=1）。
+
+#### Phase 1 + Phase 2 修复进展（L4 背靠背）
+
+- **Phase 1（EPENA 守卫 + busy 100ms 看门狗 EPDIS 恢复 + ring 背压，仅 `hal_usb_cherryusb_shim.c`）**：背靠背从"R1 后单调塌陷"改善到 **R1-R3 6/6**；但 R4 退化、**R5 USB 消失/崩溃**（需 reflash）。
+- **Phase 2（多包：`CDC_TX_CHUNK_MAX=512` + `cdc_tx_buf[512]` + `cherry_tx_ring_drain_to_buf` 合并 ≤8×64B 一笔 `usbd_ep_start_write`，对齐 ChibiOS PKTCNT）**：单轮 6/6 护栏 PASS；背靠背 6 轮 **6/5/5/3/6/4**，**R5 USB 崩溃彻底消除**（CDC 全程在线、无需 reflash）；GDB 无 HardFault（CFSR/HFSR=0）。
+- **残留**：背靠背 mid-run 仍有 timeout/帧错乱（R4 3/6，size=1330926404）；`epdis_recovery_count=301`、`tx_busy_max_ms=2923`(2.9s)、`ring_dropped=701` → 端点仍偶发长停摆（busy 看门狗高频救回，避免崩溃但拖吞吐）。
+- **状态**：Phase1+Phase2 改动**在工作区 `hal_usb_cherryusb_shim.c`（约 +172 行）、未 commit**。
+- **下一杠杆 Phase 3**：抬高 OTG_FS IRQ 优先级(当前5)到 SDMMC(2)/SD-DMA(3) 之上 或 填 FIFO 用 BASEPRI（ChibiOS `STM32_USB_OTGFIFO_FILL_BASEPRI`），减 SD 抢占致 XFRC 竞态/EPDIS 风暴；并查 2.9s 长停摆根因（EPENA 卡住/host NAK）。
+
 ### 分层驱动测试 — HAL smoke 构建已闭环；上板部分通过（2026-05-29 起）
 
 - [x] **BUILD_ONLY 占位已替换（构建门禁）**：`D_uart_hal`、`D_spi_hal`、`D_i2c_hal`、`D_storage`、`D_rcoutput`、`D_rcinput`、`E_sdcard`、`E_wspi_flash` — **2026-05-29 manifest 自检 + 串行 scons 8/8 PASS**；固件调用真实 `hal.*` 或 SD POSIX 路径（**非**旧版单步 `test_runner` 占位）
