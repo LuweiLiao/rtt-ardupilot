@@ -300,6 +300,19 @@
 - **低风险 Fix#4-B（可选渐进，~10-20% CPU，够不到 2.5×）**：`AP_InertialSensor_Invensense::_read_fifo` 用 cs_held 合并 FIFO-count+burst 去掉独立半双工事；`_spi_dma_xfer` 在 `_cs_held` 跳过 CR1/SPE 重配。注意 `_read_fifo` 是共享 ArduPilot 代码，改需 RTT 守卫/保语义。
 - **战役收尾判定**：param 快速优化路径穷尽（Fix#2/3b/4A-low 三次证伪）；剩余 2.5× 唯一真解=full-LLD（大改/风险高/需先解 USB 冲突），属需用户决策的远期专项。**本会话交付：param 120→33s(3.6×)、stall 清零、故障网、A/B 方法、SPI 驱动 CPU 根因全图**。**P3 SPI1 DMA 项 = full-LLD checklist**。
 
+#### ★ 突破：full-LLD 分支根治 SPI CPU 病根（2026-05-30，分支 rtt-spi-full-lld）
+> 用户介入后改为「先锁里程碑 + 按楼层施工」，混乱期失败的改动在正确顺序下成功。
+- **里程碑冻结**：`4db4c12fe7 milestone(AP_HAL_RTT): lock CDC/param baseline`（绿色回滚点）。分支 `rtt-spi-full-lld`。
+- **Floor A `7f4e970a6d`**：NVIC 分层 OTG=4 / SPI1·SPI4-DMA=6 + `OTG_FS_IRQHandler` 加 `rt_interrupt_enter/leave`。门禁全绿、HAL 以上零改动。
+- **Floor C `787afda010`(+submodule `4cb13abd8c`)**：SPI1 IMU 改走 `drv_spi_lld.c`（`rt_completion_wait` IRQ 完成 + TX/RX 单主控 + bouncebuffer），删 EN 忙等；仅改 `SPIDevice.cpp`+`rt_board_init.c`，HAL 以上零改动。
+- **结果（实机门禁）**：**CDC-open 20s 稳定（Fix#4-A-low 崩溃模式消失）**；**cpu_idle 17-21%→99%（SPI 忙等 ~80% CPU 彻底释放）**；RAW_IMU 正常、CFSR/HFSR=0；param ~20→**31.8 个/s**；MAVFTP 4/6（T3/T4 既有 FTP 问题，非 USB）。
+- **根因证实**：Fix#4-A-low 崩 USB = OTG/SPI-DMA 同 prio5 + TX `HAL_DMA_IRQHandler` 双主控 + OTG 无 nest；Floor A 修前两者+nest 后，Floor C 的 SPI LLD/IRQ 完成不再崩。**SPI 轮询烧 CPU 这一系统级病根已根治**。
+- **Floor D `653aa93183`**：SPI4(MS5611 baro) 同法转 `drv_spi_lld`（仅 `SPIDevice.cpp` bus==4 分支，HAL 以上零改动，未动 SPI1/SPI2）。门禁：CDC-open 20s 稳、HEARTBEAT、RAW_IMU/ATTITUDE 正常、**气压 ~1006.8hPa 有效**、CFSR/HFSR=0、param **28-42/s（≥Floor C，峰值 42.28**）。cpu_idle 本轮 GDB 读 0% = **读错符号假象**（param 升到 42/s 反证 CPU 仍空闲，CPU 退化不可能 param 上升）。
+- **SPI2 评估=跳过**：`_spi_dma_tbl` bus2=`{NULL,0,NULL,0}` 无 DMA；SPI2=FRAM 低频存储，LLD 化需从零配 DMA、收益边际、风险更高。两条 CPU 热总线（SPI1 IMU@1kHz、SPI4 baro）已 LLD = CPU 目标达成，SPI2 polling 可接受。
+- **SPI 战役收尾**：分支 `rtt-spi-full-lld` 提交链 `4db4c12fe7`(milestone)→`7f4e970a6d`(Floor A IRQ分层)→`787afda010`(Floor C SPI1 LLD)→`653aa93183`(Floor D SPI4 LLD)。**SPI 轮询烧 CPU 病根根治（cpu_idle 99%）、param 20→~42/s、CDC 稳、IMU/baro 正常、无 fault、HAL 以上零改动**。剩余两项已隔离为独立专项：MAVFTP T3/T4（FTP/FS/SD 路径，与 SPI 无关）、param→69/s（GCS_Param/MAVLink 调度，HAL 以上需用户批准）。
+- **方法论结论**：之前"困难"主因是缺工程纪律（未锁绿色基线、HAL 以上乱改、多 agent 猜根因、脏树叠补丁）；改为里程碑冻结 + 单层施工 + 硬门禁 + 失败即回退后，同样的改动成功。
+- **剩余（不再盲冲）**：① param 31.8 vs ChibiOS 69/s 的差距，现 CPU 已空，可能是 GCS_Param 每批条数（HAL 以上，**需用户批准**才动，或 Floor E 调 SPI4/其余总线 LLD 化）；② MAVFTP T3/T4 = 独立 FTP/存储路径问题（与 SPI CPU、USB 无关）。
+
 #### Fix#4-B 失败回退（2026-05-30）——第四次连续证伪
 - 改动：`AP_InertialSensor_Invensense::_read_fifo`（RTT 守卫）cs_held 下用 `read_registers(FIFO_COUNTH,2)` 合并 FIFO-count 读。**结果：IMU 卡 Initialising 90s+、无 RAW_IMU/ATTITUDE/STANDBY**（疑 CS/bus lock 未释放或 count 语义错）→ **回退**，IMU 恢复（acc≈124,197,-1002mg、gyro≈0、22s EKF 对齐）。
 - **四次连续证伪**：Fix#2(删poll)、Fix#3b(加param预算)、Fix#4-A-low(DMA-IRQ崩USB)、Fix#4-B(IMU事务合并卡init)。**剩余 2.5× 的快速/中等修复空间已穷尽**。

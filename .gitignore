@@ -195,3 +195,29 @@ Tools/bootloaders/*.rtt_bak
 # ChibiOS-Contrib (未使用)
 modules/ChibiOS-Contrib/
 .trae/
+
+# RTT porting: agent/debug tooling artifacts (never upload)
+.cursor/*.log
+.cursor/*.gdb
+.cursor/*.out
+.cursor/gdb_*
+.cursor/ocd*
+.cursor/openocd*
+.cursor/tmp/
+.cursor/tmp_*
+.cursor/reset_catch_log*/
+.cursor/skill-update-audits/
+.cursor/hooks/
+.cursor/hooks.json
+.cursor/usb-cleanup-inventory.md
+.cursor/mavftp_forensic_*.log
+.cursor/mission_protocol_smoke_*.log
+og_output
+openocd_cuav_v5.cfg
+build_old/
+staging/
+tests/gdb_*.py
+tests/gdb_*.gdb
+tests/*forensic*
+tests/mavftp_backback_*round.py
+tests/run_mavftp_forensics.sh
