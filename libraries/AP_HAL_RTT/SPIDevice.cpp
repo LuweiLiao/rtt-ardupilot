@@ -4,6 +4,7 @@
  */
 
 #include "SPIDevice.h"
+#include "rtt_spi_dma_irq.h"
 #include <AP_HAL/AP_HAL.h>
 #include <cstring>
 #include <rtthread.h>
@@ -12,6 +13,24 @@
 
 #ifdef SOC_SERIES_STM32F7
 #include <stm32f7xx.h>
+
+/* CMSIS polling path (_dev == nullptr): serialize bus access without masking
+ * global IRQs. Long __disable_irq() sections during SPI polls can starve USB
+ * OTG IRQ service while MAVLink parameter traffic is active. */
+#define RTT_CMSIS_SPI_BUS_MAX 8U
+static struct rt_mutex _cmsis_spi_bus_mtx[RTT_CMSIS_SPI_BUS_MAX];
+static bool _cmsis_spi_bus_mtx_inited[RTT_CMSIS_SPI_BUS_MAX];
+
+static void _cmsis_spi_bus_mtx_ensure(uint8_t bus)
+{
+    if (bus >= RTT_CMSIS_SPI_BUS_MAX || _cmsis_spi_bus_mtx_inited[bus]) {
+        return;
+    }
+    char name[12];
+    rt_snprintf(name, sizeof(name), "spib%u", (unsigned)bus);
+    rt_mutex_init(&_cmsis_spi_bus_mtx[bus], name, RT_IPC_FLAG_PRIO);
+    _cmsis_spi_bus_mtx_inited[bus] = true;
+}
 
 /* STM32F7 SPI1 GPIO pin configuration (register-level).
  * Called once, then guarded by _spi1_gpio_init_done.  The GPIO MODER/AFR
@@ -95,6 +114,56 @@ static void _spi4_gpio_init(void)
 
     _spi4_gpio_init_done = true;
 }
+
+/* STM32F7 SPI2 GPIO pin configuration (register-level).
+ * Used for FM25V02 FRAM (ramtron) on CUAV V5 / fmuv5-class boards.
+ *
+ * Pinout (CUAV V5, from hwdef.dat / ChibiOS fmuv5):
+ *   PI1=SCK(AF5), PI2=MISO(AF5), PI3=MOSI(AF5)
+ *   PF5=RAMTRON_CS */
+static bool _spi2_gpio_init_done = false;
+static void _spi2_gpio_init(void)
+{
+    if (_spi2_gpio_init_done) {
+        return;
+    }
+
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOIEN | RCC_AHB1ENR_GPIOFEN;
+    (void)RCC->AHB1ENR;
+    RCC->APB1ENR |= RCC_APB1ENR_SPI2EN;
+    (void)RCC->APB1ENR;
+
+    /* PI1 SPI2_SCK: MODE=AF(10), AF=AF5 */
+    GPIOI->MODER = (GPIOI->MODER & ~(3U << 2)) | (2U << 2);
+    GPIOI->AFR[0] = (GPIOI->AFR[0] & ~(0xFU << 4)) | (5U << 4);
+
+    /* PI2 SPI2_MISO */
+    GPIOI->MODER = (GPIOI->MODER & ~(3U << 4)) | (2U << 4);
+    GPIOI->AFR[0] = (GPIOI->AFR[0] & ~(0xFU << 8)) | (5U << 8);
+
+    /* PI3 SPI2_MOSI */
+    GPIOI->MODER = (GPIOI->MODER & ~(3U << 6)) | (2U << 6);
+    GPIOI->AFR[0] = (GPIOI->AFR[0] & ~(0xFU << 12)) | (5U << 12);
+
+    /* PF5 RAMTRON_CS: OUTPUT, INITIAL STATE HIGH */
+    GPIOF->MODER = (GPIOF->MODER & ~(3U << 10)) | (1U << 10);
+    GPIOF->BSRR = (1U << 5);
+
+    _spi2_gpio_init_done = true;
+}
+
+void RTT::spi_cmsis_prepare_bus(uint8_t bus)
+{
+#ifdef SOC_SERIES_STM32F7
+    _cmsis_spi_bus_mtx_ensure(bus);
+    if (bus == 2) {
+        _spi2_gpio_init();
+    }
+#else
+    (void)bus;
+#endif
+}
+
 /* ─────────────────────────────────────── SPI DMA transfer mode ─── */
 
 /* DMA stream mapping for register-level SPI buses.
@@ -105,12 +174,191 @@ static void _spi4_gpio_init(void)
  *   Configures RX + TX DMA streams with MINC, TCIE, TEIE, enables both.
  *   Completion signaled via TCIF ISR → _spi_isr_code().
  *
- * RTT approach: poll DMA EN bit (hardware clears EN on completion).
- *   No ISR needed since we are in thread context and can spin.
+ * RTT approach (Fix#4-A-low, RTT_SPI_DMA_IRQ_WAIT=1): RX DMA TC IRQ wakes
+ *   SPI thread via rt_completion_wait; fallback to EN poll on timeout.
  *   Small transfers (≤ DMA_THRESHOLD bytes) use register polling
  *   to avoid DMA setup overhead.
  */
 #define SPI_DMA_THRESHOLD   8
+
+#ifndef RTT_SPI_DMA_IRQ_WAIT
+#define RTT_SPI_DMA_IRQ_WAIT 0  /* reverted: IRQ-wait caused USB CDC disconnect on serial open */
+#endif
+
+struct spi_dma_desc {
+    DMA_Stream_TypeDef *rx_stream;
+    uint32_t            ch_rx;   /* channel number 0-7 */
+    DMA_Stream_TypeDef *tx_stream;
+    uint32_t            ch_tx;
+};
+
+static void _dma_stream_disable(DMA_Stream_TypeDef *s);
+static void _spi_dma_abort(const struct spi_dma_desc *dma, SPI_TypeDef *spi);
+
+#if RTT_SPI_DMA_IRQ_WAIT
+#include <ipc/completion.h>
+
+/* Fix#4-A-low: IRQ-driven DMA completion (replaces CPU spin on EN). */
+volatile uint32_t rtt_dbg_spi_dma_irq_fallback_count = 0;
+
+struct spi_dma_wait_ctx {
+    struct rt_completion  cpt;
+    volatile uint8_t    waiting;
+    volatile uint32_t  *isr_reg;
+    volatile uint32_t  *ifcr_reg;
+    uint32_t            tcif_mask;
+    uint32_t            ctcif_mask;
+    IRQn_Type             irqn;
+    bool                  nvic_on;
+};
+
+static spi_dma_wait_ctx _spi_dma_wait[RTT_CMSIS_SPI_BUS_MAX];
+
+static void _spi_dma_wait_stream_flags(DMA_Stream_TypeDef *stream,
+                                       volatile uint32_t **isr,
+                                       volatile uint32_t **ifcr,
+                                       uint32_t *tcif,
+                                       uint32_t *ctcif)
+{
+    static const uint32_t lifcr_ctcif[] = {
+        DMA_LIFCR_CTCIF0, DMA_LIFCR_CTCIF1,
+        DMA_LIFCR_CTCIF2, DMA_LIFCR_CTCIF3,
+    };
+    static const uint32_t hifcr_ctcif[] = {
+        DMA_HIFCR_CTCIF4, DMA_HIFCR_CTCIF5,
+        DMA_HIFCR_CTCIF6, DMA_HIFCR_CTCIF7,
+    };
+    static const uint32_t lisr_tcif[] = {
+        DMA_LISR_TCIF0, DMA_LISR_TCIF1,
+        DMA_LISR_TCIF2, DMA_LISR_TCIF3,
+    };
+    static const uint32_t hisr_tcif[] = {
+        DMA_HISR_TCIF4, DMA_HISR_TCIF5,
+        DMA_HISR_TCIF6, DMA_HISR_TCIF7,
+    };
+    const uint32_t idx = ((uint32_t)stream - (uint32_t)DMA2) / 0x18U;
+    if (idx < 4U) {
+        *isr = &DMA2->LISR;
+        *ifcr = &DMA2->LIFCR;
+        *tcif = lisr_tcif[idx];
+        *ctcif = lifcr_ctcif[idx];
+    } else {
+        *isr = &DMA2->HISR;
+        *ifcr = &DMA2->HIFCR;
+        *tcif = hisr_tcif[idx - 4U];
+        *ctcif = hifcr_ctcif[idx - 4U];
+    }
+}
+
+static void _spi_dma_wait_init_bus(uint8_t bus, const struct spi_dma_desc *dma)
+{
+    if (bus >= RTT_CMSIS_SPI_BUS_MAX || dma->rx_stream == NULL) {
+        return;
+    }
+    spi_dma_wait_ctx *ctx = &_spi_dma_wait[bus];
+    if (ctx->isr_reg != NULL) {
+        return;
+    }
+    rt_completion_init(&ctx->cpt);
+    _spi_dma_wait_stream_flags(dma->rx_stream, &ctx->isr_reg, &ctx->ifcr_reg,
+                               &ctx->tcif_mask, &ctx->ctcif_mask);
+    if (bus == 1) {
+        ctx->irqn = DMA2_Stream2_IRQn;
+    } else if (bus == 4) {
+        ctx->irqn = DMA2_Stream0_IRQn;
+    } else {
+        return;
+    }
+    NVIC_SetPriority(ctx->irqn, 5U);
+    NVIC_EnableIRQ(ctx->irqn);
+    ctx->nvic_on = true;
+}
+
+extern "C" int rtt_spi_cmsis_dma_rx_irq_handler(uint8_t bus)
+{
+    if (bus >= RTT_CMSIS_SPI_BUS_MAX) {
+        return 0;
+    }
+    spi_dma_wait_ctx *ctx = &_spi_dma_wait[bus];
+    if (ctx->isr_reg == NULL) {
+        return 0;
+    }
+    if ((*ctx->isr_reg & ctx->tcif_mask) == 0) {
+        return 0;
+    }
+    *ctx->ifcr_reg = ctx->ctcif_mask;
+    if (ctx->waiting) {
+        rt_completion_done(&ctx->cpt);
+    }
+    /* CMSIS register-DMA owns this stream; never fall through to HAL. */
+    return 1;
+}
+
+/* Shared post-DMA success/error path after EN cleared or IRQ wake. */
+static bool _spi_dma_xfer_finish(const struct spi_dma_desc *dma, SPI_TypeDef *spi)
+{
+    spi->CR2 &= ~(SPI_CR2_TXDMAEN | SPI_CR2_RXDMAEN);
+    bool err = false;
+    {
+        static const uint32_t lisr_teif[] = {
+            DMA_LISR_TEIF0, DMA_LISR_TEIF1,
+            DMA_LISR_TEIF2, DMA_LISR_TEIF3,
+        };
+        static const uint32_t hisr_teif[] = {
+            DMA_HISR_TEIF4, DMA_HISR_TEIF5,
+            DMA_HISR_TEIF6, DMA_HISR_TEIF7,
+        };
+        uint32_t rx_idx = ((uint32_t)dma->rx_stream - (uint32_t)DMA2) / 0x18U;
+        uint32_t tx_idx = ((uint32_t)dma->tx_stream - (uint32_t)DMA2) / 0x18U;
+        if (rx_idx < 4U) {
+            if (DMA2->LISR & lisr_teif[rx_idx]) { err = true; }
+        } else {
+            if (DMA2->HISR & hisr_teif[rx_idx - 4U]) { err = true; }
+        }
+        if (tx_idx < 4U) {
+            if (DMA2->LISR & lisr_teif[tx_idx]) { err = true; }
+        } else {
+            if (DMA2->HISR & hisr_teif[tx_idx - 4U]) { err = true; }
+        }
+        if (err) {
+            if (rx_idx < 4U) DMA2->LIFCR = lisr_teif[rx_idx];
+            else             DMA2->HIFCR = hisr_teif[rx_idx - 4U];
+            if (tx_idx < 4U) DMA2->LIFCR = lisr_teif[tx_idx];
+            else             DMA2->HIFCR = hisr_teif[tx_idx - 4U];
+        }
+    }
+    if (err) {
+        _spi_dma_abort(dma, spi);
+        return false;
+    }
+    uint32_t bsy = 10000;
+    while ((spi->SR & SPI_SR_BSY) && --bsy) { __NOP(); }
+    if (bsy == 0) {
+        spi->CR1 &= ~SPI_CR1_SPE;
+        (void)spi->SR;
+        (void)spi->DR;
+        spi->CR1 |= SPI_CR1_SPE;
+        bsy = 10000;
+        while ((spi->SR & SPI_SR_BSY) && --bsy) { __NOP(); }
+    }
+    return true;
+}
+
+static bool _spi_dma_poll_en_complete(const struct spi_dma_desc *dma,
+                                      SPI_TypeDef *spi,
+                                      uint32_t timeout)
+{
+    while (timeout--) {
+        if (!(dma->rx_stream->CR & DMA_SxCR_EN) &&
+            !(dma->tx_stream->CR & DMA_SxCR_EN)) {
+            return _spi_dma_xfer_finish(dma, spi);
+        }
+        __NOP();
+    }
+    _spi_dma_abort(dma, spi);
+    return false;
+}
+#endif /* RTT_SPI_DMA_IRQ_WAIT */
 
 /* Dynamic BR for register-level SPI1 path.  Updated by set_speed().
  * ChibiOS reference: derive_freq_flag_bus(), SPIDevice.cpp:259-281.
@@ -126,13 +374,9 @@ static void _spi4_gpio_init(void)
 #ifndef SPI4_PCLK2_HZ
 #define SPI4_PCLK2_HZ 108000000U
 #endif
-
-struct spi_dma_desc {
-    DMA_Stream_TypeDef *rx_stream;
-    uint32_t            ch_rx;   /* channel number 0-7 */
-    DMA_Stream_TypeDef *tx_stream;
-    uint32_t            ch_tx;
-};
+#ifndef SPI2_PCLK1_HZ
+#define SPI2_PCLK1_HZ 54000000U
+#endif
 
 /* bus index = AP bus number (1-based) */
 static const struct spi_dma_desc _spi_dma_tbl[] = {
@@ -286,6 +530,16 @@ static bool _spi_dma_xfer(SPI_TypeDef *spi, uint8_t bus,
 
     __DSB();
 
+#if RTT_SPI_DMA_IRQ_WAIT
+    _spi_dma_wait_init_bus(bus, dma);
+    spi_dma_wait_ctx *wait_ctx = (bus < RTT_CMSIS_SPI_BUS_MAX) ? &_spi_dma_wait[bus] : nullptr;
+    if (wait_ctx != nullptr && wait_ctx->isr_reg != nullptr) {
+        rt_completion_init(&wait_ctx->cpt);
+        wait_ctx->waiting = 1;
+        /* Clear stale TCIF before arming so a late IRQ cannot spuriously complete. */
+        *wait_ctx->ifcr_reg = wait_ctx->ctcif_mask;
+    }
+
     /* Enable RX stream first (then TX) — ChibiOS convention */
     dma->rx_stream->CR |= DMA_SxCR_EN;
     dma->tx_stream->CR |= DMA_SxCR_EN;
@@ -295,17 +549,42 @@ static bool _spi_dma_xfer(SPI_TypeDef *spi, uint8_t bus,
     spi->CR2 |= SPI_CR2_TXDMAEN | SPI_CR2_RXDMAEN;
     __DSB();
 
+    if (wait_ctx != nullptr && wait_ctx->isr_reg != nullptr) {
+        rt_err_t werr = rt_completion_wait(&wait_ctx->cpt, rt_tick_from_millisecond(5));
+        wait_ctx->waiting = 0;
+        if (werr == RT_EOK &&
+            !(dma->rx_stream->CR & DMA_SxCR_EN) &&
+            !(dma->tx_stream->CR & DMA_SxCR_EN)) {
+            return _spi_dma_xfer_finish(dma, spi);
+        }
+        rtt_dbg_spi_dma_irq_fallback_count++;
+        uint32_t poll_timeout = 20000U + len * 32U;
+        return _spi_dma_poll_en_complete(dma, spi, poll_timeout);
+    }
+    /* bus not hooked — fallback poll below */
+    {
+        uint32_t poll_timeout = 20000U + len * 32U;
+        return _spi_dma_poll_en_complete(dma, spi, poll_timeout);
+    }
+#else
+    /* Enable RX stream first (then TX) — ChibiOS convention */
+    dma->rx_stream->CR |= DMA_SxCR_EN;
+    dma->tx_stream->CR |= DMA_SxCR_EN;
+    __DSB();
+
+    /* Enable SPI DMA requests: SPI fetches TX from DMA and writes RX to DMA */
+    spi->CR2 |= SPI_CR2_TXDMAEN | SPI_CR2_RXDMAEN;
+    __DSB();
+#endif
+
+#if !RTT_SPI_DMA_IRQ_WAIT
     /* Poll for completion — hardware clears EN when the stream finishes.
      * Timeout: 20ms + 32us/byte (same as ChibiOS SPIDevice.cpp). */
     uint32_t timeout = 20000U + len * 32U;
     while (timeout--) {
         if (!(dma->rx_stream->CR & DMA_SxCR_EN) &&
             !(dma->tx_stream->CR & DMA_SxCR_EN)) {
-            /* Disable SPI DMA requests before checking error flags */
             spi->CR2 &= ~(SPI_CR2_TXDMAEN | SPI_CR2_RXDMAEN);
-            /* Check DMA error flags — TEIF in LISR/HISR.
-             * Each stream has a TEIF at pos 3 + stream_in_group * 6.
-             * Streams 0-3 in LISR, streams 4-7 in HISR. */
             bool err = false;
             {
                 static const uint32_t lisr_teif[] = {
@@ -329,7 +608,6 @@ static bool _spi_dma_xfer(SPI_TypeDef *spi, uint8_t bus,
                     if (DMA2->HISR & hisr_teif[tx_idx - 4U]) { err = true; }
                 }
                 if (err) {
-                    /* Clear error flags and abort */
                     if (rx_idx < 4U) DMA2->LIFCR = lisr_teif[rx_idx];
                     else             DMA2->HIFCR = hisr_teif[rx_idx - 4U];
                     if (tx_idx < 4U) DMA2->LIFCR = lisr_teif[tx_idx];
@@ -340,11 +618,9 @@ static bool _spi_dma_xfer(SPI_TypeDef *spi, uint8_t bus,
                 _spi_dma_abort(dma, spi);
                 return false;
             }
-            /* Wait for BSY — last byte may still be shifting in */
             uint32_t bsy = 10000;
             while ((spi->SR & SPI_SR_BSY) && --bsy) { __NOP(); }
             if (bsy == 0) {
-                /* BSY stuck — try clearing SPI state by toggling SPE */
                 spi->CR1 &= ~SPI_CR1_SPE;
                 (void)spi->SR;
                 (void)spi->DR;
@@ -356,10 +632,9 @@ static bool _spi_dma_xfer(SPI_TypeDef *spi, uint8_t bus,
         }
         __NOP();
     }
-
-    /* Timeout — abort DMA + SPI */
     _spi_dma_abort(dma, spi);
     return false;
+#endif
 }
 
 #endif /* SOC_SERIES_STM32F7 */
@@ -602,7 +877,7 @@ SPIDevice::SPIDevice(RTT_SPIDesc &desc)
      * bypassing RT-Thread's SPI framework which has DMA and GPIO config issues.
      * See _spi1_gpio_init() and spi1_poll_transfer() for the polling path. */
 #ifndef FORCE_RTT_SPI_FRAMEWORK
-    if (_desc.bus == 1 || _desc.bus == 4) {
+    if (_desc.bus == 1 || _desc.bus == 2 || _desc.bus == 4) {
         _dev = nullptr;
         return;
     }
@@ -620,11 +895,15 @@ SPIDevice::~SPIDevice()
 bool SPIDevice::_lock_bus()
 {
     if (_dev == nullptr) {
-        /* Manual CMSIS path (ICM42688) — no RT-Thread SPI device.
-         * Use __disable_irq as lightweight spinlock alternative.
-         * SPI1 has only one device, so no bus contention. */
-        __disable_irq();
+#ifdef SOC_SERIES_STM32F7
+        _cmsis_spi_bus_mtx_ensure(_desc.bus);
+        if (_desc.bus >= RTT_CMSIS_SPI_BUS_MAX) {
+            return false;
+        }
+        return rt_mutex_take(&_cmsis_spi_bus_mtx[_desc.bus], RT_WAITING_FOREVER) == RT_EOK;
+#else
         return true;
+#endif
     }
     if (_dev->bus == nullptr || _dev->bus->ops == nullptr) {
         return false;
@@ -649,8 +928,11 @@ bool SPIDevice::_lock_bus()
 void SPIDevice::_unlock_bus()
 {
     if (_dev == nullptr) {
-        /* Manual CMSIS path */
-        __enable_irq();
+#ifdef SOC_SERIES_STM32F7
+        if (_desc.bus < RTT_CMSIS_SPI_BUS_MAX) {
+            rt_mutex_release(&_cmsis_spi_bus_mtx[_desc.bus]);
+        }
+#endif
         return;
     }
     if (_dev->bus != nullptr && !_bus_locked) {
@@ -673,7 +955,12 @@ bool SPIDevice::set_speed(AP_HAL::Device::Speed speed)
          * For target=2MHz: 54M→27M→13.5M→6.75M→3.375M→1.6875M → i=5 → BR=5
          * For target=8MHz: 54M→27M→13.5M→6.75M            → i=3 → BR=3
          * For target=20MHz: 54M→27M→13.5M                  → i=2 → BR=2 */
-        uint32_t clk_hz = (_desc.bus == 4) ? SPI4_PCLK2_HZ : SPI1_PCLK2_HZ;
+        uint32_t clk_hz = SPI1_PCLK2_HZ;
+        if (_desc.bus == 4) {
+            clk_hz = SPI4_PCLK2_HZ;
+        } else if (_desc.bus == 2) {
+            clk_hz = SPI2_PCLK1_HZ;
+        }
         uint32_t clk = clk_hz / 2U;
         uint32_t i = 0;
         while (clk > target_hz && i < 7) { clk >>= 1U; i++; }
@@ -715,13 +1002,16 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
         if (!_cs_held) {
             if (_desc.bus == 4) {
                 _spi4_gpio_init();
+            } else if (_desc.bus == 2) {
+                _spi2_gpio_init();
             } else {
                 _spi1_gpio_init();
             }
         }
         if (send_len > 0 || recv_len > 0) {
-            bool need_sem = !_cs_held;
-            if (need_sem && !_lock_bus()) return false;
+            if (!_cs_held && !_lock_bus()) {
+                return false;
+            }
             bool ok = false;
 
             /* ── Full-duplex case (send == recv, same len): try DMA ── */
@@ -752,7 +1042,9 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
                                         bus_to_spi(_desc.bus), _cs_pin, _br);
             }
 
-            if (!_cs_held && need_sem) _unlock_bus();
+            if (!_cs_held) {
+                _unlock_bus();
+            }
             return ok;
         }
         return true;
@@ -760,10 +1052,7 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
 #endif
     if (_dev == nullptr) return false;
 
-    bool need_sem = !_cs_held;
-    if (need_sem && !_lock_bus()) return false;
     if (!_cs_held && !_lock_bus()) {
-        if (need_sem) { _unlock_bus(); }
         return false;
     }
 
@@ -783,7 +1072,6 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
             buf = (uint8_t *)rt_malloc_align(total_len, 32);
             if (buf == nullptr) {
                 if (!_cs_held) { _unlock_bus(); }
-                if (need_sem) _unlock_bus();
                 return false;
             }
             heap = true;
@@ -818,7 +1106,6 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
             rxbuf = (uint8_t *)rt_malloc_align(send_len, 32);
             if (rxbuf == nullptr) {
                 if (!_cs_held) { _unlock_bus(); }
-                if (need_sem) { _unlock_bus(); }
                 return false;
             }
             heap = true;
@@ -856,7 +1143,6 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
     }
 
     if (!_cs_held) { _unlock_bus(); }
-    if (need_sem) { _unlock_bus(); }
     return ok;
 }
 
@@ -888,6 +1174,7 @@ bool SPIDevice::set_chip_select(bool set)
                            _br;
                 spi->CR2 = SPI_CR2_DS_0 | SPI_CR2_DS_1 | SPI_CR2_DS_2 |
                            SPI_CR2_FRXTH;
+                __DSB();
                 SET_BIT(spi->CR1, SPI_CR1_SPE);
                 while (spi->SR & SPI_SR_RXNE) {
                     (void)*(volatile uint8_t *)&spi->DR;
@@ -902,6 +1189,8 @@ bool SPIDevice::set_chip_select(bool set)
              * ICM20689 112-byte FIFO read). */
             if (_desc.bus == 4) {
                 _spi4_gpio_init();
+            } else if (_desc.bus == 2) {
+                _spi2_gpio_init();
             } else {
                 _spi1_gpio_init();
             }
@@ -913,8 +1202,15 @@ bool SPIDevice::set_chip_select(bool set)
                 *bsrr = 1U << (pin + 16);  /* BR = drive LOW */
             }
         } else if (!set && _cs_held) {
-            /* Release bus semaphore when CS is de-asserted.
-             * Aligns with ChibiOS set_chip_select(false). */
+            /* De-assert CS then release bus lock (FRAM WREN needs CS rising edge). */
+            rt_base_t cs = (_cs_pin != 0) ? _cs_pin : 0;
+            if (cs != 0) {
+                uint32_t port_idx = cs >> 4;
+                uint32_t pin = cs & 0xF;
+                volatile uint32_t *bsrr =
+                    (volatile uint32_t *)(0x40020000U + port_idx * 0x400U + 0x18U);
+                *bsrr = 1U << pin;  /* BS = drive HIGH */
+            }
             _cs_held = false;
             _unlock_bus();
             return true;
@@ -957,24 +1253,28 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
         if (!_cs_held) {
             if (_desc.bus == 4) {
                 _spi4_gpio_init();
+            } else if (_desc.bus == 2) {
+                _spi2_gpio_init();
             } else {
                 _spi1_gpio_init();
             }
         }
         if (len > 0) {
-            return _spi_dma_xfer(bus_to_spi(_desc.bus), _desc.bus,
-                                 send, recv, len, _br);
+            if (!_cs_held && !_lock_bus()) {
+                return false;
+            }
+            const bool ok = _spi_dma_xfer(bus_to_spi(_desc.bus), _desc.bus,
+                                          send, recv, len, _br);
+            if (!_cs_held) {
+                _unlock_bus();
+            }
+            return ok;
         }
 #endif
         return false;
     }
 
-    bool need_sem = !_cs_held;
-    if (need_sem && !_lock_bus()) {
-        return false;
-    }
     if (!_cs_held && !_lock_bus()) {
-        if (need_sem) { _unlock_bus(); }
         return false;
     }
 
@@ -995,7 +1295,6 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
             txbuf = (uint8_t *)rt_malloc_align(len, 32);
             if (txbuf == nullptr) {
                 if (!_cs_held) { _unlock_bus(); }
-                if (need_sem) { _unlock_bus(); }
                 return false;
             }
             rxbuf = txbuf;
@@ -1022,7 +1321,6 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
 
     if (heap) { rt_free_align(txbuf); }
     if (!_cs_held) { _unlock_bus(); }
-    if (need_sem) { _unlock_bus(); }
     return ok;
 }
 

@@ -91,7 +91,7 @@ def _rtt_detect_exec_path():
 
 def _run_rtt_build(ap_root, target, bsp_deploy_abspath, scons_args, test_name=''):
     """Run scons (or scons -c) in bsp_deploy_abspath with ARDUPILOT_FULL=1, RTT_ROOT, RTT_EXEC_PATH."""
-    rtt_root = os.path.join(ap_root, 'modules', 'rt-thread')
+    rtt_root = os.environ.get('RTT_ROOT') or os.path.join(ap_root, 'modules', 'rt-thread')
     env = os.environ.copy()
     env['AP_ROOT'] = ap_root
     if test_name:

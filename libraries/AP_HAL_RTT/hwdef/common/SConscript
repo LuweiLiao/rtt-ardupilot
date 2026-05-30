@@ -17,6 +17,7 @@ env.Append(CPPPATH = [
     os.path.join(cwd, 'packages', 'stm32f7_hal_driver-latest', 'Inc'),
     # Board path for HAL_Drivers/drivers/drv_gpio.c → <board.h>
     os.path.join(cwd, 'board'),
+    os.path.join(cwd, 'board', 'drivers_ll'),
     os.path.join(cwd, 'board', 'CubeMX_Config', 'Inc'),
 ])
 # CMSIS-DSP include path (libraries/AP_GyroFFT/CMSIS_5/include)
@@ -41,11 +42,32 @@ if os.path.isfile(_bsp_rtconfig):
     _sh.copy2(_bsp_rtconfig, _dst_rtconfig)
 env.Append(CPPPATH = [_hwdef_dir])
 
+# USB backend mutex: native | tinyusb | cherryusb (one OTG_FS_IRQHandler provider)
+_scripts_dir = os.path.join(_ap_root, 'Tools', 'scripts')
+if _scripts_dir not in sys.path:
+    sys.path.insert(0, _scripts_dir)
+import rtt_usb_backend as _rtt_usb_backend
+_USB = _rtt_usb_backend.resolve_usb_backend()
+env.Append(CPPDEFINES=_USB['cpp_defines'])
+_rtt_usb_backend.apply_bsp_usb_build_options(env, _USB, BuildOptions)
+if _USB['l8_msc_no_sdio']:
+    BuildOptions['BSP_USING_SDIO'] = 0
+    BuildOptions['RT_USING_SDIO'] = 0
+    env.Append(CCFLAGS=' -U BSP_USING_SDIO -U RT_USING_SDIO')
+if os.environ.get('RTT_DISABLE_SDIO', '').strip() in ('1', 'true', 'yes', 'on'):
+    BuildOptions['BSP_USING_SDIO'] = 0
+    BuildOptions['RT_USING_SDIO'] = 0
+    env.Append(CCFLAGS=' -U BSP_USING_SDIO -U RT_USING_SDIO')
+if _USB['ardupilot_full']:
+    os.environ['RTT_USB_BACKEND'] = _USB['backend']
+print('RTT USB backend: %s (TEST_NAME=%r ARDUPILOT_FULL=%s)' % (
+    _USB['backend'], _USB['test_name'] or None, _USB['ardupilot_full']))
+
 # Module test build: TEST_NAME=<name> => skip ArduPilot and applications, build test firmware
 TEST_NAME = os.environ.get('TEST_NAME', '')
 
 if TEST_NAME:
-    env.Append(CPPDEFINES = ['FLASH_ORIGIN=0x08000000U'])
+    env.Append(CPPDEFINES = ['FLASH_ORIGIN=0x08008000U'])
     old_lflags = env.get('LINKFLAGS', '')
     if isinstance(old_lflags, list):
         old_lflags = ' '.join(str(v) for v in old_lflags)
@@ -58,6 +80,15 @@ if ARDUPILOT_FULL:
     AP_ROOT = os.environ.get('AP_ROOT', '')
     if not AP_ROOT or not os.path.isfile(os.path.join(AP_ROOT, 'Tools', 'scripts', 'scons_ardupilot_sources.py')):
         AP_ROOT = os.path.abspath(os.path.join(cwd, '..', '..', '..', '..', '..'))
+    _scripts_dir = os.path.join(AP_ROOT, 'Tools', 'scripts')
+    if _scripts_dir not in sys.path:
+        sys.path.insert(0, _scripts_dir)
+    import rtt_ar_archive as _rtt_ar_archive
+    _rtt_ar_archive.configure_tempfile_ar(
+        env,
+        max_line_length=8192,
+        tempfile_dir=os.path.join(AP_ROOT, 'build', 'rtt_cuav_v5'),
+    )
     env.Append(LINKFLAGS=' -Wl,--start-group -lstdc++ -lsupc++ -lgcc -Wl,--end-group')
     env.Append(LIBS=['stdc++', 'supc++', 'gcc'])
     env.Append(LINKFLAGS=' -Wl,--allow-multiple-definition')
@@ -77,7 +108,11 @@ if ARDUPILOT_FULL:
     config_py = os.path.join(cwd, 'scons_ardupilot_config.py')
     script = os.path.join(AP_ROOT, 'Tools', 'scripts', 'scons_ardupilot_sources.py')
     if os.path.isfile(script):
-        subprocess.check_call([sys.executable, script, AP_ROOT, '--board', 'rtt_cuav_v5', '--bsp-dir', cwd, '--output', cwd])
+        _gen_env = os.environ.copy()
+        _gen_env['RTT_USB_BACKEND'] = _USB['backend']
+        subprocess.check_call(
+            [sys.executable, script, AP_ROOT, '--board', 'rtt_cuav_v5', '--bsp-dir', cwd, '--output', cwd],
+            env=_gen_env)
     if os.path.isfile(config_py):
         with open(config_py) as f:
             exec(f.read())
@@ -123,9 +158,21 @@ for d in dirlist:
         objs = objs + SConscript(os.path.join(path, 'SConscript'))
 
 if TEST_NAME:
-    test_dir = os.path.join(cwd, 'tests', 'test_' + TEST_NAME)
-    test_sconscript = os.path.join(test_dir, 'SConscript')
+    _scripts_dir = os.path.join(_ap_root, 'Tools', 'scripts')
+    if _scripts_dir not in sys.path:
+        sys.path.insert(0, _scripts_dir)
+    import rtt_test_manifest as _rtt_test_manifest
+    _test_dir, _test_common_dir, _test_key = _rtt_test_manifest.resolve_test_paths(
+        _ap_root, TEST_NAME, cwd)
+    test_app_desc = os.path.join(_test_common_dir, 'test_app_descriptor.c')
+    if os.path.isfile(test_app_desc):
+        objs = objs + DefineGroup('test_app_descriptor',
+                                  [test_app_desc],
+                                  depend=[''],
+                                  CPPPATH=[_test_common_dir, _hwdef_dir])
+    test_sconscript = os.path.join(_test_dir, 'SConscript')
     if os.path.isfile(test_sconscript):
+        print('RTT module test: %s -> %s' % (_test_key, _test_dir))
         objs = objs + SConscript(test_sconscript)
     else:
         print('ERROR: Test not found: %s (expected %s)' % (TEST_NAME, test_sconscript))

@@ -1741,6 +1741,10 @@ bool AP_GPS::get_lag(uint8_t instance, float &lag_sec) const
 #if AP_GPS_BLENDED_ENABLED
     // return lag of blended GPS
     if (instance == GPS_BLENDED_INSTANCE) {
+        if (drivers[instance] == nullptr ||
+            (uint32_t)drivers[instance] < 0x20000000U) {
+            return false;
+        }
         return drivers[instance]->get_lag(lag_sec);
     }
 #endif

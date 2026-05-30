@@ -21,11 +21,18 @@ typedef struct {
     IRQn_Type     irqn;
 } usart_ll_config_t;
 
-/* USART3 (PD8/PD9 AF7) and UART7 (PE8/PF6 AF8) predefined configs */
+/* CUAV V5 USART pin/AF tables (see hwdef.dat) */
+extern const usart_ll_config_t usart1_ll_cfg;
+extern const usart_ll_config_t usart2_ll_cfg;
 extern const usart_ll_config_t usart3_ll_cfg;
+extern const usart_ll_config_t uart4_ll_cfg;
+extern const usart_ll_config_t usart6_ll_cfg;
 extern const usart_ll_config_t uart7_ll_cfg;
+extern const usart_ll_config_t uart8_ll_cfg;
 
 void     usart_ll_init(const usart_ll_config_t *cfg);
+/* GPIO + clock + USART enable for a known instance; baud 0 keeps table default */
+int      usart_ll_init_for_instance(USART_TypeDef *uart, uint32_t baud);
 void     usart_ll_putc(USART_TypeDef *uart, uint8_t ch);
 int      usart_ll_getc_nb(USART_TypeDef *uart);
 int      usart_ll_tx_poll(USART_TypeDef *uart, const uint8_t *buf, int len);

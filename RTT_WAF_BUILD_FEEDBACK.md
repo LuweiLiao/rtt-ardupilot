@@ -4,7 +4,7 @@
 
 RTT（RT-Thread）目标**不再使用 waf**，统一在 **pogo-apm 根目录** 用 **SCons** 完成配置、部署与编译。
 
-- **BSP 唯一维护位置**：`libraries/AP_HAL_RTT/` 下的各 BSP（如 `rtt_bsp_pixhawk6c_mini`、`rtt_bsp_cuav_v5`）。
+- **BSP 维护**：CUAV v5 使用 `hwdef/common` + `hwdef/cuav_v5`（非 HAL 根目录整树）。Legacy 整树 BSP（pixhawk6c_mini、fmuv2）在 `libraries/AP_HAL_RTT/archive/stray-bsp/`。
 - **rt-thread 子模块保持纯净**：不在 `modules/rt-thread` 内常驻 BSP；构建时由 `rtt_bsp_deploy.py` 将 BSP 部署到 `build/rtt_deploy/<target>/` 再在该目录执行 SCons。
 - **产物**：`build/rtt_deploy/<target>/rtthread.bin`、`rt-thread.elf`，并复制到 `build/rtt_<target>/rtthread.bin` 便于烧录。
 
@@ -53,7 +53,7 @@ scons --target=pixhawk6c-mini --upload --port=/dev/ttyACM0
 ## 烧录与 bootloader 注意事项（Pixhawk6C Mini）
 
 - 应用区 Flash 基址为 **0x08020000**（前 128KB 为 bootloader）。BSP 中已通过 `SCB->VTOR = 0x08020000` 及 `stm32h7xx_hal_conf.h` 中的 `USER_VECT_TAB_ADDRESS`/`VECT_TAB_BASE_ADDRESS` 正确设置向量表。
-- 若烧录后 USB 串口不出现，需确认：VTOR 已在 `rt_hw_board_init` 最早阶段设置、`HAL_Init()` 已调用、板级 USB 中断（如 `OTG_FS_IRQHandler`）在 BSP 中有安全实现（见 `libraries/AP_HAL_RTT/rtt_bsp_pixhawk6c_mini/board/ports/cherryusb/usb_irq.c`）。
+- 若烧录后 USB 串口不出现，需确认：VTOR 已在 `rt_hw_board_init` 最早阶段设置、`HAL_Init()` 已调用、板级 USB 中断（如 `OTG_FS_IRQHandler`）在 BSP 中有安全实现（见 `libraries/AP_HAL_RTT/archive/stray-bsp/rtt_bsp_pixhawk6c_mini/board/ports/cherryusb/usb_irq.c`，legacy 归档路径）。
 
 ---
 

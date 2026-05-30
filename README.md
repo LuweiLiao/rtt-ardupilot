@@ -60,7 +60,7 @@ It is continually being expanded to provide support for new emerging vehicle typ
 2. **首次构建前**：若 scons 报缺包，需在部署后的 BSP 目录执行依赖安装，例如 `pkgs --update`；完整步骤见下方详细文档。
 3. **详细说明**：
    - [Tools/ardupilotwaf/RTT_BUILD_FMUV2.md](Tools/ardupilotwaf/RTT_BUILD_FMUV2.md) — 从零到可链接固件的完整流程；
-   - [libraries/AP_HAL_RTT/rtt_bsp_fmuv2/README.md](libraries/AP_HAL_RTT/rtt_bsp_fmuv2/README.md) — fmuv2 专用 BSP 使用与维护说明。
+   - [libraries/AP_HAL_RTT/archive/stray-bsp/rtt_bsp_fmuv2/README.md](libraries/AP_HAL_RTT/archive/stray-bsp/rtt_bsp_fmuv2/README.md) — fmuv2 legacy BSP（已归档，waf 路径；未在 CUAV v5 基线验证）。
 
 ## RTT scons 构建与上传 (scons RTT build and upload) ##
 
@@ -71,7 +71,7 @@ It is continually being expanded to provide support for new emerging vehicle typ
 
 ### rt-thread 子模块保持纯净的约定 ###
 
-`modules/rt-thread/bsp/stm32/stm32h743-pixhawk6c-mini` 与 `modules/rt-thread/bsp/stm32/stm32f765-cuav-v5` 为 **构建时从 AP_HAL_RTT 部署生成** 的 BSP，不提交到 rt-thread 上游，以保持 rt-thread 子模块与官方一致、纯净。源 BSP 位于 `libraries/AP_HAL_RTT/rtt_bsp_pixhawk6c_mini` 与 `libraries/AP_HAL_RTT/rtt_bsp_cuav_v5`（或 hwdef 对应路径）。详见 [modules/rt-thread/POGO_APM_BSP_DEPLOY.md](modules/rt-thread/POGO_APM_BSP_DEPLOY.md)。
+`modules/rt-thread/bsp/stm32/stm32h743-pixhawk6c-mini` 与 `modules/rt-thread/bsp/stm32/stm32f765-cuav-v5` 为 **构建时从 AP_HAL_RTT 部署生成** 的 BSP，不提交到 rt-thread 上游，以保持 rt-thread 子模块与官方一致、纯净。**CUAV v5** 源为 `hwdef/common` + `hwdef/cuav_v5`；**Pixhawk6C Mini** legacy 整树源在 `libraries/AP_HAL_RTT/archive/stray-bsp/rtt_bsp_pixhawk6c_mini`。详见 [modules/rt-thread/POGO_APM_BSP_DEPLOY.md](modules/rt-thread/POGO_APM_BSP_DEPLOY.md)。
 
 ## Top Contributors ##
 

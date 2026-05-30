@@ -21,6 +21,19 @@ extern const AP_HAL::HAL& hal;
 #define I2C_TIMEOUT_MAX    50000U
 #endif
 
+/*
+ * Clear bus (toggle SCL) on I2C timeout when SDA is stuck low.
+ * Normal NACK / BERR paths must not trigger clear — only poll timeout.
+ */
+/*
+ * Default OFF: auto clear-bus on poll timeout was observed to disturb the
+ * internal bus0 IST8310 in the full vehicle (3D_MAG dropped). Opt-in per board
+ * via hwdef `define HAL_I2C_CLEAR_ON_TIMEOUT 1` if a bus is prone to lockup.
+ */
+#ifndef HAL_I2C_CLEAR_ON_TIMEOUT
+#define HAL_I2C_CLEAR_ON_TIMEOUT 0
+#endif
+
 /* ------------------------------------------------------------------ */
 /*  TIMINGR values — STM32F7, PCLK1=54 MHz                            */
 /* ------------------------------------------------------------------ */
@@ -47,10 +60,8 @@ struct I2CBusDescr {
 
 /*
  * Bus table — one entry per supported I2C bus.
- * Order must match HAL_RTT_I2C_BUS_NAMES.
- * GPIO ports filled only for physically-wired buses (CUAV V5: bus 0 only).
- * Bus 1/2/3 (I2C1/2/4) have no physical pins on CUAV V5 per hwdef.dat,
- * but the register definitions are present for code reuse.
+ * Order must match hwdef I2C_ORDER (CUAV V5: I2C3 I2C1 I2C2 I2C4).
+ * GPIO/AF from hwdef.dat for all four buses (bus0 internal, 1–3 external).
  */
 static I2CBusDescr _i2c_buses[] = {
     /* Bus 0 — I2C3 (PH7=SCL AF4, PH8=SDA AF4) */
@@ -58,22 +69,24 @@ static I2CBusDescr _i2c_buses[] = {
       GPIOH, 7, 4, GPIOH, 8, 4,
       I2C_TIMINGR_100KHZ, I2C_TIMINGR_400KHZ, false },
 
-    /* Bus 1 — I2C1 (PB8=SCL AF4, PB9=SDA AF4) — no physical pins on CUAV V5 */
+    /* Bus 1 — I2C1 (PB8=SCL AF4, PB9=SDA AF4) — external GPS1 */
     { I2C1, RCC_APB1ENR_I2C1EN, RCC_APB1RSTR_I2C1RST,
       GPIOB, 8, 4, GPIOB, 9, 4,
       I2C_TIMINGR_100KHZ, I2C_TIMINGR_400KHZ, false },
 
-    /* Bus 2 — I2C2 (PF1=SCL AF4, PF0=SDA AF4) — no physical pins on CUAV V5 */
+    /* Bus 2 — I2C2 (PF1=SCL AF4, PF0=SDA AF4) — external GPS2 */
     { I2C2, RCC_APB1ENR_I2C2EN, RCC_APB1RSTR_I2C2RST,
       GPIOF, 1, 4, GPIOF, 0, 4,
       I2C_TIMINGR_100KHZ, I2C_TIMINGR_400KHZ, false },
 
-    /* Bus 3 — I2C4 (PF14=SCL AF4, PF15=SDA AF4) — no physical pins on CUAV V5 */
+    /* Bus 3 — I2C4 (PF14=SCL AF4, PF15=SDA AF4) — external */
     { I2C4, RCC_APB1ENR_I2C4EN, RCC_APB1RSTR_I2C4RST,
       GPIOF, 14, 4, GPIOF, 15, 4,
       I2C_TIMINGR_100KHZ, I2C_TIMINGR_400KHZ, false },
 };
-#define I2C_BUS_COUNT (sizeof(_i2c_buses) / sizeof(_i2c_buses[0]))
+#define I2C_BUS_COUNT RTT_I2C_BUS_COUNT
+static_assert(sizeof(_i2c_buses) / sizeof(_i2c_buses[0]) == RTT_I2C_BUS_COUNT,
+              "RTT_I2C_BUS_COUNT must match _i2c_buses[]");
 
 /* ------------------------------------------------------------------ */
 /*  GPIO helper — set pin to AF mode with open-drain + pull-up         */
@@ -144,11 +157,34 @@ static void _i2c_hw_init(uint8_t bus)
     bd->hw_inited = true;
 }
 
+#if HAL_I2C_CLEAR_ON_TIMEOUT
+static uint8_t _i2c_read_sda(uint8_t bus)
+{
+    if (bus >= I2C_BUS_COUNT) {
+        return 1;
+    }
+    I2CBusDescr *bd = &_i2c_buses[bus];
+    if (bd->sda_port == NULL) {
+        return 1;
+    }
+    return (bd->sda_port->IDR & (1U << bd->sda_pin)) ? 1U : 0U;
+}
+
+static bool _i2c_xfer_timeout(uint8_t bus, I2C_TypeDef *i2c)
+{
+    i2c->CR2 |= I2C_CR2_STOP;
+    if (_i2c_read_sda(bus) == 0) {
+        I2CDevice::clear_bus(bus);
+    }
+    return false;
+}
+#endif
+
 /* ------------------------------------------------------------------ */
 /*  Low-level I2C transfer — polling, register-only                    */
 /*  Returns true on success.                                           */
 /* ------------------------------------------------------------------ */
-static bool _i2c_master_xfer_ll(I2C_TypeDef *i2c, uint8_t addr,
+static bool _i2c_master_xfer_ll(uint8_t bus, I2C_TypeDef *i2c, uint8_t addr,
                                 const uint8_t *send, uint32_t send_len,
                                 uint8_t *recv, uint32_t recv_len)
 {
@@ -162,8 +198,12 @@ static bool _i2c_master_xfer_ll(I2C_TypeDef *i2c, uint8_t addr,
     timeout = I2C_TIMEOUT_MAX;
     while ((i2c->ISR & I2C_ISR_BUSY) && --timeout) { __NOP(); }
     if (timeout == 0) {
+#if HAL_I2C_CLEAR_ON_TIMEOUT
+        return _i2c_xfer_timeout(bus, i2c);
+#else
         i2c->CR2 |= I2C_CR2_STOP;
         return false;
+#endif
     }
 
     /* ================================================================== */
@@ -192,8 +232,12 @@ static bool _i2c_master_xfer_ll(I2C_TypeDef *i2c, uint8_t addr,
                                  I2C_ISR_BERR | I2C_ISR_OVR |
                                  I2C_ISR_ARLO)) && --timeout) { __NOP(); }
             if (timeout == 0) {
+#if HAL_I2C_CLEAR_ON_TIMEOUT
+                return _i2c_xfer_timeout(bus, i2c);
+#else
                 i2c->CR2 |= I2C_CR2_STOP;
                 return false;
+#endif
             }
             if (i2c->ISR & (I2C_ISR_NACKF | I2C_ISR_BERR |
                             I2C_ISR_OVR | I2C_ISR_ARLO)) {
@@ -214,8 +258,12 @@ static bool _i2c_master_xfer_ll(I2C_TypeDef *i2c, uint8_t addr,
                                  I2C_ISR_BERR | I2C_ISR_OVR |
                                  I2C_ISR_ARLO)) && --timeout) { __NOP(); }
             if (timeout == 0) {
+#if HAL_I2C_CLEAR_ON_TIMEOUT
+                return _i2c_xfer_timeout(bus, i2c);
+#else
                 i2c->CR2 |= I2C_CR2_STOP;
                 return false;
+#endif
             }
             if (i2c->ISR & (I2C_ISR_NACKF | I2C_ISR_BERR |
                             I2C_ISR_OVR | I2C_ISR_ARLO)) {
@@ -247,8 +295,12 @@ static bool _i2c_master_xfer_ll(I2C_TypeDef *i2c, uint8_t addr,
                                  I2C_ISR_BERR | I2C_ISR_OVR |
                                  I2C_ISR_ARLO)) && --timeout) { __NOP(); }
             if (timeout == 0) {
+#if HAL_I2C_CLEAR_ON_TIMEOUT
+                return _i2c_xfer_timeout(bus, i2c);
+#else
                 i2c->CR2 |= I2C_CR2_STOP;
                 return false;
+#endif
             }
             if (i2c->ISR & (I2C_ISR_NACKF | I2C_ISR_BERR |
                             I2C_ISR_OVR | I2C_ISR_ARLO)) {
@@ -268,7 +320,11 @@ static bool _i2c_master_xfer_ll(I2C_TypeDef *i2c, uint8_t addr,
         timeout = I2C_TIMEOUT_MAX;
         while (!(i2c->ISR & I2C_ISR_STOPF) && --timeout) { __NOP(); }
         if (timeout == 0) {
+#if HAL_I2C_CLEAR_ON_TIMEOUT
+            return _i2c_xfer_timeout(bus, i2c);
+#else
             return false;
+#endif
         }
         i2c->ICR = I2C_ICR_STOPCF;
     }
@@ -366,7 +422,7 @@ bool I2CDevice::_do_transfer(const uint8_t *send, uint32_t send_len,
         _i2c_hw_init(_busnum);
     }
 
-    return _i2c_master_xfer_ll(bd->regs, _address,
+    return _i2c_master_xfer_ll(_busnum, bd->regs, _address,
                                send, send_len, recv, recv_len);
 }
 

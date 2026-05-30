@@ -14,6 +14,11 @@
 namespace RTT
 {
 
+/* Must match _i2c_buses[] in I2CDevice.cpp and hwdef I2C_ORDER length. */
+#ifndef RTT_I2C_BUS_COUNT
+#define RTT_I2C_BUS_COUNT 4
+#endif
+
 class I2CDevice : public AP_HAL::I2CDevice
 {
 public:

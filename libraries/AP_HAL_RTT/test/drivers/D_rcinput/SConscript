@@ -1,0 +1,85 @@
+import os
+import sys
+from building import *
+
+cwd = GetCurrentDir()
+common_dir = os.path.normpath(os.path.join(cwd, '..', '..', '_common'))
+
+if common_dir not in sys.path:
+    sys.path.insert(0, common_dir)
+import rtt_test_hal_rcin_link as _hal_rcin_link
+
+_scripts = os.path.join(
+    os.environ.get('AP_ROOT', _hal_rcin_link._ap_root_from_test_dir(cwd)),
+    'Tools', 'scripts')
+if _scripts not in sys.path:
+    sys.path.insert(0, _scripts)
+import scons_ardupilot_sources as _sas
+
+ap_root, hal_src = _hal_rcin_link.collect_hal_rcin_smoke_sources(cwd)
+
+bsp_dir = os.environ.get('BSP_DIR', '')
+if not bsp_dir:
+    bsp_dir = os.path.join(ap_root, 'libraries', 'AP_HAL_RTT', 'hwdef', 'common')
+board = os.environ.get('RTT_BOARD', 'rtt_cuav_v5')
+hwdef_build = os.path.join(ap_root, 'build', board)
+
+src = Glob('*.cpp')
+src += Glob(os.path.join(common_dir, 'test_runner.c'))
+src += Glob(os.path.join(common_dir, 'test_stubs.c'))
+src += Glob(os.path.join(common_dir, 'test_hal_uart_stubs.cpp'))
+src += Glob(os.path.join(common_dir, 'ap_strings_shim.c'))
+src += hal_src
+
+CPPPATH = [cwd, common_dir, hwdef_build]
+CPPPATH += _hal_rcin_link.collect_hal_rcin_smoke_cpppath(ap_root, bsp_dir, board=board)
+CPPPATH += [
+    os.path.join(ap_root, 'libraries', 'AP_HAL_RTT'),
+]
+
+ap_config_h = os.path.join(hwdef_build, 'ap_config.h')
+if not os.path.isfile(ap_config_h):
+    os.makedirs(hwdef_build, exist_ok=True)
+    with open(ap_config_h, 'w') as f:
+        f.write('#ifndef _AP_CONFIG_H_\n#define _AP_CONFIG_H_\n#include "hwdef.h"\n#endif\n')
+
+force_include = os.path.join(common_dir, 'ap_test_force_include_rcin.h')
+
+CPPDEFINES = _sas._collect_defines(board=board)
+
+COMMON_TEST_DEFINES = [
+    '-UHAL_WITH_IO_MCU',
+    '-DHAL_WITH_IO_MCU=0',
+    '-DHAL_LOGGING_ENABLED=0',
+    '-UAP_RCPROTOCOL_ENABLED',
+    '-DAP_RCPROTOCOL_ENABLED=0',
+]
+
+CCFLAGS = ['-include', force_include, '-fsingle-precision-constant'] + COMMON_TEST_DEFINES
+CXXFLAGS = [
+    '-include', force_include,
+    '-std=gnu++11',
+    '-fno-exceptions',
+    '-fno-rtti',
+    '-Wno-unused-parameter',
+    '-fsingle-precision-constant',
+] + COMMON_TEST_DEFINES
+
+_env = Env
+_old_lflags = _env.get('LINKFLAGS', '')
+if isinstance(_old_lflags, list):
+    _old_lflags = ' '.join(str(v) for v in _old_lflags)
+if '-lstdc++' not in _old_lflags:
+    _env.Append(LINKFLAGS=' -Wl,--start-group -lstdc++ -lsupc++ -lgcc -Wl,--end-group')
+    _env.Append(LIBS=['stdc++', 'supc++', 'gcc'])
+
+group = DefineGroup(
+    'test_D_rcinput',
+    src,
+    depend=[''],
+    CPPPATH=CPPPATH,
+    CPPDEFINES=CPPDEFINES,
+    CCFLAGS=CCFLAGS,
+    CXXFLAGS=CXXFLAGS,
+)
+Return('group')

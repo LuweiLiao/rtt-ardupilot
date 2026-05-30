@@ -2,6 +2,7 @@
 # Export(env, ap_sources, ap_cpppath, ap_defines, ap_force_include, ap_obj_root).
 # Sources are relative to this file's directory (AP_ROOT).
 import os
+import sys
 
 Import('env', 'ap_sources', 'ap_cpppath', 'ap_defines', 'ap_force_include', 'ap_obj_root')
 
@@ -14,12 +15,18 @@ def _flags_to_list(v):
 
 # Pass CCFLAGS/CXXFLAGS as list of single flags; include CFLAGS (device -mcpu, -mfloat-abi) so C++ objs match BSP ABI (VFP)
 _cc = _flags_to_list(env.get('CFLAGS', '')) + _flags_to_list(env.get('CCFLAGS', '')) + ['-fsingle-precision-constant', '-Os', '-Wno-trigraphs']
-_cxx = _flags_to_list(env.get('CFLAGS', '')) + _flags_to_list(env.get('CXXFLAGS', '')) + ['-Os', '-Wno-trigraphs']
+_cxx = _flags_to_list(env.get('CFLAGS', '')) + _flags_to_list(env.get('CXXFLAGS', '')) + ['-fsingle-precision-constant', '-Os', '-Wno-trigraphs']
 if ap_force_include:
     _cc = _cc + ['-include', ap_force_include]
     _cxx = _cxx + ['-include', ap_force_include]
 
 ap_root = Dir('.').abspath
+
+_scripts = os.path.join(ap_root, 'Tools', 'scripts')
+if _scripts not in sys.path:
+    sys.path.insert(0, _scripts)
+import rtt_ar_archive as _rtt_ar
+_rtt_ar.register(env)
 
 def _source_abspath(src):
     return src if os.path.isabs(src) else os.path.join(ap_root, src)
@@ -30,9 +37,18 @@ def _object_abspath(src):
     obj_rel = os.path.splitext(rel)[0] + '.o'
     return os.path.join(ap_obj_root, obj_rel)
 
-objs = [
-    env.Object(target=_object_abspath(s), source=_source_abspath(s),
-               CCFLAGS=_cc, CXXFLAGS=_cxx, CPPDEFINES=ap_defines)
-    for s in ap_sources
-]
-Return('objs')
+os.makedirs(ap_obj_root, exist_ok=True)
+
+_objs = []
+for s in ap_sources:
+    _src = _source_abspath(s)
+    _tgt = _object_abspath(s)
+    if s.endswith('.c') or s.endswith('.S'):
+        _objs.append(env.Object(target=_tgt, source=_src, CCFLAGS=_cc, CPPDEFINES=ap_defines))
+    else:
+        _objs.append(env.Object(target=_tgt, source=_src, CXXFLAGS=_cxx, CPPDEFINES=ap_defines))
+
+# One ar @$RSP after all objects exist — avoids ARG_MAX and parallel archive races.
+_ap_lib_target = os.path.join(ap_obj_root, 'libardupilot_rtt.a')
+ap_lib = env.RttArArchive(_ap_lib_target, _objs)
+Return('ap_lib')

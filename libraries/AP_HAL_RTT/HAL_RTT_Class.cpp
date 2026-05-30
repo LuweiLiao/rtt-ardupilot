@@ -16,6 +16,8 @@ volatile uint32_t rtt_dbg_setup_trace = 0;
 
 #include <stm32f7xx.h>
 #include "hal_usb_lld_rtt.h"
+#include "rtt_ctl_telemetry.h"
+#include "rtt_dbg_bkp.h"
 #include <rtthread.h>
 #include "RCInput.h"
 
@@ -24,12 +26,17 @@ volatile uint32_t rtt_dbg_setup_trace = 0;
 #include "RCOutput.h"
 #include "GPIO.h"
 #include "Storage.h"
+#include "SPIDevice.h"
 #include "AnalogIn.h"
 #include "Util.h"
+#include "I2CDevice.h"
+
+extern uint32_t rtt_boot_rcc_csr;
 #if HAL_WITH_IO_MCU
 #include <AP_IOMCU/AP_IOMCU.h>
 #endif
 #include "SPIDeviceManager.h"
+#include "shared_dma.h"
 #include "I2CDeviceManager.h"
 #include "WSPIDevice.h"
 #include <AP_HAL/OpticalFlow.h>
@@ -191,6 +198,7 @@ struct main_loop_arg {
 static void _main_loop_entry(void* arg)
 {
     rtt_dbg_main_loop_entry_called = 0x12345678;  /* Magic number to verify we're here */
+    rtt_ctl_print_snapshot();
 
     main_loop_arg* a = (main_loop_arg*)arg;
     a->sched->set_main_thread_id(rt_thread_self());
@@ -248,12 +256,10 @@ static void _main_loop_entry(void* arg)
         /* Poll USB bus events (enumeration, control transfers, CDC data RX) */
         usb_lld_poll_rtt();
         a->callbacks->loop();
-        /* Call delay callbacks after loop() completes.
-         * On ChibiOS, call_delay_cb() is called inside wait_for_sample() → delay(),
-         * but RTT's delay_microseconds_boost() bypasses delay(), so we must
-         * call it explicitly. Placing it after loop() ensures scheduler tasks
-         * have already run and time budgets are reset. */
-        a->sched->call_delay_cb();
+        /* GCS comms run via AP_Scheduler (400 Hz update_send/update_receive),
+         * same as ChibiOS — do NOT call call_delay_cb() every loop iteration.
+         * scheduler_delay_callback remains available through delay() during
+         * long init waits (register_delay_callback, min 5 ms). */
         uint32_t post_loop_us = AP_HAL::micros();
         uint32_t work = post_loop_us - pre_loop_us;
         rtt_dbg_work_time_us = work;
@@ -271,6 +277,7 @@ static void _main_loop_entry(void* arg)
         if (dt < rtt_dbg_loop_time_min_us && dt > 0) rtt_dbg_loop_time_min_us = dt;
         if (dt < 1500) rtt_dbg_fast_loop_count++;
         rtt_dbg_main_loop_iterations++;
+        rtt_ctl_telemetry_tick(1000);
     }
 }
 
@@ -283,7 +290,11 @@ void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
      * reset with ~512ms timeout (FLASH_OPTCR_IWDG_SW=0 on CUAV V5).  Must run
      * before debug markers or init that can exceed the remaining margin. */
     ap_rtt_iwdg_init();
+#if AP_HAL_SHARED_DMA_ENABLED
+    RTT::Shared_DMA::init();
+#endif
     rtt_dbg_hal_run_called = 0xAAAAAAAA;
+    rtt_ctl_print_snapshot();
     rt_kprintf("HAL_RTT::run\n");
 
     /* Strategic feed — PVU/RVU stuck means IWDG still at ~512ms timeout.
@@ -299,10 +310,15 @@ void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
      * path is taken.  SPI4 clock also enabled for MS5611 baro. */
     RCC->APB2ENR |= RCC_APB2ENR_SPI1EN | RCC_APB2ENR_SPI4EN;
 
-    /* Clear sticky reset flags (RCC_CSR RMVF) — mirrors ChibiOS __late_init()
-     * stm32_watchdog_clear_reason(). Prevents was_watchdog_reset() from
-     * falsely returning true from a previous boot's RCC_CSR residue. */
+    /* Save reset reason before RMVF clear — mirrors ChibiOS board.c
+     * stm32_watchdog_save_reason() / stm32_watchdog_clear_reason(). */
+    rtt_boot_rcc_csr = RCC->CSR;
+    rtt_dbg_bkp_restore_prev_fault();
     RCC->CSR |= RCC_CSR_RMVF;
+
+#ifdef HAL_I2C_CLEAR_BUS
+    RTT::I2CDevice::clear_all_buses();
+#endif
 
     /* Tell bootloader the app is alive — write RTC_BOOT_FWOK to backup
      * register 0.  Mirrors ChibiOS stm32_util.c set_fast_reboot().
@@ -310,16 +326,8 @@ void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
      * app-crashed-from-previous-boot; writing FWOK here prevents
      * false-positive erase on subsequent power cycles. */
     {
-        /* Enable PWR + backup domain write access */
-        RCC->APB1ENR |= RCC_APB1ENR_PWREN;
-        (void)RCC->APB1ENR;
-        if ((RCC->BDCR & RCC_BDCR_RTCEN) == 0) {
-            RCC->BDCR |= RCC_BDCR_RTCSEL_0;  /* LSE default */
-            RCC->BDCR |= RCC_BDCR_RTCEN;
-        }
-        PWR->CR1 |= PWR_CR1_DBP;          /* F7: CR1 not CR, PWR_CR1_DBP not PWR_CR_DBP */
-        __DSB();
-        *(volatile uint32_t *)0x40002850UL = 0xb0093a26UL;  /* RTC_BOOT_FWOK */
+        rtt_dbg_bkp_enable_domain();
+        RTC->BKP0R = 0xb0093a26UL;  /* RTC_BOOT_FWOK */
         __DSB();
     }
 
@@ -363,6 +371,7 @@ void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
      * don't poll here, the USBRST event is lost forever and USB never
      * enumerates.  Subsequent polls happen in the main loop. */
     usb_lld_poll_rtt();
+    rtt_ctl_print_snapshot();
 
     hal.serial(0)->begin(SERIAL0_BAUD);
     rtt_dbg_setup_trace = 32;
@@ -379,6 +388,8 @@ void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
         spibus->semaphore.take_nonblocking();
         spibus->semaphore.give();
     }
+    /* SPI2 (FRAM) — CMSIS GPIO/mutex before setup() opens storage */
+    RTT::spi_cmsis_prepare_bus(2);
 
     rtt_dbg_hal_run_called = 0xBBBBBBBB;
 

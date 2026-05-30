@@ -1,5 +1,11 @@
 /*
  * ArduPilot + RT-Thread HAL - UARTDriver (T2-1, T2-2: _begin, wait_timeout, rx_indicate)
+ *
+ * Boundary vs ChibiOS UARTDriver.cpp:
+ *   - USART DMA: per-instance tables in hwdef; use RTT::Shared_DMA when sharing streams.
+ *   - SERIAL0 USB: native (hal_usb_lld_rtt) or CherryUSB (hal_usb_cherryusb_shim.c),
+ *     selected by RTT_USB_BACKEND — not ChibiOS USB stack.
+ * ChibiOS reference: libraries/AP_HAL_ChibiOS/UARTDriver.cpp
  */
 
 #include "UARTDriver.h"
@@ -11,6 +17,9 @@
 
 #if defined(SOC_SERIES_STM32F7)
 #include <stm32f7xx.h>
+extern "C" {
+#include "drv_usart_ll.h"
+}
 #endif
 
 #include "hal_usb_lld_rtt.h"
@@ -321,8 +330,12 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
         } else {
 #if defined(SOC_SERIES_STM32F7)
             if (_uart_hw != nullptr) {
-                uint32_t pclk = uart_pclk(_uart_hw);
-                _uart_hw->BRR = uart_brr_value(pclk, baud);
+                if ((_uart_hw->CR1 & USART_CR1_UE) == 0U) {
+                    (void)usart_ll_init_for_instance(_uart_hw, baud);
+                } else {
+                    uint32_t pclk = uart_pclk(_uart_hw);
+                    _uart_hw->BRR = uart_brr_value(pclk, baud);
+                }
             }
 #endif
         }
@@ -394,32 +407,31 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
     if (_readbuf.get_size() != rxS) { _readbuf.set_size(rxS); }
     if (_writebuf.get_size() != txS) { _writebuf.set_size(txS); }
 
-    if (_baudrate != 0) {
-        /* Skip baud rate reconfig for console UART */
+    {
+        /* RTT console UART7 is brought up in rtt_ctl_uart_hw_init(); do not reset it. */
         rt_device_t console_dev = rt_console_get_device();
         bool is_console = false;
         if (console_dev) {
             const char *cons_name = console_dev->parent.name;
             is_console = (cons_name && std::strcmp(name, cons_name) == 0);
         }
-        if (!is_console) {
-            /* Set baud rate via BRR register */
+        const bool skip_full_hw_init = is_console && (std::strcmp(name, "uart7") == 0);
+
+        if (!skip_full_hw_init) {
+            /* GPIO AF + clock + UE/RE/TE/BRR — required for GPS (USART1) and other AP ports */
+            if (usart_ll_init_for_instance(usart, _baudrate) != 0) {
+                uint32_t pclk = uart_pclk(usart);
+                uint32_t brr = (_baudrate > 0U)
+                    ? uart_brr_value(pclk, _baudrate)
+                    : ((pclk + 57600U / 2U) / 57600U);
+                usart->CR3 &= ~(USART_CR3_DMAR | USART_CR3_DMAT);
+                usart->CR1 = USART_CR1_UE | USART_CR1_RE | USART_CR1_TE;
+                usart->BRR = brr;
+            }
+        } else if (_baudrate > 0U) {
             uint32_t pclk = uart_pclk(usart);
-            uint32_t brr = uart_brr_value(pclk, _baudrate);
-
-            /* CMSIS poll path: disable BSP/RT-Thread DMA so RXNE/RDR polling works.
-             * IOMCU (1.5 Mbaud unbuffered) relies on uart_poll_read/write; leaving
-             * DMAR/DMAT set steals bytes from RDR and breaks wait_timeout(). */
-            usart->CR3 &= ~(USART_CR3_DMAR | USART_CR3_DMAT);
-
-            /* Enable USART, receiver, transmitter */
-            usart->CR1 = USART_CR1_UE | USART_CR1_RE | USART_CR1_TE;
-            usart->BRR = brr;
+            usart->BRR = uart_brr_value(pclk, _baudrate);
         }
-    } else {
-        /* Just enable the USART at the current (BSP-configured) baud rate */
-        usart->CR3 &= ~(USART_CR3_DMAR | USART_CR3_DMAT);
-        usart->CR1 |= USART_CR1_UE | USART_CR1_RE | USART_CR1_TE;
     }
 
     _initialized = true;

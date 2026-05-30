@@ -573,6 +573,7 @@ void usb_lld_poll_rtt(void)
     if (cherry_tx_ring_count > 0 && !cherry_tx_busy) {
         cherry_tx_kick();
     }
+
     rt_hw_interrupt_enable(level);
 }
 

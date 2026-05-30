@@ -49,6 +49,36 @@ void usb_lld_poll_rtt(void)
     /* No-op: USB not yet initialized */
 }
 
+void usb_lld_init_rtt(void) {}
+void usb_lld_set_rx_callback(void (*cb)(const uint8_t *, uint32_t, void *), void *ctx)
+{
+    (void)cb;
+    (void)ctx;
+}
+uint32_t usb_lld_send_rtt(const uint8_t *data, uint32_t len)
+{
+    (void)data;
+    (void)len;
+    return 0;
+}
+uint32_t usb_lld_get_connected_rtt(void)
+{
+    return 0;
+}
+
+/* rtt_ctl_telemetry weak debug markers */
+volatile uint32_t rtt_dbg_usb_init;
+volatile uint32_t rtt_dbg_usb_setup_stup;
+volatile uint32_t rtt_dbg_usb_usbrst;
+volatile uint32_t rtt_dbg_usb_enumdne;
+volatile uint32_t rtt_dbg_setup_stage;
+
+void rtt_ctl_print_snapshot(void) {}
+void rtt_ctl_telemetry_tick(uint32_t interval_ms)
+{
+    (void)interval_ms;
+}
+
 /* ================================================================
  *  UART7 Control Telemetry Stubs
  * ================================================================ */

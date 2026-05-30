@@ -4,14 +4,14 @@
 
 - **MCU**：fmuv2 对应 **STM32F427**。
 - **RTT 子模块路径**：`modules/rt-thread`（官方仓库子模块）。
-- **BSP 源**：fmuv2 使用 **pogo-apm 仓库内独立维护**的 BSP：`libraries/AP_HAL_RTT/rtt_bsp_fmuv2`。不依赖 stm32f429-atk-apollo 或 stm32f427-robomaster-a。
-- **部署**：waf 构建时，若 `RTT_ROOT/bsp/stm32/stm32f427-fmuv2` 不存在，会自动从 `rtt_bsp_fmuv2` 复制到该目录，以便 scons 在 RTT 标准 bsp 树下运行。
+- **BSP 源**：fmuv2 使用 **pogo-apm 仓库内归档的 legacy 整树 BSP**：`libraries/AP_HAL_RTT/archive/stray-bsp/rtt_bsp_fmuv2`（**deprecated** 路径，未在当前 CUAV v5 基线验证）。不依赖 stm32f429-atk-apollo 或 stm32f427-robomaster-a。
+- **部署**：waf 构建时，若 `RTT_ROOT/bsp/stm32/stm32f427-fmuv2` 不存在，会自动从 `archive/stray-bsp/rtt_bsp_fmuv2` 复制到该目录，以便 scons 在 RTT 标准 bsp 树下运行。
 - **构建方式**：**waf 只调 scons**：在 BSP 目录执行 scons，再用 `ar` 将 `build/*.o` 打成 `librtthread.a`，waf 仅负责链接。不再在 waf 中从源编 RTT。
 
 ## 2) rtt.py 中的行为
 
 - 当 **BOARD=rtt_fmuv2** 或 **fmuv2** 且 **RTT_ROOT** 指向 `modules/rt-thread` 时：
-  - 先执行 **部署**：若 `RTT_ROOT/bsp/stm32/stm32f427-fmuv2` 不存在，从 `libraries/AP_HAL_RTT/rtt_bsp_fmuv2` 复制过去。
+  - 先执行 **部署**：若 `RTT_ROOT/bsp/stm32/stm32f427-fmuv2` 不存在，从 `libraries/AP_HAL_RTT/archive/stray-bsp/rtt_bsp_fmuv2` 复制过去。
   - BSP 路径为 `RTT_ROOT/bsp/stm32/stm32f427-fmuv2`。
   - 若已存在 `librtthread.a`，则将其所在目录加入 `env.LIBPATH`。
   - 若不存在，则自动在 BSP 目录运行 `scons`，再用 `ar rcs librtthread.a` 打包 `build/*.o`，并将该目录加入 `env.LIBPATH`。

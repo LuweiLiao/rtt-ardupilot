@@ -6,8 +6,33 @@
 
 #include "drv_usart_ll.h"
 #include "drv_gpio_ll.h"
+#include <rtthread.h>
 
 /* ---- Predefined configs for CUAV V5 ---- */
+
+const usart_ll_config_t usart1_ll_cfg = {
+    .Instance    = USART1,
+    .baudrate    = 115200,
+    .tx_port_idx = 1,   /* PB6 */
+    .tx_pin_no   = 6,
+    .tx_af       = 7,
+    .rx_port_idx = 1,   /* PB7 */
+    .rx_pin_no   = 7,
+    .rx_af       = 7,
+    .irqn        = USART1_IRQn,
+};
+
+const usart_ll_config_t usart2_ll_cfg = {
+    .Instance    = USART2,
+    .baudrate    = 57600,
+    .tx_port_idx = 3,   /* PD5 */
+    .tx_pin_no   = 5,
+    .tx_af       = 7,
+    .rx_port_idx = 3,   /* PD6 */
+    .rx_pin_no   = 6,
+    .rx_af       = 7,
+    .irqn        = USART2_IRQn,
+};
 
 const usart_ll_config_t usart3_ll_cfg = {
     .Instance    = USART3,
@@ -21,6 +46,30 @@ const usart_ll_config_t usart3_ll_cfg = {
     .irqn        = USART3_IRQn,
 };
 
+const usart_ll_config_t uart4_ll_cfg = {
+    .Instance    = UART4,
+    .baudrate    = 115200,
+    .tx_port_idx = 3,   /* PD1 */
+    .tx_pin_no   = 1,
+    .tx_af       = 8,
+    .rx_port_idx = 3,   /* PD0 */
+    .rx_pin_no   = 0,
+    .rx_af       = 8,
+    .irqn        = UART4_IRQn,
+};
+
+const usart_ll_config_t usart6_ll_cfg = {
+    .Instance    = USART6,
+    .baudrate    = 57600,
+    .tx_port_idx = 6,   /* PG14 */
+    .tx_pin_no   = 14,
+    .tx_af       = 8,
+    .rx_port_idx = 6,   /* PG9 */
+    .rx_pin_no   = 9,
+    .rx_af       = 8,
+    .irqn        = USART6_IRQn,
+};
+
 const usart_ll_config_t uart7_ll_cfg = {
     .Instance    = UART7,
     .baudrate    = 115200,
@@ -32,6 +81,30 @@ const usart_ll_config_t uart7_ll_cfg = {
     .rx_af       = 8,
     .irqn        = UART7_IRQn,
 };
+
+const usart_ll_config_t uart8_ll_cfg = {
+    .Instance    = UART8,
+    .baudrate    = 115200,
+    .tx_port_idx = 4,   /* PE1 */
+    .tx_pin_no   = 1,
+    .tx_af       = 8,
+    .rx_port_idx = 4,   /* PE0 */
+    .rx_pin_no   = 0,
+    .rx_af       = 8,
+    .irqn        = UART8_IRQn,
+};
+
+static const usart_ll_config_t *_cfg_lookup(USART_TypeDef *uart)
+{
+    if (uart == USART1) return &usart1_ll_cfg;
+    if (uart == USART2) return &usart2_ll_cfg;
+    if (uart == USART3) return &usart3_ll_cfg;
+    if (uart == UART4)  return &uart4_ll_cfg;
+    if (uart == USART6) return &usart6_ll_cfg;
+    if (uart == UART7)  return &uart7_ll_cfg;
+    if (uart == UART8)  return &uart8_ll_cfg;
+    return RT_NULL;
+}
 
 /* ---- Internal: GPIO alternate function ---- */
 
@@ -126,6 +199,23 @@ void usart_ll_init(const usart_ll_config_t *cfg)
 
     /* Enable USART: TX + RX + UE */
     uart->CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_UE;
+}
+
+int usart_ll_init_for_instance(USART_TypeDef *uart, uint32_t baud)
+{
+    const usart_ll_config_t *base = _cfg_lookup(uart);
+    if (base == RT_NULL) {
+        return -1;
+    }
+    usart_ll_config_t cfg = *base;
+    if (baud > 0U) {
+        cfg.baudrate = baud;
+    }
+    if (cfg.baudrate == 0U) {
+        cfg.baudrate = 115200U;
+    }
+    usart_ll_init(&cfg);
+    return 0;
 }
 
 void usart_ll_putc(USART_TypeDef *uart, uint8_t ch)
