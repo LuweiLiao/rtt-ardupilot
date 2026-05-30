@@ -955,9 +955,9 @@ class RTTHWDef(HWDef):
         for bus in spi_buses:
             bus_upper = bus.upper()
             enables.append('#define RT_USING_%s' % bus)
-            # DMA macros only for SPI4 LLD canary; SPI1/SPI2 use CMSIS polling.
-            # BSP_USING_SPIx is controlled by .config, not here.
-            if bus_upper == 'SPI4':
+            # Enable DMA for each SPI bus — except SPI1 where DMA returns
+            # incorrect data (0xFF) on STM32F7/CUAV-V5; HAL polling works.
+            if bus_upper != 'SPI1':
                 enables.append('#define BSP_%s_RX_USING_DMA' % bus_upper)
                 enables.append('#define BSP_%s_TX_USING_DMA' % bus_upper)
         if self.i2c_pins:
