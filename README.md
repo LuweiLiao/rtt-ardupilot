@@ -69,9 +69,16 @@ It is continually being expanded to provide support for new emerging vehicle typ
 - **编译**：进入对应 BSP 目录后执行 `scons`（需设置 `RTT_ROOT` 指向 `modules/rt-thread`）；或先由 waf/deploy 生成 BSP 再在 BSP 目录编译。
 - **上传**：`scons --target=pixhawk6c_mini --upload` 或 `scons --target=cuav_v5 --upload`。若当前无 `rtthread.bin` 会先在该 BSP 目录触发 scons 编译，再调用 `Tools/scripts/rtt_bin_to_apj.py` 生成 .apj 并执行 `Tools/scripts/uploader.py`。可选：`--port /dev/ttyACM0` 指定串口。
 
-### rt-thread 子模块保持纯净的约定 ###
+### rt-thread 子模块 BSP 边界（CUAV v5）###
 
-`modules/rt-thread/bsp/stm32/stm32h743-pixhawk6c-mini` 与 `modules/rt-thread/bsp/stm32/stm32f765-cuav-v5` 为 **构建时从 AP_HAL_RTT 部署生成** 的 BSP，不提交到 rt-thread 上游，以保持 rt-thread 子模块与官方一致、纯净。**CUAV v5** 源为 `hwdef/common` + `hwdef/cuav_v5`；**Pixhawk6C Mini** legacy 整树源在 `libraries/AP_HAL_RTT/archive/stray-bsp/rtt_bsp_pixhawk6c_mini`。详见 [modules/rt-thread/POGO_APM_BSP_DEPLOY.md](modules/rt-thread/POGO_APM_BSP_DEPLOY.md)。
+`modules/rt-thread/bsp/stm32/stm32f765-cuav-v5` **是提交在 fork（`LuweiLiao/ardu-rtthread` `staging/pogo`）里的源 BSP**，不是纯生成物。其中文件分两类：
+
+- **fork 源（构建必需、由 fork 提供）**：`board/CubeMX_Config/Src/stm32f7xx_hal_msp.c`、`board/ports/*`（cherryusb、sdcard_port、phy_reset 等）。scons `rtt_bsp_deploy.py`（hwdef 模式）会把这些 overlay 到 `build/rtt_deploy/cuav_v5`。另有 `bsp/stm32/libraries/HAL_Drivers/drivers/drv_spi.c` 也是 fork 源并参与编译。
+- **deploy/同步目标（源在 AP_HAL_RTT，不以 fork 副本为准）**：`board/rt_board_init.c`、`board/drv_spi_lld.c`、`board/linker_scripts/link.lds`、`rtconfig.h` 等。**权威源是 `libraries/AP_HAL_RTT/hwdef/common/`**；scons 构建用的是 `hwdef/common` 的副本（deploy 产物 `build/rtt_deploy/cuav_v5/board/rt_board_init.c` 与 `hwdef/common` 逐字节一致），waf 则在 `_deploy_cuav_v5_bsp_if_needed` 时从 `hwdef/common` 同步覆盖到 fork BSP。
+
+因此 **CUAV v5 的板级 `rt_board_init.c` / `drv_spi_lld.c` 改动只应改 `hwdef/common`**；fork BSP 里的同名副本是镜像/同步目标，可能滞后，scons 构建不读取它。
+
+详见 [docs/rtt-porting/BSP_BOUNDARY.md](docs/rtt-porting/BSP_BOUNDARY.md)。**Pixhawk6C Mini** legacy 整树源在 `libraries/AP_HAL_RTT/archive/stray-bsp/rtt_bsp_pixhawk6c_mini`。
 
 ## Top Contributors ##
 
