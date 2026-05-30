@@ -1,14 +1,39 @@
 # AP_HAL_RTT — SPI full-LLD design
 
 Authoritative design for the RT-Thread SPI low-level driver (LLD) path on
-CUAV V5 / STM32F767, and how it maps to the (already implemented + validated)
-floors A/C/D on branch `rtt-spi-full-lld`.
+CUAV V5 / STM32F767, and the floor-A/C/D commits on branch `rtt-spi-full-lld`.
 
-> Status: **implemented and gate-passed** (cpu_idle 17–21% → 99%, CDC-open 20s
-> stable, no HardFault). This document is the design record + the contract that
-> any future SPI bus conversion (e.g. SPI2) must follow. It also captures the
-> hard rule learned from the failed Fix#4-B: **the fix lives in the SPI HAL/LLD,
-> never by reshaping AP_InertialSensor transactions to dodge a HAL problem.**
+> ## ⚠️ STATUS CORRECTION (2026-05-30, hardware-verified)
+> **The SPI LLD is NOT active on cuav_v5. The earlier claim "implemented and
+> gate-passed, cpu_idle 17–21%→99% from LLD" is INVALID.**
+>
+> Hardware gate (commit 71b7cb40c2, reverted 8cc2a1ef0a) proved:
+> `spi_lld_lookup(SPI1)=NULL`, `g_spi1_lld_stats.init_count=0`,
+> `xfer_count` does not grow; SPI1 still runs the CMSIS poll path
+> (`spi1_xfer_calls` ~1929/s).
+>
+> Root cause: the registration guard in `rt_board_init.c` is
+> `#if defined(BSP_USING_SPI1) && defined(BSP_SPI1_TX_USING_DMA) && defined(BSP_SPI1_RX_USING_DMA)`.
+> **`BSP_USING_SPIn` is never generated** (the `.config` `CONFIG_BSP_USING_SPI*`
+> lines are commented out; `rtt_hwdef.py` emits only `RT_USING_SPIn` +
+> `BSP_SPIn_*_USING_DMA`). So the guard fails on its FIRST term for **SPI1, SPI4
+> AND SPI2** — `spi_lld_register()` for every bus is compiled out. The whole
+> `drv_spi_lld` path is dormant code.
+>
+> **What actually runs:** `SPIDevice.cpp` CMSIS bypass (`_dev=nullptr` for bus
+> 1/2/4) — register poll + busy-wait DMA for large fullduplex. IMU/Baro/FRAM all
+> work this way; functional gates (RAW_IMU, EKF, MAVFTP 6/6, CFSR=0) pass on this
+> path. cpu_idle measured ~99% AT REST on the CMSIS path (so the "SPI polling eats
+> 80% CPU" premise is itself unverified and must be re-measured under load).
+>
+> The sections below remain the DESIGN/CONTRACT for IF the LLD is ever activated.
+> Activation requires generating `BSP_USING_SPIn` so the guard fires — which also
+> makes RT-Thread `drv_spi.c` instantiate the bus driver and may conflict with the
+> CMSIS bypass. This must be measured/justified before attempting, not toggled.
+> See `open-issues.md` "SPI1 Floor C 实际未激活".
+
+This document also captures the hard rule from the failed Fix#4-B: **a fix lives
+in the SPI HAL/LLD, never by reshaping AP_InertialSensor transactions.**
 
 ## 0. Baseline / rollback
 
@@ -131,7 +156,7 @@ that, together with the ISR-completion model, made the SPI LLD coexist with USB
 | — | IRQ-layer prerequisite | **Floor A** `a5fca2b901` (NVIC + ISR nest) — fixed the USB-crash root |
 | 3 | enable on IMU, AP_InertialSensor unchanged | **Floor C** `6bf787cdf9` (SPI1 via `spi_lld_xfer`, zero AP_InertialSensor change) |
 | 3b | extend to baro | **Floor D** `866388d9ac` (SPI4) |
-| 4 | full gate, rollback on fail | gate passed; cpu_idle 99%; no HardFault; MAVFTP T3/T4 = separate SD-FS project |
+| 4 | full gate, rollback on fail | **NOT achieved on cuav_v5** — see STATUS CORRECTION at top; LLD never registered (BSP_USING_SPIn absent), CMSIS path runs instead. "cpu_idle 99% from LLD" invalid. |
 
 ## Remaining (separate projects, not SPI-HAL)
 
