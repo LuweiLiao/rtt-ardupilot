@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """MAVFTP comprehensive test for AP_HAL_RTT on CUAV v5"""
 
-import sys, time, os, struct
+import argparse
+import os
+import sys
+import time
+import struct
 from pymavlink import mavutil
 
-PORT = os.environ.get('MAVFTP_PORT', '/dev/ttyACM1')
-# Allow --port override
-if '--port' in sys.argv:
-    idx = sys.argv.index('--port')
-    PORT = sys.argv[idx + 1]
-    sys.argv.pop(idx)
-    sys.argv.pop(idx)
+DEFAULT_PORT = "/dev/ttyACM1"
 TIMEOUT = 15
 
 FTP_OP_None         = 0
@@ -179,21 +177,21 @@ def test_list_apm(ftp):
     resp = ftp.list_directory('/APM')
     if resp is None:
         print("FAIL (timeout)")
-        return False
+        return "fail"
     if resp['opcode'] == FTP_OP_Ack:
         raw = resp['data']
         parts = [p.decode(errors='replace') for p in raw.split(b'\x00') if p]
         print(f"PASS ({len(parts)} entries: {parts[:5]})")
-        return True
+        return "pass"
     elif resp['opcode'] == FTP_OP_Nack:
         err = resp['data'][0] if resp['data'] else -1
         if err == FTP_ERR_FileNotFound:
             print("SKIP (/APM not found - no SD card?)")
-            return True
+            return "skip"
         print(f"FAIL (Nack err={err})")
-        return False
+        return "fail"
     print(f"FAIL (opcode={opcode_name(resp['opcode'])})")
-    return False
+    return "fail"
 
 
 def test_read_param_file(ftp):
@@ -252,14 +250,14 @@ def test_write_read_delete(ftp):
     resp = ftp.create_file(test_path)
     if resp is None:
         print("FAIL (timeout on create)")
-        return False
+        return "fail"
     if resp['opcode'] == FTP_OP_Nack:
         err = resp['data'][0] if resp['data'] else -1
         if err == FTP_ERR_FileNotFound:
             print("SKIP (no /APM directory)")
-            return True
+            return "skip"
         print(f"FAIL (Nack on create, err={err})")
-        return False
+        return "fail"
 
     session = resp['session']
 
@@ -267,35 +265,35 @@ def test_write_read_delete(ftp):
     if resp is None or resp['opcode'] != FTP_OP_Ack:
         print("FAIL (write failed)")
         ftp.term_session(session)
-        return False
+        return "fail"
 
     ftp.term_session(session)
 
     resp = ftp.open_file_ro(test_path)
     if resp is None or resp['opcode'] != FTP_OP_Ack:
         print("FAIL (re-open failed)")
-        return False
+        return "fail"
 
     session = resp['session']
     resp = ftp.read_file(session, 0, 239)
     if resp is None or resp['opcode'] != FTP_OP_Ack:
         print("FAIL (read back failed)")
         ftp.term_session(session)
-        return False
+        return "fail"
 
     read_data = resp['data']
     ftp.term_session(session)
 
     if read_data[:len(test_data)] != test_data:
         print(f"FAIL (data mismatch: got {read_data[:30]})")
-        return False
+        return "fail"
 
     resp = ftp.remove_file(test_path)
     if resp is None or resp['opcode'] != FTP_OP_Ack:
         print("WARN (delete failed, but read was OK)")
 
     print("PASS")
-    return True
+    return "pass"
 
 
 def test_reset_sessions(ftp):
@@ -335,12 +333,43 @@ def test_stability_check(conn):
     return False
 
 
-def main():
-    print(f"=== MAVFTP Comprehensive Test ===")
-    print(f"Port: {PORT}")
+def normalize_result(raw):
+    """Map bool or tri-state string to pass/skip/fail."""
+    if raw is True:
+        return "pass"
+    if raw is False:
+        return "fail"
+    if raw in ("pass", "skip", "fail"):
+        return raw
+    return "fail"
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="MAVFTP comprehensive test for AP_HAL_RTT")
+    parser.add_argument(
+        "--port",
+        default=None,
+        help=f"MAVLink serial port (default: MAVFTP_PORT env or {DEFAULT_PORT})",
+    )
+    parser.add_argument(
+        "--require-sd",
+        action="store_true",
+        help="Treat SKIP (no SD /APM) as FAIL",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    port = args.port or os.environ.get("MAVFTP_PORT", DEFAULT_PORT)
+
+    print("=== MAVFTP Comprehensive Test ===")
+    print(f"Port: {port}")
+    if args.require_sd:
+        print("Mode: --require-sd (SKIP counts as FAIL)")
 
     time.sleep(0.5)
-    conn = mavutil.mavlink_connection(PORT, baud=115200)
+    conn = mavutil.mavlink_connection(port, baud=115200)
     time.sleep(0.5)
     hb = conn.wait_heartbeat(timeout=10)
     if not hb:
@@ -364,22 +393,42 @@ def main():
 
     for name, fn in tests:
         try:
-            results[name] = fn()
+            results[name] = normalize_result(fn())
         except Exception as e:
             print(f"  EXCEPTION: {e}")
-            results[name] = False
+            results[name] = "fail"
         time.sleep(0.5)
 
     print()
     print("=" * 50)
-    passed = sum(1 for v in results.values() if v)
+    by_status = {"pass": [], "skip": [], "fail": []}
+    for name, status in results.items():
+        by_status[status].append(name)
+
+    pass_n = len(by_status["pass"])
+    skip_n = len(by_status["skip"])
+    fail_n = len(by_status["fail"])
     total = len(results)
-    print(f"Results: {passed}/{total} PASS")
-    for name, ok in results.items():
-        print(f"  {name}: {'PASS' if ok else 'FAIL'}")
+
+    print(f"Summary: {pass_n} PASS, {skip_n} SKIP, {fail_n} FAIL (of {total} tests)")
+    print(f"MAVFTP pass count: {pass_n}/{total} (6/6 only when all tests PASS)")
+    print()
+    for label in ("PASS", "SKIP", "FAIL"):
+        key = label.lower()
+        names = by_status[key]
+        if names:
+            print(f"{label}:")
+            for name in names:
+                print(f"  {name}")
+
+    effective_fail = fail_n
+    if args.require_sd:
+        effective_fail += skip_n
 
     conn.close()
-    return 0 if passed == total else 1
+    if effective_fail > 0:
+        return 1
+    return 0
 
 
 if __name__ == '__main__':

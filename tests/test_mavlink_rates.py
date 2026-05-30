@@ -26,12 +26,24 @@ def find_rtt_cdc_port():
     return None
 
 
+def resolve_port(cli_port):
+    """Explicit --port wins; else MAVLINK_PORT env; else by-id discovery; else default."""
+    if cli_port is not None:
+        return cli_port
+    env_port = os.environ.get("MAVLINK_PORT")
+    if env_port:
+        return env_port
+    discovered = find_rtt_cdc_port()
+    if discovered:
+        return discovered
+    return DEFAULT_PORT
+
+
 def connect(port: str, baud: int = 115200, retries: int = 6, timeout: int = 10):
     last_error = None
     for attempt in range(retries):
         conn = None
         try:
-            port = find_rtt_cdc_port() or port
             conn = mavutil.mavlink_connection(port, baud=baud, source_system=252)
             hb = conn.wait_heartbeat(timeout=timeout)
             if hb is None or conn.target_system == 0:
@@ -142,7 +154,7 @@ def reboot_and_reconnect(conn, port: str, baud: int):
     last_exc = None
     for _ in range(6):
         try:
-            c = connect(find_rtt_cdc_port() or port, baud=baud, retries=20, timeout=15)
+            c = connect(port, baud=baud, retries=20, timeout=15)
             # Confirm RX stays alive (at least 2 heartbeats) before proceeding.
             hb_needed = 2
             hb_got = 0
@@ -222,23 +234,28 @@ def check_mins(label, rates, mins):
 
 def main():
     parser = argparse.ArgumentParser(description="MAVLink rate regression")
-    parser.add_argument("--port", default=DEFAULT_PORT, help="MAVLink serial port")
+    parser.add_argument(
+        "--port",
+        default=None,
+        help=f"MAVLink serial port (default: {DEFAULT_PORT}, or MAVLINK_PORT, or by-id discovery)",
+    )
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--reboot", action="store_true", help="Reboot vehicle before each phase (less stable on USB CDC)")
     args = parser.parse_args()
 
+    port = resolve_port(args.port)
     tracked = ["HEARTBEAT", "ATTITUDE", "RAW_IMU", "SYS_STATUS"]
     print("=== MAVLink Rate Regression ===")
-    print(f"Port: {args.port}")
-    conn = connect(args.port, baud=args.baud)
+    print(f"Port: {port}")
+    conn = connect(port, baud=args.baud)
     if args.reboot:
-        conn = reboot_and_reconnect(conn, args.port, args.baud)
+        conn = reboot_and_reconnect(conn, port, args.baud)
     print(f"Connected(default): sys={conn.target_system} comp={conn.target_component}")
     settle_after_boot(conn)
     # If RX is still unstable after reboot, fail early with a clear signal.
     if not ensure_rx_alive(conn, min_types=("HEARTBEAT",), timeout_s=12):
         conn.close()
-        conn = connect(args.port, baud=args.baud, retries=10, timeout=15)
+        conn = connect(port, baud=args.baud, retries=10, timeout=15)
     drain(conn)
     default_rates = measure_rates(conn, tracked, duration=8)
     ok_default = check_thresholds(
@@ -249,12 +266,12 @@ def main():
         },
     )
     if args.reboot:
-        conn = reboot_and_reconnect(conn, args.port, args.baud)
+        conn = reboot_and_reconnect(conn, port, args.baud)
     print(f"\nConnected(request): sys={conn.target_system} comp={conn.target_component}")
     settle_after_boot(conn)
     if not ensure_rx_alive(conn, min_types=("HEARTBEAT",), timeout_s=12):
         conn.close()
-        conn = connect(args.port, baud=args.baud, retries=10, timeout=15)
+        conn = connect(port, baud=args.baud, retries=10, timeout=15)
     drain(conn)
     request_streams(conn, rate_hz=4)
     time.sleep(1)

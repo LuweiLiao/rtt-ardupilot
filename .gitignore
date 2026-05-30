@@ -222,3 +222,4 @@ tests/gdb_*.gdb
 tests/*forensic*
 tests/mavftp_backback_*round.py
 tests/run_mavftp_forensics.sh
+results/perf/

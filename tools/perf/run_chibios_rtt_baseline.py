@@ -127,7 +127,11 @@ def summarize(values: List[float], failures: int, unit: str) -> Dict[str, Any]:
 def build_metric_stub(metric_id: str, meta: Dict[str, Any], rounds: int) -> Dict[str, Any]:
     """Scaffold metric block matching docs/perf/schema.json."""
     round_rows = [
-        {"round": i, "ok": False, "value": None, "error": "not_implemented: hardware agent required"}
+        {
+            "round": i,
+            "ok": False,
+            "error": "not_implemented: hardware agent required",
+        }
         for i in range(1, rounds + 1)
     ]
     return {
