@@ -177,22 +177,13 @@ static spi_lld_bus_t s_spi4_lld = {
 
 static void _spi_lld_board_init(void)
 {
-    /*
-     * SPI1 LLD DMA disabled: manual OpenOCD polling returns correct
-     * WHO_AM_I (0x98) but DMA returns 0xFF.  Root cause suspected:
-     * DMA2 Stream2/Channel3 (SPI1_RX) reads stale FIFO data or has a
-     * cache/buffer-address issue specific to the SPI1 DMA path.
-     * SPI4 DMA (barometer) works fine.  Until the DMA root cause is
-     * found, SPI1 falls back to the RTT framework's HAL polling path
-     * which works correctly at the cost of slightly higher CPU usage.
-     */
-#if 0  /* was: defined(BSP_USING_SPI1) && ... */
+#if defined(BSP_USING_SPI1) && defined(BSP_SPI1_TX_USING_DMA) && defined(BSP_SPI1_RX_USING_DMA)
     spi_lld_register(&s_spi1_lld);
     spi_lld_bus_init(&s_spi1_lld);
-    HAL_NVIC_SetPriority(SPI1_RX_DMA_IRQ, 5, 0);
-    HAL_NVIC_EnableIRQ(SPI1_RX_DMA_IRQ);
-    HAL_NVIC_SetPriority(SPI1_TX_DMA_IRQ, 5, 1);
-    HAL_NVIC_EnableIRQ(SPI1_TX_DMA_IRQ);
+    /*
+     * Do NOT enable SPI1 DMA NVIC here (same rule as SPI4).
+     * stm32_spi_init() enables IRQ after spi_bus_obj[SPI1].lld attach.
+     */
 #endif
 #if defined(BSP_USING_SPI4) && defined(BSP_SPI4_TX_USING_DMA) && defined(BSP_SPI4_RX_USING_DMA)
     spi_lld_register(&s_spi4_lld);

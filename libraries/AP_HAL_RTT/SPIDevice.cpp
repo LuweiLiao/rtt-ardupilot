@@ -13,6 +13,7 @@
 
 #ifdef SOC_SERIES_STM32F7
 #include <stm32f7xx.h>
+#include "drv_spi_lld.h"
 
 /* CMSIS polling path (_dev == nullptr): serialize bus access without masking
  * global IRQs. Long __disable_irq() sections during SPI polls can starve USB
@@ -424,10 +425,114 @@ static void _spi_dma_abort(const struct spi_dma_desc *dma, SPI_TypeDef *spi)
  * ChibiOS reference: spi_lld_exchange() at hal_spi_lld.c:597-626
  *   dmaStreamSetMemory0 + dmaStreamSetTransactionSize + dmaStreamSetMode + dmaStreamEnable
  */
-static bool _spi_dma_xfer(SPI_TypeDef *spi, uint8_t bus,
+#define STM32F7_DTCM_START  0x20000000UL
+#define STM32F7_DTCM_END    0x20020000UL
+
+static bool _spi_buf_dma_safe(const void *ptr, uint32_t len)
+{
+    if (ptr == nullptr || len == 0) {
+        return true;
+    }
+    const uint32_t start = (uint32_t)ptr;
+    const uint32_t end = start + len - 1U;
+    if (end < STM32F7_DTCM_START || start >= STM32F7_DTCM_END) {
+        return true;
+    }
+    return false;
+}
+
+static void _spi_regs_configure(SPI_TypeDef *spi, uint32_t br)
+{
+    CLEAR_BIT(spi->CR1, SPI_CR1_SPE);
+    spi->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI |
+               SPI_CR1_CPOL | SPI_CR1_CPHA | br;
+    spi->CR2 = SPI_CR2_DS_0 | SPI_CR2_DS_1 | SPI_CR2_DS_2 | SPI_CR2_FRXTH;
+    SET_BIT(spi->CR1, SPI_CR1_SPE);
+    while (spi->SR & SPI_SR_RXNE) { (void)*(volatile uint8_t *)&spi->DR; }
+    (void)spi->SR;
+}
+
+static bool _spi_poll_small(SPI_TypeDef *spi,
+                            const uint8_t *send, uint8_t *recv, uint32_t len)
+{
+    for (uint32_t i = 0; i < len; i++) {
+        uint32_t tout = 100000;
+        while (!(spi->SR & SPI_SR_TXE) && --tout) { __NOP(); }
+        if (tout == 0) return false;
+        *((__IO uint8_t *)&spi->DR) = send ? send[i] : 0xFF;
+        tout = 100000;
+        while (!(spi->SR & SPI_SR_RXNE) && --tout) { __NOP(); }
+        if (tout == 0) return false;
+        if (recv) recv[i] = *((__IO uint8_t *)&spi->DR);
+        else (void)*((__IO uint8_t *)&spi->DR);
+    }
+    uint32_t tout = 10000;
+    while ((spi->SR & SPI_SR_BSY) && --tout) { __NOP(); }
+    return tout != 0;
+}
+
+/*
+ * SPI1 IMU path: drv_spi_lld IRQ completion (rt_completion_wait) instead of
+ * CMSIS DMA EN busy-wait.  NVIC/DMA IRQ routing is owned by drv_spi.c.
+ */
+static bool _spi1_lld_dma_xfer(RTT::DeviceBus *bus_dev, SPI_TypeDef *spi,
+                               const uint8_t *send, uint8_t *recv,
+                               uint32_t len, uint32_t br)
+{
+    spi_lld_bus_t *lld = spi_lld_lookup(spi);
+    if (lld == RT_NULL || len == 0 || len > 65535U) {
+        return false;
+    }
+
+    _spi_regs_configure(spi, br);
+
+    if (len <= SPI_DMA_THRESHOLD) {
+        return _spi_poll_small(spi, send, recv, len);
+    }
+
+    static const uint32_t _lld_dummy_tx[4] = {0xFFFFFFFF, 0xFFFFFFFF,
+                                            0xFFFFFFFF, 0xFFFFFFFF};
+    uint32_t rx_scratch = 0;
+    uint8_t *rx_buf = recv ? recv : (uint8_t *)&rx_scratch;
+    const uint8_t *tx_buf = send ? send : (const uint8_t *)_lld_dummy_tx;
+
+    const uint8_t *tx_dma = tx_buf;
+    uint8_t *rx_dma = rx_buf;
+    bool bounced = false;
+
+    if (!_spi_buf_dma_safe(tx_buf, len) || !_spi_buf_dma_safe(rx_buf, len)) {
+        if (bus_dev == nullptr) {
+            return false;
+        }
+        if (!bus_dev->bouncebuffer_setup(tx_dma, (uint16_t)len, rx_dma, (uint16_t)len)) {
+            return false;
+        }
+        bounced = true;
+        if (send != nullptr && tx_dma != send) {
+            memcpy(const_cast<uint8_t *>(tx_dma), send, len);
+        }
+    }
+
+    const rt_err_t err = spi_lld_xfer(lld, tx_dma, rx_dma, (uint16_t)len);
+
+    if (bounced) {
+        bus_dev->bouncebuffer_finish(tx_dma, rx_dma, (uint16_t)len);
+    }
+
+    return err == RT_EOK;
+}
+
+static bool _spi_dma_xfer(RTT::DeviceBus *bus_dev, SPI_TypeDef *spi, uint8_t bus,
                            const uint8_t *send, uint8_t *recv, uint32_t len,
                            uint32_t br)
 {
+    if (bus == 1) {
+        spi_lld_bus_t *lld = spi_lld_lookup(SPI1);
+        if (lld != RT_NULL) {
+            return _spi1_lld_dma_xfer(bus_dev, spi, send, recv, len, br);
+        }
+    }
+
     if (bus >= ARRAY_SIZE(_spi_dma_tbl)) return false;
     const struct spi_dma_desc *dma = &_spi_dma_tbl[bus];
     if (dma->rx_stream == NULL || dma->tx_stream == NULL) return false;
@@ -438,30 +543,11 @@ static bool _spi_dma_xfer(SPI_TypeDef *spi, uint8_t bus,
      * ensure SPE=1 here; otherwise the peripheral is disabled and TXE/RXNE
      * never assert, hanging the probe forever.
      * [Cybernetics Ch.4] Closed-loop: verify CR1.SPE=1 via GDB before DMA. */
-    CLEAR_BIT(spi->CR1, SPI_CR1_SPE);
-    spi->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI |
-               SPI_CR1_CPOL | SPI_CR1_CPHA | br;
-    spi->CR2 = SPI_CR2_DS_0 | SPI_CR2_DS_1 | SPI_CR2_DS_2 | SPI_CR2_FRXTH;
-    SET_BIT(spi->CR1, SPI_CR1_SPE);
-    while (spi->SR & SPI_SR_RXNE) { (void)*(volatile uint8_t *)&spi->DR; }
-    (void)spi->SR;
+    _spi_regs_configure(spi, br);
 
     /* Small transfers: register polling avoids DMA setup latency */
     if (len <= SPI_DMA_THRESHOLD) {
-        for (uint32_t i = 0; i < len; i++) {
-            uint32_t tout = 100000;
-            while (!(spi->SR & SPI_SR_TXE) && --tout) { __NOP(); }
-            if (tout == 0) return false;
-            *((__IO uint8_t *)&spi->DR) = send ? send[i] : 0xFF;
-            tout = 100000;
-            while (!(spi->SR & SPI_SR_RXNE) && --tout) { __NOP(); }
-            if (tout == 0) return false;
-            if (recv) recv[i] = *((__IO uint8_t *)&spi->DR);
-            else (void)*((__IO uint8_t *)&spi->DR);
-        }
-        uint32_t tout = 10000;
-        while ((spi->SR & SPI_SR_BSY) && --tout) { __NOP(); }
-        return true;
+        return _spi_poll_small(spi, send, recv, len);
     }
 
     _spi_dma_clock_init();
@@ -1026,7 +1112,7 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
                     uint32_t pin = cs & 0xF;
                     *(volatile uint32_t *)(0x40020000U + port_idx * 0x400U + 0x18U) = 1U << (pin + 16);
                 }
-                ok = _spi_dma_xfer(bus_to_spi(_desc.bus), _desc.bus,
+                ok = _spi_dma_xfer(_bus, bus_to_spi(_desc.bus), _desc.bus,
                                    send, recv, send_len, _br);
                 /* CS高 — 用BSRR置位CS引脚 */
                 {
@@ -1263,7 +1349,7 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
             if (!_cs_held && !_lock_bus()) {
                 return false;
             }
-            const bool ok = _spi_dma_xfer(bus_to_spi(_desc.bus), _desc.bus,
+            const bool ok = _spi_dma_xfer(_bus, bus_to_spi(_desc.bus), _desc.bus,
                                           send, recv, len, _br);
             if (!_cs_held) {
                 _unlock_bus();
