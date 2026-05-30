@@ -8,6 +8,7 @@
  * Flash origin:    FLASH_ORIGIN
  */
 #include <rtthread.h>
+#include <rtdevice.h>
 #include <stdbool.h>
 #include "board.h"
 #include "drv_gpio.h"
@@ -39,13 +40,23 @@ struct spi_attach_entry {
 };
 
 static const struct spi_attach_entry _spi_attach_table[] = {
-    HAL_RTT_SPI_ATTACH_LIST
+#define HAL_RTT_SPI_ATTACH_ROW(busnum, busname, devname, cs) \
+    {busname, devname, cs}
+    HAL_RTT_SPI_ATTACH_FOREACH(HAL_RTT_SPI_ATTACH_ROW)
+#undef HAL_RTT_SPI_ATTACH_ROW
 };
 
 static void _spi_device_init(void)
 {
     rt_kprintf("[SPI-INIT] Starting SPI device attachment\n");
     for (unsigned i = 0; i < sizeof(_spi_attach_table) / sizeof(_spi_attach_table[0]); i++) {
+        if (rt_device_find(_spi_attach_table[i].bus_name) == RT_NULL) {
+            rt_kprintf("[SPI-ATTACH] skip %s -> %s: bus %s not found\n",
+                       _spi_attach_table[i].bus_name,
+                       _spi_attach_table[i].dev_name,
+                       _spi_attach_table[i].bus_name);
+            continue;
+        }
         rt_err_t ret = rt_hw_spi_device_attach(_spi_attach_table[i].bus_name,
                                 _spi_attach_table[i].dev_name,
                                 _spi_attach_table[i].cs_pin);

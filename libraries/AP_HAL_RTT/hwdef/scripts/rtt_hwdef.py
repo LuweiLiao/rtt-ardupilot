@@ -487,19 +487,33 @@ class RTTHWDef(HWDef):
                      mode_num, lowspeed, highspeed))
             devlist.append(macro_name)
             if cs_port != '?':
-                attach_entries.append('    {"%s", "%s", GET_PIN(%s, %d)}' %
-                                      (rtt_busname, rtt_devname, cs_port, cs_pin))
+                x_entry = 'X(%d, "%s", "%s", GET_PIN(%s, %d))' % (
+                    bus_num, rtt_busname, rtt_devname, cs_port, cs_pin)
+                attach_entries.append((bus_num, x_entry))
         f.write('#define HAL_SPI_DEVICE_LIST %s\n' % ', '.join(devlist))
         f.write('#define HAL_SPI_DEVICE_COUNT %d\n\n' % len(devlist))
         if attach_entries:
-            f.write('/* SPI device attach table */\n')
-            f.write('#define HAL_RTT_SPI_ATTACH_LIST \\\n')
-            f.write(', \\\n'.join(attach_entries))
+            buses = sorted(set(b for b, _ in attach_entries))
+            f.write('/* SPI attach gates — BSP_USING_SPIx from .config */\n')
+            for bus_num in buses:
+                f.write('#ifdef BSP_USING_SPI%d\n' % bus_num)
+                f.write('#define HAL_RTT_SPI_BUS%d_ATTACH(x) x,\n' % bus_num)
+                f.write('#else\n')
+                f.write('#define HAL_RTT_SPI_BUS%d_ATTACH(x)\n' % bus_num)
+                f.write('#endif\n')
+            f.write('\n#define HAL_RTT_SPI_ATTACH_FOREACH(X) \\\n')
+            foreach_lines = []
+            for bus_num, x_entry in attach_entries:
+                foreach_lines.append('    HAL_RTT_SPI_BUS%d_ATTACH(%s)' %
+                                     (bus_num, x_entry))
+            f.write(' \\\n'.join(foreach_lines))
             f.write('\n\n')
+            f.write('/* HAL_RTT_SPI_ATTACH_LIST: use HAL_RTT_SPI_ATTACH_FOREACH in rt_board_init.c */\n')
+            f.write('#define HAL_RTT_SPI_ATTACH_LIST HAL_RTT_SPI_ATTACH_FOREACH\n\n')
             # Numeric pin values version (no STM32 HAL GPIO defines needed)
             f.write('/* SPI device attach table — numeric pin values */\n')
-            f.write('#define HAL_RTT_SPI_ATTACH_VALUES \\\n')
-            val_entries = []
+            f.write('#define HAL_RTT_SPI_ATTACH_VALUES_FOREACH(X) \\\n')
+            val_foreach_lines = []
             for dev in self.spidev:
                 if len(dev) < 6:
                     continue
@@ -512,9 +526,11 @@ class RTTHWDef(HWDef):
                     cs_port2, cs_pin2 = self.pin_labels[cs_label2]
                     port_idx = ord(cs_port2) - ord('A')
                     pin_val = 16 * port_idx + cs_pin2
-                    val_entries.append('    {"%s", "%s", %d}' %
-                                       (rtt_busname2, rtt_devname2, pin_val))
-            f.write(', \\\n'.join(val_entries))
+                    x_val = 'X(%d, "%s", "%s", %d)' % (
+                        bus_num2, rtt_busname2, rtt_devname2, pin_val)
+                    val_foreach_lines.append(
+                        '    HAL_RTT_SPI_BUS%d_ATTACH(%s)' % (bus_num2, x_val))
+            f.write(' \\\n'.join(val_foreach_lines))
             f.write('\n\n')
 
     def _write_pwm_map(self, f):
@@ -955,9 +971,9 @@ class RTTHWDef(HWDef):
         for bus in spi_buses:
             bus_upper = bus.upper()
             enables.append('#define RT_USING_%s' % bus)
-            # Enable DMA for each SPI bus — except SPI1 where DMA returns
-            # incorrect data (0xFF) on STM32F7/CUAV-V5; HAL polling works.
-            if bus_upper != 'SPI1':
+            # DMA macros only for SPI4 LLD canary; SPI1/SPI2 use CMSIS polling.
+            # BSP_USING_SPIx is controlled by .config, not here.
+            if bus_upper == 'SPI4':
                 enables.append('#define BSP_%s_RX_USING_DMA' % bus_upper)
                 enables.append('#define BSP_%s_TX_USING_DMA' % bus_upper)
         if self.i2c_pins:
