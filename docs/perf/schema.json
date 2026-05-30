@@ -1,0 +1,178 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://pogo-apm.local/schema/chibios_vs_rtt_perf/v1.json",
+  "title": "ChibiOS vs RTT Performance Baseline Report",
+  "description": "Machine-readable output for M7 ChibiOS-vs-RTT A/B performance comparison on CUAV v5.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run",
+    "environment",
+    "metrics"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "run": {
+      "type": "object",
+      "required": [
+        "stack",
+        "phase",
+        "started_at",
+        "finished_at",
+        "rounds_requested",
+        "dry_run"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "stack": {
+          "type": "string",
+          "enum": ["rtt", "chibios"]
+        },
+        "phase": {
+          "type": "integer",
+          "enum": [1, 2]
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "rounds_requested": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "required": ["board", "target"],
+      "additionalProperties": true,
+      "properties": {
+        "board": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "cdc_port": {
+          "type": ["string", "null"]
+        },
+        "uart7_port": {
+          "type": ["string", "null"]
+        },
+        "firmware_ref": {
+          "type": ["string", "null"]
+        },
+        "param_set_id": {
+          "type": ["string", "null"]
+        },
+        "sd_card_present": {
+          "type": ["boolean", "null"]
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/definitions/metric_result"
+      }
+    },
+    "functional_gates": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["passed", "failure_count"],
+        "properties": {
+          "passed": { "type": "boolean" },
+          "failure_count": { "type": "integer", "minimum": 0 },
+          "details": { "type": "string" }
+        }
+      }
+    },
+    "compare": {
+      "type": "object",
+      "description": "Phase 2 only: paired RTT vs ChibiOS delta summary.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "rtt_median": { "type": "number" },
+          "chibios_median": { "type": "number" },
+          "delta_pct": { "type": "number" }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "perf_summary": {
+      "type": "object",
+      "required": ["min", "max", "median", "p95", "failure_count"],
+      "additionalProperties": false,
+      "properties": {
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "median": { "type": "number" },
+        "p95": { "type": "number" },
+        "failure_count": { "type": "integer", "minimum": 0 },
+        "unit": { "type": "string" },
+        "samples": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Successful sample count used for min/max/median/p95."
+        }
+      }
+    },
+    "metric_result": {
+      "type": "object",
+      "required": ["kind", "source", "summary"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["duration", "rate", "count", "boolean", "idle_pct"]
+        },
+        "source": {
+          "type": "string",
+          "description": "Existing test script or probe command."
+        },
+        "summary": {
+          "$ref": "#/definitions/perf_summary"
+        },
+        "rounds": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["round", "ok"],
+            "properties": {
+              "round": { "type": "integer", "minimum": 1 },
+              "ok": { "type": "boolean" },
+              "value": { "type": "number" },
+              "error": { "type": "string" }
+            }
+          }
+        },
+        "threshold": {
+          "type": "object",
+          "properties": {
+            "min_ok": { "type": "number" },
+            "max_ok": { "type": "number" }
+          }
+        }
+      }
+    }
+  }
+}
