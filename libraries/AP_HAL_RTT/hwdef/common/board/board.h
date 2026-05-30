@@ -35,6 +35,9 @@
 #define STM32F7_SRAM1_START  0x20020000UL
 #define STM32F7_SRAM1_END    0x20080000UL
 
+/* Place large DMA-accessible BSS in SRAM1 (link.lds .sram1_bss section). */
+#define RTT_SECTION_SRAM1_BSS __attribute__((section(".sram1_bss")))
+
 extern int _end;  /* after .bss and .sram1_bss in linker script */
 #define HEAP_BEGIN       ((void *)&_end)
 #define HEAP_END         ((void *)STM32F7_SRAM1_END)
