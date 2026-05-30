@@ -31,6 +31,49 @@ CUAV V5 / STM32F767, and the floor-A/C/D commits on branch `rtt-spi-full-lld`.
 > makes RT-Thread `drv_spi.c` instantiate the bus driver and may conflict with the
 > CMSIS bypass. This must be measured/justified before attempting, not toggled.
 > See `open-issues.md` "SPI1 Floor C 实际未激活".
+>
+> ### Why `BSP_USING_SPIn` never appears in deploy `rtconfig.h`
+>
+> Two independent gaps in the generation chain (Phase1 audit, read-only):
+>
+> 1. **`hwdef/common/.config:294-297`** — all four lines are commented out:
+>    `# CONFIG_BSP_USING_SPI=y`, `# CONFIG_BSP_USING_SPI1/2/4=y`.
+> 2. **`Tools/scripts/rtt_bsp_deploy.py:_simple_config_to_header`** — skips any line
+>    starting with `#` (lines 324-325), so commented Kconfig entries never become
+>    `#define BSP_USING_SPI*`.
+> 3. **`libraries/AP_HAL_RTT/hwdef/scripts/rtt_hwdef.py:955-962`** — for each SPI bus
+>    from hwdef, appends `RT_USING_SPIn` and (except SPI1) `BSP_SPIn_RX/TX_USING_DMA`
+>    only; **never appends `BSP_USING_SPIn`**.
+>
+> Result: deploy `build/rtt_deploy/cuav_v5/rtconfig.h` has `RT_USING_SPI1/2/4` and
+> SPI2/4 DMA macros, but **no `BSP_USING_SPI1/2/4`** → all three `spi_lld_register()`
+> sites are compiled out.
+>
+> **B1 lesson (71b7cb40c2 → revert 8cc2a1ef0a):** adding only
+> `BSP_SPI1_TX/RX_USING_DMA` without `BSP_USING_SPI1` still fails the guard's first
+> term; hardware gate FAIL unchanged.
+>
+> ### Mandatory runtime gate (any future SPI LLD activation)
+>
+> Functional gates (RAW_IMU, EKF, MAVFTP, CFSR=0) **do not prove LLD is active** —
+> they pass on the CMSIS bypass path today. Before claiming LLD activation:
+>
+> | Check | Pass criterion |
+> |-------|----------------|
+> | `spi_lld_lookup(SPIx)` | non-NULL for the bus under test |
+> | `g_spiX_lld_stats.init_count` | ≥ 1 after boot |
+> | `g_spiX_lld_stats.xfer_count` | increases during IMU/baro traffic |
+>
+> IMU/EKF/ATTITUDE alone are **insufficient** evidence.
+>
+> ### Activation plan (when/if pursued; independent commits)
+>
+> 1. **SPI4 canary** — enable `CONFIG_BSP_USING_SPI4=y` in `.config` only (baro bus,
+>    lowest risk); runtime gate above must pass before functional gate.
+> 2. **SPI1** — after SPI4 canary: extend `rtt_hwdef.py` to emit `BSP_USING_SPI1`
+>    and remove SPI1 DMA skip (lines 958-960); separate commit; re-run runtime gate.
+> 3. **B1b (SPI1 TX Stream5→Stream3)** — deferred until FMU TIM1 DShot/bdshot needs
+>    DMA2 Stream5; see `open-issues.md` B1b.
 
 This document also captures the hard rule from the failed Fix#4-B: **a fix lives
 in the SPI HAL/LLD, never by reshaping AP_InertialSensor transactions.**
@@ -135,6 +178,12 @@ that, together with the ISR-completion model, made the SPI LLD coexist with USB
   after completion; both 32-byte aligned/padded, or routed through the bounce buffer.
 
 ## 6. Regression gate (must all pass; failure → rollback to milestone)
+
+**Runtime LLD evidence first** (see STATUS CORRECTION — mandatory runtime gate):
+`spi_lld_lookup(SPIx) != NULL`, `init_count >= 1`, `xfer_count` growing for the
+bus under test. Do **not** treat RAW_IMU/EKF/param/MAVFTP pass as proof of LLD.
+
+Then functional gates:
 
 - CDC open: 20s connection, no disconnect
 - HEARTBEAT received; STANDBY/ACTIVE reached
