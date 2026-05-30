@@ -197,6 +197,7 @@ modules/ChibiOS-Contrib/
 .trae/
 
 # RTT porting: agent/debug tooling artifacts (never upload)
+*.log
 .cursor/*.log
 .cursor/*.gdb
 .cursor/*.out
