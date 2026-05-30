@@ -12,13 +12,21 @@ floors A/C/D on branch `rtt-spi-full-lld`.
 
 ## 0. Baseline / rollback
 
-- Frozen baseline (P0+P1+Fix1+Fix3): `4db4c12fe7`
-  `milestone(AP_HAL_RTT): lock CDC/param baseline before SPI full-LLD`
-- SPI LLD floors on `rtt-spi-full-lld`:
-  - `7f4e970a6d` Floor A — NVIC layering + OTG ISR nest
-  - `787afda010` Floor C — SPI1 (IMU) → drv_spi_lld
-  - `653aa93183` Floor D — SPI4 (MS5611) → drv_spi_lld
-- Rollback any floor: `git checkout 4db4c12fe7 -- <files>` or `git reset --hard <floor-1>`.
+Branch: `clean/rtt-spi-full-lld` (reviewable replay; historical checkpoint
+`4db4c12fe7` is **not** the clean baseline — see `df5e85bb48`).
+
+- Frozen baseline (P0+P1+Fix1+Fix3): `df5e85bb48`
+  `milestone(AP_HAL_RTT): lock P0 P1 Fix1 Fix3 clean baseline before SPI LLD`
+  (rt-thread submodule `d5dd08dda3` on `LuweiLiao/ardu-rtthread` `staging/pogo`)
+- SPI LLD floors on `clean/rtt-spi-full-lld`:
+  - `a5fca2b901` Floor A — NVIC layering + OTG ISR nest (rt-thread `7cb31cf288`)
+  - `6bf787cdf9` Floor C — SPI1 (IMU) → drv_spi_lld (rt-thread `4cb13abd8c`)
+  - `866388d9ac` Floor D — SPI4 (MS5611) → drv_spi_lld (rt-thread `4cb13abd8c`)
+- Rollback (use **clean** floor predecessors only):
+  - Undo Floor D only: `git reset --hard 6bf787cdf9`
+  - Undo Floor C (+ D): `git reset --hard a5fca2b901`
+  - Undo all SPI LLD floors: `git reset --hard df5e85bb48`
+  - Partial file restore from baseline: `git checkout df5e85bb48 -- <paths>`
 
 ## 1. ChibiOS SPI LLD ↔ RTT SPI LLD comparison
 
@@ -120,9 +128,9 @@ that, together with the ISR-completion model, made the SPI LLD coexist with USB
 |------|------|-------------|
 | 0 | instrumentation only | counters already present (`rtt_dbg_cherry_*`, `cpu_idle`, `spi1_xfer_calls`) |
 | 1 | SPI1 DMA ISR completion, macro-gated | first attempted as `RTT_SPI_DMA_IRQ_WAIT` (failed → crashed USB) → superseded |
-| — | IRQ-layer prerequisite | **Floor A** `7f4e970a6d` (NVIC + ISR nest) — fixed the USB-crash root |
-| 3 | enable on IMU, AP_InertialSensor unchanged | **Floor C** `787afda010` (SPI1 via `spi_lld_xfer`, zero AP_InertialSensor change) |
-| 3b | extend to baro | **Floor D** `653aa93183` (SPI4) |
+| — | IRQ-layer prerequisite | **Floor A** `a5fca2b901` (NVIC + ISR nest) — fixed the USB-crash root |
+| 3 | enable on IMU, AP_InertialSensor unchanged | **Floor C** `6bf787cdf9` (SPI1 via `spi_lld_xfer`, zero AP_InertialSensor change) |
+| 3b | extend to baro | **Floor D** `866388d9ac` (SPI4) |
 | 4 | full gate, rollback on fail | gate passed; cpu_idle 99%; no HardFault; MAVFTP T3/T4 = separate SD-FS project |
 
 ## Remaining (separate projects, not SPI-HAL)
