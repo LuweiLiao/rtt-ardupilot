@@ -472,10 +472,10 @@ static bool _spi_poll_small(SPI_TypeDef *spi,
 }
 
 /*
- * SPI1 IMU path: drv_spi_lld IRQ completion (rt_completion_wait) instead of
- * CMSIS DMA EN busy-wait.  NVIC/DMA IRQ routing is owned by drv_spi.c.
+ * SPI1/SPI4 LLD path: drv_spi_lld IRQ completion (rt_completion_wait) instead
+ * of CMSIS DMA EN busy-wait.  NVIC/DMA IRQ routing is owned by drv_spi.c.
  */
-static bool _spi1_lld_dma_xfer(RTT::DeviceBus *bus_dev, SPI_TypeDef *spi,
+static bool _spi_lld_dma_xfer(RTT::DeviceBus *bus_dev, SPI_TypeDef *spi,
                                const uint8_t *send, uint8_t *recv,
                                uint32_t len, uint32_t br)
 {
@@ -529,7 +529,13 @@ static bool _spi_dma_xfer(RTT::DeviceBus *bus_dev, SPI_TypeDef *spi, uint8_t bus
     if (bus == 1) {
         spi_lld_bus_t *lld = spi_lld_lookup(SPI1);
         if (lld != RT_NULL) {
-            return _spi1_lld_dma_xfer(bus_dev, spi, send, recv, len, br);
+            return _spi_lld_dma_xfer(bus_dev, spi, send, recv, len, br);
+        }
+    }
+    if (bus == 4) {
+        spi_lld_bus_t *lld = spi_lld_lookup(SPI4);
+        if (lld != RT_NULL) {
+            return _spi_lld_dma_xfer(bus_dev, spi, send, recv, len, br);
         }
     }
 
