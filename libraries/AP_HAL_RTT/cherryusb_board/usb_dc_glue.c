@@ -3,6 +3,7 @@
  * Single OTG_FS_IRQHandler — does not link usb_glue_st.c or hal_usb_lld_rtt.c.
  */
 #include <stm32f7xx.h>
+#include <rtthread.h>
 #include "usbd_core.h"
 
 #define L7_USB_OTG_FS_BASE  0x50000000UL
@@ -46,7 +47,7 @@ void usb_dc_low_level_init(uint8_t busid)
     (void)busid;
     l7_usb_clock_gpio();
 
-    NVIC_SetPriority(L7_OTG_FS_IRQn, 5);
+    NVIC_SetPriority(L7_OTG_FS_IRQn, 4);
     NVIC_EnableIRQ(L7_OTG_FS_IRQn);
 }
 
@@ -77,5 +78,7 @@ void usbd_dwc2_delay_ms(uint8_t ms)
 
 void OTG_FS_IRQHandler(void)
 {
+    rt_interrupt_enter();
     USBD_IRQHandler(0);
+    rt_interrupt_leave();
 }
