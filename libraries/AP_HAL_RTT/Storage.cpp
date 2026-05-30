@@ -197,11 +197,17 @@ void Storage::write_block(uint16_t dst, const void* src, size_t n)
 bool Storage::erase()
 {
     _storage_open();
+#if HAL_WITH_RAMTRON
+    if (_initialisedType == StorageBackend::FRAM) {
+        return AP_HAL::Storage::erase();
+    }
+#endif
 #ifdef STORAGE_FLASH_PAGE
     if (_initialisedType == StorageBackend::Flash) {
         return _flash.erase();
     }
 #endif
+    /* Stub: volatile RAM only */
     memset(_buffer, 0xFF, RTT_STORAGE_SIZE);
     _dirty_mask.clearall();
     return true;
