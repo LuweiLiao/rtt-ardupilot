@@ -878,7 +878,7 @@ void UARTDriver::_timer_tick(void)
              * still connected.  Without this the writebuf grows monotonically
              * under bursty load (MAVFTP), pushing end-to-end latency past the
              * client timeout and causing successive-round degradation. */
-            if (_usb_write_fail_count > 500 || !usb_lld_get_connected_rtt()) {
+            if (!usb_lld_get_connected_rtt()) {
                 _writebuf.clear();
                 _usb_write_fail_count = 0;
                 rtt_uart_usb_diag_fail_streak = 0;

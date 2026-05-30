@@ -53,7 +53,7 @@
 
 #define USB_CONFIG_SIZE (9 + CDC_ACM_DESCRIPTOR_LEN)
 #define CDC_MAX_MPS     64
-#define CDC_TX_CHUNK_MAX  512
+#define CDC_TX_CHUNK_MAX  64
 #define CDC_RX_QUEUE_DEPTH 8
 #define CDC_TX_RING_DEPTH  32
 
