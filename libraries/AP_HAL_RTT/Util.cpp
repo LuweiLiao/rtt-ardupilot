@@ -7,6 +7,7 @@
  *
  * Reference: AP_HAL_ChibiOS/Util.cpp — structure and API align with
  * the ChibiOS HAL implementation at every function boundary.
+ * @SYS/dma.txt via Shared_DMA::dma_info() can be wired when drivers adopt shared_dma.
  */
 
 #include "AP_HAL_RTT/Util.h"
@@ -59,15 +60,17 @@ uint32_t Util::get_millis() const
 uint64_t Util::get_micros64() const
 {
     _dwt_init();
-    const uint32_t tick_period_us = 1000000U / RT_TICK_PER_SECOND;
+    const uint32_t tick_hz = RT_TICK_PER_SECOND ? RT_TICK_PER_SECOND : 1000U;
+    const uint32_t tick_period_us = 1000000U / tick_hz;
+    const uint32_t cpu_mhz = _cpu_freq_mhz ? _cpu_freq_mhz : 216U;
 
     rt_base_t level = rt_hw_interrupt_disable();
     rt_tick_t tick = rt_tick_get();
     uint32_t cyc = DWT_CYCCNT;
     rt_hw_interrupt_enable(level);
 
-    uint64_t tick_us = (uint64_t)tick * 1000000ULL / RT_TICK_PER_SECOND;
-    uint32_t sub_us = (cyc / _cpu_freq_mhz) % tick_period_us;
+    uint64_t tick_us = (uint64_t)tick * 1000000ULL / tick_hz;
+    uint32_t sub_us = (cyc / cpu_mhz) % tick_period_us;
     return tick_us + sub_us;
 }
 
@@ -185,23 +188,15 @@ void Util::toneAlarm_set_buzzer_tone(float frequency, float volume, uint32_t dur
 }
 
 /* ---------------------------------------------------------------
- *  Watchdog
- *  Cache reset reason at first call (ChibiOS ref: watchdog.c:104-117)
+ *  Watchdog reset reason — captured in HAL_RTT_Class::run() before
+ *  RCC_CSR RMVF clear (ChibiOS board.c: stm32_watchdog_save_reason).
  * --------------------------------------------------------------- */
-static uint32_t _watchdog_reset_reason;
-
-static void _watchdog_save_reason(void)
-{
-    if (_watchdog_reset_reason == 0) {
-        _watchdog_reset_reason = RCC->CSR;
-    }
-}
+uint32_t rtt_boot_rcc_csr;
 
 bool Util::was_watchdog_reset() const
 {
-    _watchdog_save_reason();
     /* bit 29 = IWDGRSTF, bit 28 = WWDGRSTF */
-    return (_watchdog_reset_reason & (RCC_CSR_IWDGRSTF | RCC_CSR_WWDGRSTF)) != 0;
+    return (rtt_boot_rcc_csr & (RCC_CSR_IWDGRSTF | RCC_CSR_WWDGRSTF)) != 0;
 }
 
 /* ---------------------------------------------------------------

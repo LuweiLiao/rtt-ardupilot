@@ -258,6 +258,9 @@ void GCS_MAVLINK::handle_param_request_read(const mavlink_message_t &msg)
         if (vp != nullptr) {
             param_name[AP_MAX_NAME_SIZE] = 0;
             send_parameter_value(param_name, p_type, vp->cast_to_float(p_type));
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            return;  // avoid duplicate io-timer queue + count_parameters
+#endif
         }
     }
 
@@ -338,7 +341,7 @@ void GCS_MAVLINK::handle_param_set(const mavlink_message_t &msg)
      */
     bool force_save = !is_equal(packet.param_value, old_value);
 
-    // save the change
+    // save the change (async via IO thread — same as ChibiOS)
     vp->save(force_save);
 
     if (force_save && (parameter_flags & AP_PARAM_FLAG_ENABLE)) {
@@ -350,11 +353,6 @@ void GCS_MAVLINK::handle_param_set(const mavlink_message_t &msg)
     if (logger != nullptr) {
         logger->Write_Parameter(key, vp->cast_to_float(var_type));
     }
-#endif
-
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-    // RTT: direct send — the async IO pipeline is broken on RTT
-    send_parameter_value(key, var_type, vp->cast_to_float(var_type));
 #endif
 }
 

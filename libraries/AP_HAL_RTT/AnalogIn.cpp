@@ -6,7 +6,9 @@
  *
  * This is a simplified polled-mode implementation: on every _timer_tick(),
  * we sequentially convert each channel using the LLD's single-conversion
- * function.  No DMA is used.  This is adequate for ~8 channels at 100Hz
+ * function.  No DMA is used (F767 CUAV baseline).  Future DMA sampling
+ * should use RTT::Shared_DMA (shared_dma.*), not ChibiOS dmaStream*.
+ * This is adequate for ~8 channels at 100Hz
  * (800 conversions/s, ~30us each = ~2.4% CPU).
  *
  * STM32F767 uses standard ADCv2 peripheral (same as F4).
@@ -52,13 +54,14 @@ static const uint8_t _ch_map[9] = {0, 1, 2, 3, 8, 10, 11, 14, 4};
 #define ADC_SAMPLE_TIME_SLOW       ADC_LLD_SAMPLE_480
 
 static bool _adc_inited = false;
-static volatile uint32_t rtt_adc_conversion_count = 0;
-static volatile uint32_t rtt_adc_last_raw = 0;
-static volatile uint32_t rtt_adc_timeout_count = 0;
-/* Diagnostic: track _timer_tick execution — 1=init_OK, reads ADC */
-static volatile uint32_t rtt_adc_timer_tick_state = 0;
-/* Diagnostic: cumulative _timer_tick calls */
-static volatile uint32_t rtt_adc_timer_tick_count = 0;
+/* Test/GDB diagnostics (C linkage for D_analogin smoke) */
+extern "C" {
+volatile uint32_t rtt_adc_conversion_count = 0;
+volatile uint32_t rtt_adc_last_raw = 0;
+volatile uint32_t rtt_adc_timeout_count = 0;
+volatile uint32_t rtt_adc_timer_tick_state = 0;
+volatile uint32_t rtt_adc_timer_tick_count = 0;
+}
 
 /* ======================================================================== */
 /* ADC LLD wrapper                                                          */

@@ -87,6 +87,18 @@
 #include <SITL/SITL.h>
 #endif
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+extern "C" {
+bool rtt_dbg_bkp_prev_fault_pending(void);
+void rtt_dbg_bkp_format_prev_fault(char *buf, size_t len);
+void rtt_dbg_bkp_consume_prev_fault(void);
+extern uint32_t rtt_last_fault_lr;
+extern uint32_t rtt_last_fault_hfsr;
+extern uint32_t rtt_last_fault_bfar;
+}
+extern uint32_t rtt_boot_rcc_csr;
+#endif
+
 #if HAL_MAX_CAN_PROTOCOL_DRIVERS
   #include <AP_CANManager/AP_CANManager.h>
   #include <AP_Common/AP_Common.h>
@@ -1220,16 +1232,6 @@ bool GCS_MAVLINK::should_send_message_in_delay_callback(const ap_message id) con
     // No ID we return true for may take more than a few hundred
     // microseconds to return!
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-    // On RT-Thread, the scheduler task often has no time_available left for
-    // GCS update_send (time_budget=550us but remaining < 550us after all
-    // higher-priority tasks run). All GCS messaging goes through
-    // call_delay_cb() → scheduler_delay_callback() → update_send().
-    // Allow all message types in delay callback to avoid dropping them.
-    // The 5ms time window in update_send's while loop still limits burst size.
-    return true;
-#endif
-
     switch (id) {
     case MSG_NEXT_PARAM:
     case MSG_HEARTBEAT:
@@ -1664,24 +1666,34 @@ void GCS_MAVLINK::update_send()
             continue;
         }
 
-        ap_message next = next_deferred_bucket_message_to_send(start16);
-        if (next != no_message_to_send) {
-            if (!do_try_send_message(next)) {
-                break;
-            }
-            bucket_message_ids_to_send.clear(next);
-            if (bucket_message_ids_to_send.count() == 0) {
-                // we sent everything in the bucket.  Reschedule it.
-                // we try to keep output on a regular clock to avoid
-                // user support questions:
-                const uint16_t interval_ms = get_reschedule_interval_ms(deferred_message_bucket[sending_bucket_id]);
-                deferred_message_bucket[sending_bucket_id].last_sent_ms += interval_ms;
-                // but we do not want to try to catch up too much:
-                if (uint16_t(start16 - deferred_message_bucket[sending_bucket_id].last_sent_ms) > interval_ms) {
-                    deferred_message_bucket[sending_bucket_id].last_sent_ms = start16;
+        // RTT-only: mute deferred stream telemetry while a param download is in
+        // progress, so the main loop's limited time_available goes to the param
+        // stream (RTT main loop is CPU-starved by SPI polling; see open-issues).
+        // Upstream/other boards keep their original behaviour.
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        const bool rtt_param_download_active = (_queued_parameter != nullptr);
+#else
+        const bool rtt_param_download_active = false;
+#endif
+        if (!rtt_param_download_active) {
+            ap_message next = next_deferred_bucket_message_to_send(start16);
+            if (next != no_message_to_send) {
+                if (!do_try_send_message(next)) {
+                    break;
                 }
-                find_next_bucket_to_send(start16);
-            }
+                bucket_message_ids_to_send.clear(next);
+                if (bucket_message_ids_to_send.count() == 0) {
+                    // we sent everything in the bucket.  Reschedule it.
+                    // we try to keep output on a regular clock to avoid
+                    // user support questions:
+                    const uint16_t interval_ms = get_reschedule_interval_ms(deferred_message_bucket[sending_bucket_id]);
+                    deferred_message_bucket[sending_bucket_id].last_sent_ms += interval_ms;
+                    // but we do not want to try to catch up too much:
+                    if (uint16_t(start16 - deferred_message_bucket[sending_bucket_id].last_sent_ms) > interval_ms) {
+                        deferred_message_bucket[sending_bucket_id].last_sent_ms = start16;
+                    }
+                    find_next_bucket_to_send(start16);
+                }
 #if GCS_DEBUG_SEND_MESSAGE_TIMINGS
                 const uint32_t stop = AP_HAL::micros();
                 const uint32_t delta = stop - retry_deferred_body_start;
@@ -1690,7 +1702,8 @@ void GCS_MAVLINK::update_send()
                     try_send_message_stats.max_retry_deferred_body_type = 3;
                 }
 #endif
-            continue;
+                continue;
+            }
         }
         break;
     }
@@ -4789,6 +4802,29 @@ void GCS_MAVLINK::send_banner()
     for (uint8_t i = 0; i < INS_MAX_BACKENDS; i++) {
         if (AP::ins().get_output_banner(i, banner_msg, sizeof(banner_msg))) {
             send_text(MAV_SEVERITY_INFO, "%s", banner_msg);
+        }
+    }
+#endif
+
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    {
+        if (rtt_dbg_bkp_prev_fault_pending()) {
+            char fbuf[96];
+            rtt_dbg_bkp_format_prev_fault(fbuf, sizeof(fbuf));
+            send_text(MAV_SEVERITY_CRITICAL, "%s", fbuf);
+            send_text(MAV_SEVERITY_WARNING,
+                      "PrevFault LR=%08lx HFSR=%08lx BFAR=%08lx",
+                      (unsigned long)rtt_last_fault_lr,
+                      (unsigned long)rtt_last_fault_hfsr,
+                      (unsigned long)rtt_last_fault_bfar);
+        }
+        if (hal.util->was_watchdog_reset()) {
+            send_text(MAV_SEVERITY_WARNING,
+                      "Prev boot IWDG/WWDG reset CSR=0x%08lx",
+                      (unsigned long)rtt_boot_rcc_csr);
+        }
+        if (rtt_dbg_bkp_prev_fault_pending()) {
+            rtt_dbg_bkp_consume_prev_fault();
         }
     }
 #endif

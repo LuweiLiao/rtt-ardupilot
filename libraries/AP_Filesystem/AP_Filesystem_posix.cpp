@@ -36,6 +36,20 @@
 
 extern const AP_HAL::HAL& hal;
 
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#include "ap_rtt_posix_stat.h"
+
+static int safe_stat(const char *pathname, struct stat *stbuf)
+{
+    return ap_rtt_posix_stat(pathname, stbuf, sizeof(*stbuf));
+}
+#else
+static int safe_stat(const char *pathname, struct stat *stbuf)
+{
+    return ::stat(pathname, stbuf);
+}
+#endif
+
 /*
   map a filename so operations are relative to the current directory if needed
  */
@@ -78,7 +92,7 @@ int AP_Filesystem_Posix::open(const char *fname, int flags, bool allow_absolute_
         fname = map_filename(fname);
     }
     struct stat st;
-    if (::stat(fname, &st) == 0 &&
+    if (safe_stat(fname, &st) == 0 &&
         ((st.st_mode & S_IFMT) != S_IFREG && (st.st_mode & S_IFMT) != S_IFLNK)) {
         // only allow links and files
         if (!allow_absolute_paths) {
@@ -135,7 +149,7 @@ int AP_Filesystem_Posix::stat(const char *pathname, struct stat *stbuf)
 {
     FS_CHECK_ALLOWED(-1);
     pathname = map_filename(pathname);
-    auto ret = ::stat(pathname, stbuf);
+    auto ret = safe_stat(pathname, stbuf);
     map_filename_free(pathname);
     return ret;
 }

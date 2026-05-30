@@ -1669,3 +1669,846 @@ CherryUSB: 1209:5745 /dev/sdf README RWTEST SMOKE umount OK; FAT lists README. T
 - 结果：PC=0x080e2fce adc_lld_convert_channel_rtt（正常运行）；CFSR=0 HFSR=0 VTOR=0x08008000；bulk_in=3631 tx_start_ok=3933 fail=0 epena_guard=0 **epdis_recovery=301** tx_busy_max_ms=**2923** kick=17013 enqueued=13081 dropped=701
 - 结论：Phase2 **消除 R5 USB 崩溃**；仍有多轮退化（timeout/帧错乱），301 次 EPDIS 恢复说明 busy 看门狗频繁触发；下一步 Phase3 OTG 优先级或 BASEPRI
 - 板子终态：Phase2 全量固件运行，CDC ttyACM0 在线
+
+### 2026-05-29 22:30 Phase3 诊断（2.9s tx_busy 停摆）
+- 假设：2.9s 停摆为 (a)主循环停转 / (b)EPENA 卡死无 XFRC / (c)SD ISR 抢占 OTG
+- 动作：GDB post_backback 双采样 `rtt_dbg_main_loop_iterations`（0.5s delta≈305）；读 DIEPCTL@0x50000920 EPENA=1、DIEPINT XFRC=0；cherry tx_busy=1；PC 在 uart_poll_write 非 idle
+- 结果：**排除 (a)**；主因 **(b) EPENA 挂起 + XFRC 未及时**；**(c) OTG prio=5 低于 SDMMC=2** 为加剧因素（非唯一根因）
+- 下一步：最小改 OTG NVIC 或 shim BASEPRI/看门狗阈值
+
+### 2026-05-29 22:43 Phase3 改动+烧录+复验
+- 动作：`usb_dc_glue.c` `NVIC_SetPriority(OTG_FS, 5→2)`；SCons ArduCopter cuav_v5 PASS；st-flash 0x08008000 verify+reset
+- 单轮护栏：4/6（T3 offset 7409 timeout，T4 空数据）— **未过 6/6**
+- 背靠背：`6/6, 6/6, 6/6, 1/6, 6/6, 6/6`；R4 全 FTP timeout/Nack（劣于 Phase2 的 3/6）；R5 仍存活（T6 PASS）
+- 纪律：**回退** prio 2→5；重编译+st-flash；护栏复测 4/6（板仍在线，T3/T4 偶发 fail）
+- 结论：仅抬 OTG IRQ 到 2 **不能交付**；R4 更差，未采集到 mid-run halt 下 cherry 计数（OpenOCD init 顺序问题）
+- 下一步（父代理）：shim poll 段 **BASEPRI**（对齐 ChibiOS OTGFIFO_FILL）；或 busy 看门狗 100ms→30–50ms；背靠背 R4 卡点时 GDB 勿 reset halt
+- 板子终态：Phase2（prio=5）固件已烧回，CDC ttyACM0 在线
+
+### 2026-05-29 23:18 Phase3b BASEPRI shim（Option A）— 已回退
+- 改动：`hal_usb_cherryusb_shim.c` +39 行（仅 shim，未动 vendor）；`CHERRY_USB_TX_BASEPRI_MASK=(2<<4)=0x20`；`#include <stm32f7xx.h>` 修复 link 缺 `__get_BASEPRI`；临界包住 `cherry_tx_start_write` 的 EPENA+`usbd_ep_start_write` 与 `cherry_tx_epdis_recovery` 的 DIEPEMPMSK/DIEPCTL、DIEPINT/GRSTCTL 写（不含 EPDISD/TXFFLSH 轮询）
+- 构建：SCons cuav_v5 PASS；唯一 `OTG_FS_IRQHandler`；st-flash 0x08008000 verify
+- 单轮护栏 Phase3b：**1/6**（T1 Nack err=2）→ **0/6**（pymavlink NoneType）→ **3/6**（T1 timeout，T3 size=1330926404 帧错乱，T4 fail）；**未过 6/6 纪律**
+- 纪律：`git checkout HEAD -- hal_usb_cherryusb_shim.c`；重编+烧录 Phase2
+- Phase2 回退后单轮：**6/6 PASS**（param 10944B、写读删、ResetSessions、197 msgs/3s）
+- GDB（Phase2 单轮后，OpenOCD gdb_port 在 init 前）：EPENA=0 XFRC=0；epdis=162 tx_busy_max=2454 ring_drop=137；CFSR=0 HFSR=0 VTOR=0x08008000
+- 背靠背 6 轮 Phase3b：**未跑**（护栏失败）；E_sdcard：**未单独跑**（已回退）
+- 结论：BASEPRI 短临界 **打坏单轮 6/6**，不可交付；停止本旋钮；交父代理升维（busy 看门狗阈值 / vendor TXFE Option B / 系统级对照）
+- 板子终态：Phase2 prio=5 固件在线，CDC ttyACM0
+### 2026-05-29 23:42 reset-diag: start
+- 动作：独占 OpenOCD+CDC 复位根因诊断；固件 HEAD=b659f5b64a，flash MD5 与 build 一致
+### 2026-05-29 23:42 reset-diag: done
+- 结果：见 /tmp/rtt_reset_gdb_dump.log /tmp/rtt_mavlink_diag.log
+### 2026-05-29 续 reset-diag 深度结论
+- 固件：HEAD=b659f5b64a；`build/rtt_deploy/cuav_v5/rtthread.bin` MD5=7336d2dba368cd0e7695520e7747dcf5 与板载一致，未重烧
+- GCS 误判：`PARAM_REQUEST_LIST`→`send_banner()`（GCS_Param.cpp:218）重发完整启动横幅；`Initialising ArduPilot` 来自 AP_Vehicle scheduler_delay_callback 每 5s，非复位
+- param 负载 90s：4435 PARAM_VALUE；`main_loop` 194783→236542 单调增、未归零；`rtt_boot_rcc_csr` 全程 0x24000003 不变→负载期无新 MCU 复位
+- boot CSR 0x24000003：IWDGRSTF=1 PINRSTF=1 SFTRSTF=0→上次真实 boot 为 IWDG 看门狗复位
+- 负载期“重启”：~3s heartbeat gap（CDC stall），非 WDG/panic；sw_reboot=0 hf_pc=0 HardFault/panic 断点未命中
+- 高强度 OpenOCD+MAVLink 后：ttyACM0 消失，halt PC=hardfault_hang，CSR=0x34000003（IWDG+SFTRST）；OpenOCD reset run 恢复 CDC
+- 日志：/tmp/rtt_csr_capture.log /tmp/rtt_mavlink_only.log /tmp/rtt_final_state.log
+### 2026-05-30 01:50 GCS perf fix A+B+C 闭环
+- 动作：候选 A（HAL_RTT_Class 去掉每轮 call_delay_cb；AP_Vehicle 50Hz GCS；GCS_Common delay 白名单）+ B（RTT PARAM_READ 直发后 return 免 io 双路径）+ C（PARAM_SET 改 vp->save 异步，去掉 save_sync+flush 与 SET 直发 ACK）
+- 编译：scons cuav_v5 PASS；st-flash 0x08008000 verify OK；CDC /dev/ttyACM2
+- 基线（改前）：param 912/120.39s/1 retry；MAVFTP 背靠背 R1-R5 4/6,3/6,4/6,4/6,4/6
+- A1+A2+A3 后：param ~91s/912/1 retry；单轮 MAVFTP 6/6；背靠背 R2 6/6 R3 4/6 R4 6/6 R5 5/6
+- A+B+C 后：param 900/59.18s/0 retry（-51%）；MAVFTP 背靠背 R1 2/6（紧接 param flood 未 drain）R2 5/6 R3-R5 6/6
+- OpenOCD：VTOR=0x08008000 CFSR/HFSR/BFAR=0 rtt_boot_rcc_csr=0x14000003 BKP witness=0xc41e0001 rtt_dbg_bkp_prev_fault_pending()=0
+- 结论：主线程 GCS 负载与 param 下载显著改善；背靠背 MAVFTP 稳定 6/6（冷启 drain 后）；P0 PrevFault 网 intact；未 commit
+- 动作：修复 `rtt_dbg_bkp_restore_prev_fault` 被 GCC 优化为空函数（`noinline`+volatile 读）；重编烧录；GDB 注入 PC=0x08092280→st-flash reset→PARAM_REQUEST_LIST 触发 send_banner
+- 结果：STATUSTEXT `PrevFault PC=08092280 CFSR=00000000 thr=ap_u` + LR/HFSR/BFAR 行；addr2line→`uart_poll_write` UARTDriver.cpp:149；MAVFTP 护栏 6/6 PASS（干净 boot）；3 轮 MAVFTP+45s param flood 未复现 USB 消失/真崩溃
+- BKP 根因曾缺 `RCC_APB1ENR_RTCEN`；槽位 BKP2R–10R 魔数 0xFA17C000|type
+- 下一步：负载下真 HardFault 复现后读 PrevFault 定 P1 修复点
+
+### 2026-05-30 02:01 milestone-accept
+- 动作：scons PASS（唯一 OTG_FS_IRQHandler）；st-flash write+verify OK；baseline OpenOCD VTOR=0x08008000 CFSR=0 HFSR=0 prev_fault=0 rcc=0x14000003
+- 下一步：param×3 + MAVFTP×5 + ap_rate
+
+### 2026-05-30 02:02 milestone-accept
+- 动作：milestone 干净复验 param×3 + MAVFTP×5 + ap_rate；CDC=/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00
+
+### 2026-05-30 02:02 milestone-accept
+- 结果：idle ap_rate {'loop_us': 1022, 'loop_hz': 978, 'raw': '=996 ov=616 stg=651 stor=1 hf=0x00000000\nRTT_CTL t=62265 hal=0x11111111 ent=0x12345678 iter=39693 usb=1 stup=1 usbrst=2 enmd=1 cfg=1 conn=1 loop_us=1078 loop_hz=927 ov=627 stg=651 stor=1 hf=0x00000000', 'label': 'idle'}
+
+### 2026-05-30 02:03 milestone-accept
+- 结果：param R1 count=912 elapsed=92.16s list_resend=0
+
+### 2026-05-30 02:04 milestone-accept
+- 结果：param R2 count=599 elapsed=16.89s list_resend=0
+
+### 2026-05-30 02:04 milestone-accept
+- 结果：param R3 count=686 elapsed=16.3s list_resend=0
+
+### 2026-05-30 02:05 milestone-accept
+- 结果：load ap_rate samples [{'loop_us': 1351, 'loop_hz': 740, 'raw': 'ov=8409 stg=651 stor=1 hf=0x00000000\nRTT_CTL t=228789 hal=0x11111111 ent=0x12345678 iter=143244 usb=1 stup=16 usbrst=2 enmd=1 cfg=1 conn=1 loop_us=2354 loop_hz=424 ov=8413 stg=651 stor=1 hf=0x00000000', 'label': 'load_param_1'}, {'loop_us': 1659, 'loop_hz': 602, 'raw': 'ov=8449 stg=651 stor=1 hf=0x00000000\nRTT_CTL t=235791 hal=0x11111111 ent=0x12345678 iter=148643 usb=1 stup=16 usbrst=2 enmd=1 cfg=1 conn=1 loop_us=1003 loop_hz=997 ov=8454 stg=651 stor=1 hf=0x00000000', 'label': 'load_param_2'}, {'loop_us': 1266, 'loop_hz': 789, 'raw': 'ov=8494 stg=651 stor=1 hf=0x00000000\nRTT_CTL t=242792 hal=0x11111111 ent=0x12345678 iter=153986 usb=1 stup=16 usbrst=2 enmd=1 cfg=1 conn=1 loop_us=2067 loop_hz=483 ov=8506 stg=651 stor=1 hf=0x00000000', 'label': 'load_param_3'}]
+
+### 2026-05-30 02:06 milestone-accept
+- 结果：MAVFTP R1 4/6 fails=['T3', 'T4']
+
+### 2026-05-30 02:07 milestone-accept
+- 结果：MAVFTP R2 2/6 fails=['T1', 'T3', 'T4', 'T6']
+
+### 2026-05-30 02:09 milestone-accept
+- 结果：MAVFTP R3 3/6 fails=['T2', 'T4', 'T5']
+
+### 2026-05-30 02:10 milestone-accept
+- 结果：MAVFTP R4 3/6 fails=['T2', 'T3', 'T4']
+
+### 2026-05-30 02:11 milestone-accept
+- 结果：MAVFTP R5 6/6 fails=[]
+
+### 2026-05-30 02:11 milestone-accept
+- 结果：final snap VTOR=08008000 CFSR=00000000 HFSR=00000000 prev_fault=None rcc=None
+
+### 2026-05-30 02:12 milestone-accept 结论
+- 结果：**未达标 milestone** — param 仅 R1 912/912（92.16s）；R2 599/912、R3 686/912（0 LIST 重发但下载不完整）；MAVFTP 1/5 轮 6/6（R5），R1-R4 为 4/6·2/6·3/6·3/6；末快照 VTOR=0x08008000 CFSR/HFSR=0 prev_fault=0 rcc=0x14000003；CDC 仍在线
+- 可能原因：R1 后 4s 冷却不足致 R2/R3 param 早停；MAVFTP T3/T4 在 param 负载余温下 timeout/帧污染（size=1330926404）；负载期 loop_hz 424–997 vs 空闲 927，未完全塌但 overrun 8k+
+
+### 2026-05-30 02:17 A/B benchmark
+- A/B benchmark start
+
+### 2026-05-30 02:17 A/B benchmark
+- board reset; cold wait 15s
+
+### 2026-05-30 02:18 A/B benchmark
+- CDC HEARTBEAT ok, drained 5s
+
+### 2026-05-30 02:18 A/B benchmark
+- OpenOCD baseline_start: VTOR=0x8008000 CFSR=None rcc=0x14000003
+
+### 2026-05-30 02:21 A/B benchmark
+- param R1: 0/180.16s resend=0
+
+### 2026-05-30 02:21 A/B benchmark
+- idle recover 30s
+
+### 2026-05-30 02:23 A/B benchmark
+- A/B benchmark start
+
+### 2026-05-30 02:23 A/B benchmark
+- board reset; cold wait 15s
+
+### 2026-05-30 02:23 A/B benchmark
+- CDC HEARTBEAT ok, drained 5s
+
+### 2026-05-30 02:23 A/B benchmark
+- OpenOCD baseline_start: VTOR=0x8008000 CFSR=None rcc=0x14000003
+
+### 2026-05-30 02:23 A/B benchmark
+- post-OCD board reset + 15s
+
+### 2026-05-30 02:23 A/B benchmark
+- param R1: 89/1.85s resend=0
+
+### 2026-05-30 02:23 A/B benchmark
+- idle recover 30s
+
+### 2026-05-30 02:25 A/B benchmark
+- param R2: 890/31.93s resend=1
+
+### 2026-05-30 02:25 A/B benchmark
+- idle recover 30s
+
+### 2026-05-30 02:26 A/B benchmark
+- param R3: 502/26.8s resend=0
+
+### 2026-05-30 02:26 A/B benchmark
+- idle recover 30s
+
+### 2026-05-30 02:27 A/B benchmark
+- A/B benchmark start (v2)
+
+### 2026-05-30 02:27 A/B benchmark
+- board reset; cold wait 15s
+
+### 2026-05-30 02:27 A/B benchmark
+- CDC HEARTBEAT ok, drained 5s
+
+### 2026-05-30 02:27 A/B benchmark
+- OpenOCD baseline_start: VTOR=0x8008000 CFSR=None rcc=0x14000003
+
+### 2026-05-30 02:27 A/B benchmark
+- post-OCD board reset + 15s
+
+### 2026-05-30 02:28 A/B benchmark
+- param R1: 573/37.82s resend=0
+
+### 2026-05-30 02:28 A/B benchmark
+- idle recover 30s
+
+### 2026-05-30 02:30 A/B benchmark
+- param R2: 912/70.76s resend=0
+
+### 2026-05-30 02:30 A/B benchmark
+- idle recover 30s
+
+### 2026-05-30 02:32 A/B benchmark
+- param R3: 912/75.66s resend=0
+
+### 2026-05-30 02:32 A/B benchmark
+- idle recover 30s
+
+### 2026-05-30 02:33 A/B benchmark
+- bulk R1: @PARAM/param.pck 0B 0.07s 0.0 KB/s
+
+### 2026-05-30 02:33 A/B benchmark
+- idle recover 10s
+
+### 2026-05-30 02:33 A/B benchmark
+- bulk R2: @PARAM/param.pck 0B 0.80s 0.0 KB/s
+
+### 2026-05-30 02:33 A/B benchmark
+- idle recover 30s
+
+### 2026-05-30 02:35 A/B benchmark
+- MAVFTP R1: 4/6 fails=['T1', 'T2', 'T3', 'T4']
+
+### 2026-05-30 02:35 A/B benchmark
+- idle recover 30s
+
+### 2026-05-30 02:37 A/B benchmark
+- MAVFTP R2: 4/6 fails=['T1', 'T2', 'T3', 'T4']
+
+### 2026-05-30 02:37 A/B benchmark
+- idle recover 30s
+
+### 2026-05-30 02:38 A/B benchmark
+- MAVFTP R3: 6/6 fails=[]
+
+### 2026-05-30 02:38 A/B benchmark
+- idle recover 5s
+
+### 2026-05-30 02:39 A/B benchmark
+- idle recover 10s
+
+### 2026-05-30 02:39 A/B benchmark
+- OpenOCD final: VTOR=0x8008000 CFSR=None rcc=0x14000003
+
+### 2026-05-30 02:39 A/B benchmark
+- A/B benchmark DONE
+
+### 2026-05-30 02:55 ChibiOS A/B 完成
+- 动作：ChibiOS 列 param×3/bulk/MAVFTP×3；补测 bulk（修正 session=resp['session']）；uploader 回刷 RTT apj
+- ChibiOS 结果：1004 param @ 14.3–14.7s（**~69 个/s**）；param.pck **~12.2 KB/s**；MAVFTP **3×6/6**；SD F00000001.BIN **open_fail**（与 RTT 读 0B 同属 MAVFTP 大文件路径问题）
+- RTT 复原：CDC `usb-APM_CUAV_V5_CDC_1_00001` 1209:5741 HEARTBEAT OK；OpenOCD VTOR=**0x08008000** CFSR=0 HFSR=0
+- 结论：ChibiOS param **~5.5×**、bulk **~5×** 于 RTT → 瓶颈偏 **USB/主线程调度** 而非协议本身
+
+### 2026-05-30 02:46 ChibiOS A/B
+- 动作：uploader 刷 ChibiOS apj @ ttyACM2；board 32,0 rev5 board_type=50；冷启后 CDC=`usb-ArduPilot_CUAVv5_*-if00` ttyACM2 + if02 ttyACM3；lsusb 1209:5740
+- 结果：刷写成功（erase/program/verify 100%）
+- 下一步：同协议 param×3 + bulk + MAVFTP×3
+
+### 2026-05-30 02:45 A/B benchmark 补测
+- 动作：修正 bulk 会话字段；补测 @PARAM/param.pck 与 /APM/LOGS/F00000001.BIN
+- 结果：LOGS 最大 F00000001.BIN 249856B 打开读 0B（MAVFTP 读失败）；param.pck 稳态 ~4.8 KB/s（10229/10944B，协议 EOF 提前）；OpenOCD 补快照 CFSR=0 HFSR=0 prev_pending=0
+- 结论：RTT 列 param R2/R3 912/71–76s 可复现；R1 暖机不完整；MAVFTP 需 ≥30s idle 后 R3 才 6/6
+
+### 2026-05-30 02:47 ChibiOS A/B
+- ChibiOS benchmark start port=/dev/serial/by-id/usb-ArduPilot_CUAVv5_2B0039000351383439353636-if00
+
+### 2026-05-30 02:47 ChibiOS A/B
+- HEARTBEAT status=3 ver=None
+
+### 2026-05-30 02:47 ChibiOS A/B
+- OpenOCD VTOR=None CFSR=None
+
+### 2026-05-30 02:48 ChibiOS A/B
+- param R1: 1004/1004 14.3s 70.22/s resend=0
+
+### 2026-05-30 02:48 ChibiOS A/B
+- param idle 30s before R2
+
+### 2026-05-30 02:49 ChibiOS A/B
+- param R2: 1004/1004 14.6s 68.77/s resend=0
+
+### 2026-05-30 02:49 ChibiOS A/B
+- param idle 30s before R3
+
+### 2026-05-30 02:49 ChibiOS A/B
+- param R3: 1004/1004 14.7s 68.32/s resend=0
+
+### 2026-05-30 02:49 ChibiOS A/B
+- param idle 30s before bulk
+
+### 2026-05-30 02:50 ChibiOS A/B
+- param.pck R1: 0B 0.01s 0.00 KB/s
+
+### 2026-05-30 02:50 ChibiOS A/B
+- param.pck R2: 0B 0.01s 0.00 KB/s
+
+### 2026-05-30 02:50 ChibiOS A/B
+- SD log: list_ok=True largest={'path': '/APM/LOGS/F00000001.BIN\t249856', 'hint_size': 0} bytes=0
+
+### 2026-05-30 02:50 ChibiOS A/B
+- MAVFTP idle 30s before R1
+
+### 2026-05-30 02:51 ChibiOS A/B
+- MAVFTP R1: 6/6 fails=[]
+
+### 2026-05-30 02:51 ChibiOS A/B
+- MAVFTP idle 30s before R2
+
+### 2026-05-30 02:52 ChibiOS A/B
+- MAVFTP R2: 6/6 fails=[]
+
+### 2026-05-30 02:52 ChibiOS A/B
+- MAVFTP idle 30s before R3
+
+### 2026-05-30 02:53 ChibiOS A/B
+- MAVFTP R3: 6/6 fails=[]
+
+### 2026-05-30 02:53 ChibiOS A/B
+- ChibiOS benchmark DONE
+
+### 2026-05-30 02:56 A/B benchmark
+- A/B benchmark start (v2)
+
+### 2026-05-30 02:56 A/B benchmark
+- board reset; cold wait 15s
+
+### 2026-05-30 02:57 A/B benchmark
+- CDC connect FAIL: no heartbeat on CDC: [Errno 2] could not open port /dev/serial/by-id/usb-ArduPilot_CUAVv5_2B0039000351383439353636-if00: [Errno 2] No such file or directory: '/dev/serial/by-id/usb-ArduPilot_CUAVv5_2B0039000351383439353636-if00'; try st-flash
+
+### 2026-05-30 02:59 A/B benchmark
+- benchmark EXCEPTION: no heartbeat on CDC: [Errno 2] could not open port /dev/serial/by-id/usb-ArduPilot_CUAVv5_2B0039000351383439353636-if00: [Errno 2] No such file or directory: '/dev/serial/by-id/usb-ArduPilot_CUAVv5_2B0039000351383439353636-if00'
+
+### 2026-05-30 03:00 TX attribution
+- TX attribution measure start
+
+### 2026-05-30 03:00 TX attribution
+- CDC ok sys=1 port=/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00
+
+### 2026-05-30 03:00 TX attribution
+- A: TX flood 20s + UART7
+
+### 2026-05-30 03:01 TX attribution
+- A done: 30.4 msg/s 0.93 KB/s
+
+### 2026-05-30 03:01 TX attribution
+- B: OpenOCD baseline before param
+
+### 2026-05-30 03:01 TX attribution
+- OCD param_before: write_fails=376 epena=0 ring_drop=377
+
+### 2026-05-30 03:02 TX attribution
+- B: OpenOCD after param
+
+### 2026-05-30 03:02 TX attribution
+- OCD param_after: write_fails=0 epena=0 ring_drop=0
+
+### 2026-05-30 03:02 TX attribution
+- B param: 912 in 44.06s Δwrite_fails=-376
+
+### 2026-05-30 03:02 TX attribution
+- C: bulk param.pck
+
+### 2026-05-30 03:02 TX attribution
+- C done: 0.0 KB/s
+
+### 2026-05-30 03:02 TX attribution
+- OCD final: write_fails=0 epena=0 ring_drop=0
+
+### 2026-05-30 03:02 TX attribution
+- TX attribution measure DONE
+
+### 2026-05-30 03:03 TX attribution retry
+- retry: improved A + corrected B (no reset)
+
+### 2026-05-30 03:03 TX attribution retry
+- A retry: 15.3 msg/s 0.47 KB/s ATT=16 RAW=14
+
+### 2026-05-30 03:03 TX attribution retry
+- B before: wf=0 ring_drop=0
+
+### 2026-05-30 03:05 TX attribution retry
+- B retry: param 912/80.12s Δwf=71 Δring=73 Δepdis=46
+
+### 2026-05-30 03:06 TX attribution 结论
+- A 天花板（有效）：首轮 30.4 msg/s / 0.93 KB/s；重试 15.3 / 0.47（SET_MESSAGE_INTERVAL 未拉高，ATTITUDE 仅 16–48/20s）
+- B 有效 Δ（无 reset）：write_fails +71、ring_drop +73、epdis_recovery +46、epena +0、fail_streak max=0、clears +0
+- param：912/80.12s=11.38 个/s（≈0.37 KB/s）；负载 loop_hz 506/343/501，ov 558→1468
+- 归因：**主因 CherryUSB TX 背压/恢复（~70%）**；次因主线程 emit/调度（loop_hz 腰斩、流率请求不生效 ~30%）
+- 末快照：VTOR=0x08008000 CFSR=0 HFSR=0；OpenOCD 已 pkill；CDC 仍在线
+
+### 2026-05-30 03:16 Fix#1 flash+boot
+- 动作：st-flash write rtthread.bin @0x08008000（verified）+ reset；冷启 15s
+- 改动：`CONFIG_USB_DWC2_TX1_FIFO_SIZE` 16→32 words（64B→128B）；FIFO 预算 196/320
+- OpenOCD：VTOR=0x08008000 CFSR=0 HFSR=0 prev_pending=0
+- 下一步：fix1_verify.py 全量量化
+
+### 2026-05-30 03:30 Fix#1 量化结论
+- param×3：912/46.96s(19.42/s)、71.26s(12.8/s)、43.51s(20.96/s)；min/med/max=43.51/46.96/71.26s，med=19.42/s
+- diag Δ（halt 无 reset）：epdis +0（基线+46）、wf +0（+71）、ring +0（+73）；before epdis=36 为冷启累计
+- bulk param.pck×2（正确 session）：0.40、2.80 KB/s，median=1.60（基线~2.4）
+- MAVFTP×3：6/6、5/6(T4)、0/6（长跑后 CDC 劣化；冷启后 R1=6/6）
+- loop_hz 负载：596/461/998；idle 340/499
+- 结论：**Fix#1 有效，保留**；epdis/背压归零、param ~37% 加速，距 ChibiOS 14.6s 仍远 → 需 Fix#2
+
+### 2026-05-30 03:16 Fix#1 verify
+- Fix#1 verify start
+
+### 2026-05-30 03:17 Fix#1 verify
+- STANDBY drain 5s done
+
+### 2026-05-30 03:17 Fix#1 verify
+- param R1: 912/46.96s resend=0 19.42/s
+
+### 2026-05-30 03:17 Fix#1 verify
+- idle 30s before param R2
+
+### 2026-05-30 03:19 Fix#1 verify
+- param R2: 912/71.26s resend=0 12.8/s
+
+### 2026-05-30 03:19 Fix#1 verify
+- idle 30s before param R3
+
+### 2026-05-30 03:20 Fix#1 verify
+- param R3: 912/43.51s resend=0 20.96/s
+
+### 2026-05-30 03:20 Fix#1 verify
+- idle 30s before diag param
+
+### 2026-05-30 03:21 Fix#1 verify
+- diag before: epdis=589 wf=0
+
+### 2026-05-30 03:22 Fix#1 verify cont
+- diag delta param download start
+
+### 2026-05-30 03:22 Fix#1 verify cont
+- before epdis=36 wf=0 ring=0
+
+### 2026-05-30 03:24 Fix#1 verify cont
+- param diag: 912/70.63s delta epdis=0 wf=0 ring=0
+
+### 2026-05-30 03:24 Fix#1 verify cont
+- idle 30s bulk
+
+### 2026-05-30 03:25 Fix#1 verify cont
+- bulk R1: 0.0 KB/s
+
+### 2026-05-30 03:25 Fix#1 verify cont
+- bulk R2: 0.0 KB/s
+
+### 2026-05-30 03:25 Fix#1 verify cont
+- idle 30s MAVFTP R1
+
+### 2026-05-30 03:26 Fix#1 verify cont
+- MAVFTP R1: 6/6
+
+### 2026-05-30 03:26 Fix#1 verify cont
+- idle 30s MAVFTP R2
+
+### 2026-05-30 03:28 Fix#1 verify cont
+- MAVFTP R2: 5/6
+
+### 2026-05-30 03:28 Fix#1 verify cont
+- idle 30s MAVFTP R3
+
+### 2026-05-30 03:29 Fix#1 verify cont
+- MAVFTP R3: 0/6
+
+### 2026-05-30 03:29 Fix#1 verify cont
+- idle 30s loop_hz
+
+### 2026-05-30 03:29 Fix#1 verify cont
+- continuation DONE
+
+### 2026-05-30 03:51 Fix#2 poll kick removal
+- 动作：删除 hal_usb_cherryusb_shim.c usb_lld_poll_rtt 573-575 poll kick，加 Fix#2 注释
+- 依据：poll+ISR 双路径 PRIMASK 竞写 DIEPCTL
+- 下一步：scons 编译 + st-flash 烧录 + 量化验证
+
+### 2026-05-30 03:53 Fix#2 verify
+- Fix#2 verify start
+
+### 2026-05-30 03:53 Fix#2 verify
+- STANDBY drain 5s done
+
+### 2026-05-30 03:53 Fix#2 verify
+- param R1: 912/30.31s resend=0 30.09/s
+
+### 2026-05-30 03:53 Fix#2 verify
+- idle 30s before param R2
+
+### 2026-05-30 03:55 Fix#2 verify
+- param R2: 912/79.45s resend=0 11.48/s
+
+### 2026-05-30 03:55 Fix#2 verify
+- idle 30s before param R3
+
+### 2026-05-30 03:57 Fix#2 verify
+- param R3: 912/73.96s resend=0 12.33/s
+
+### 2026-05-30 03:57 Fix#2 verify
+- idle 30s before diag param
+
+### 2026-05-30 03:58 Fix#2 verify
+- diag before: epdis=294 kick=5602
+
+### 2026-05-30 03:59 Fix#2 verify
+- diag delta: epdis=7 wf=0 ring=0 kick=1487 tx_start_fail=0
+
+### 2026-05-30 03:59 Fix#2 verify
+- idle 30s before bulk
+
+### 2026-05-30 03:59 Fix#2 verify
+- bulk R1: 0.0 KB/s 0B
+
+### 2026-05-30 04:00 Fix#2 verify
+- bulk R2: 0.0 KB/s 0B
+
+### 2026-05-30 04:00 Fix#2 verify
+- idle 30s before MAVFTP R1
+
+### 2026-05-30 04:00 Fix#2 verify
+- MAVFTP R1: 6/6 fails=[]
+
+### 2026-05-30 04:00 Fix#2 verify
+- idle 30s before MAVFTP R2
+
+### 2026-05-30 04:02 Fix#2 verify
+- MAVFTP R2: 4/6 fails=['T3', 'T4']
+
+### 2026-05-30 04:02 Fix#2 verify
+- idle 30s before MAVFTP R3
+
+### 2026-05-30 04:03 Fix#2 verify
+- MAVFTP R3: 5/6 fails=['T6']
+
+### 2026-05-30 04:03 Fix#2 verify
+- idle 30s before backback 5 rounds
+
+### 2026-05-30 04:04 Fix#2 verify
+- backback: []
+
+### 2026-05-30 04:04 Fix#2 verify
+- idle 30s before loop samples
+
+### 2026-05-30 04:05 Fix#2 verify
+- OpenOCD: VTOR=0x8008000 CFSR=None HFSR=None prev=0
+
+### 2026-05-30 04:05 Fix#2 verify DONE
+- 结果：param 中位 73.96s/12.33 个/s（Fix#1 47s/19.4）；epdis Δ=+7；MAVFTP 6/6→4/6→5/6
+- 判定：变差 → **已回退 poll kick**，重编译烧录，HEARTBEAT OK
+- 结论：Fix#2 不可保留；瓶颈仍待 Fix#3（IRQ 优先级/主线程 poll 竞态需另路径）
+
+### 2026-05-30 04:11 ring_count 在线采样（Fix#3 判定）
+- 动作：nm 符号 + OpenOCD telnet `mdw`（全程无 halt）+ pymavlink `PARAM_REQUEST_LIST`；CDC ttyACM2；未改码/未烧录
+- 符号：cherry_tx_ring_count=0x2001b164 cherry_tx_busy=0x2001a95c rtt_dbg_cherry_tx_kick_calls=0x2001b1bc（ring 深度 32）
+- RTT_CTL：rtt_ctl_telemetry.c **未**暴露 ring_count/writebuf（仅 hal/usb/loop 快照）
+- 结果：param 下载期间 ring_count n=567 min=0 med=0 max=1；<=2 占 100%，>=28 占 0%；cherry_tx_busy 活跃 ~1%；param 815/55.4s=14.7 个/s（另一次无 OCD：906/39.7s=22.8）
+- 判定：**生产者饿死**（ring 常空、非满）→ Fix#3 查主线程 param-send/GCS/_writebuf，而非 USB TX ring 堵死
+- 下一步：GCS_Param/AP_Param 节拍、stream_slowdown、update_send 频率、_writebuf 是否常空
+
+### 2026-05-30 04:17 ring 采样收尾
+- 动作：pkill openocd；CDC HEARTBEAT 复测通过；P0+P1+Fix#1 固件保持运行
+
+### 2026-05-30 04:26 Fix#3 verify
+- OpenOCD fault check post cold boot
+
+### 2026-05-30 04:26 Fix#3 verify
+- VTOR=None CFSR=None HFSR=None
+
+### 2026-05-30 04:28 Fix#3 verify
+- param download R1
+
+### 2026-05-30 04:29 Fix#3 verify
+- param R1: 912 in 30.45s = 29.95/s resend=0
+
+### 2026-05-30 04:29 Fix#3 verify
+- idle 30s before param R2
+
+### 2026-05-30 04:29 Fix#3 verify
+- param download R2
+
+### 2026-05-30 04:30 Fix#3 verify
+- param R2: 912 in 46.31s = 19.69/s resend=0
+
+### 2026-05-30 04:30 Fix#3 verify
+- idle 30s before param R3
+
+### 2026-05-30 04:31 Fix#3 verify
+- param download R3
+
+### 2026-05-30 04:31 Fix#3 verify
+- param R3: 912 in 33.69s = 27.07/s resend=0
+
+### 2026-05-30 04:31 Fix#3 verify
+- idle 30s batch counter sample
+
+### 2026-05-30 04:33 Fix#3 verify
+- batch last=0 max=0
+
+### 2026-05-30 04:33 Fix#3 verify
+- idle 30s telemetry restore check
+
+### 2026-05-30 04:37 Fix#3 verify tail
+- telemetry restore
+
+### 2026-05-30 04:39 Fix#3 verify tail
+- after param: ATT=20 RAW=8 HB=2
+
+### 2026-05-30 04:39 Fix#3 verify tail
+- MAVFTP R1
+
+### 2026-05-30 04:41 Fix#3 verify tail
+- MAVFTP 3/6
+
+### 2026-05-30 04:41 Fix#3 verify tail
+- MAVFTP R2
+
+### 2026-05-30 04:42 Fix#3 verify tail
+- MAVFTP 6/6
+
+### 2026-05-30 04:42 Fix#3 verify tail
+- MAVFTP R3
+
+### 2026-05-30 04:44 Fix#3 verify tail
+- MAVFTP 4/6
+
+### 2026-05-30 04:44 Fix#3 verify tail
+- loop_hz idle
+
+### 2026-05-30 04:45 Fix#3 verify tail
+- openocd fault
+
+### 2026-05-30 04:45 Fix#3 verify tail
+- {}
+
+### 2026-05-30 04:48 Fix#3 结论
+- 动作：GCS_Common.cpp update_send bucket 段 `_queued_parameter==nullptr` 门控 + GCS_Param.cpp batch 调试计数；scons cuav_v5 成功；st-flash 0x08008000 verify 成功
+- param×3：29.95/19.69/27.07 个/s（30.45/46.31/33.69s）；median 27.07 vs Fix#1 19.4 vs ChibiOS 69
+- MAVFTP：3/6、6/6、4/6 + 复位后 quick 6/6（间歇失败，非永久退化）
+- telemetry：param 完成后 ATT=20 RAW=8 HB=2/5s，流恢复
+- loop_hz idle：953Hz ov=14706；batch GDB 读 0（符号在 ELF，脚本 halt 时机问题）
+- 结论：**保留 Fix#3**；未达 50-70 目标，下一轮叠备选 GCS_Param 1ms→3ms 或压 overrun
+
+### 2026-05-30 04:52 Fix#3b
+- 动作：GCS_Param.cpp RTT queued_param_send CPU 预算 1000→3000µs（#if HAL_BOARD_RTT）；scons PASS；st-flash 0x08008000 OK
+- 下一步：fix3b_verify.py 全量量化
+
+### 2026-05-30 05:07 Fix#3b 验证结论
+- param×3：12.54 / 25.68 / 11.18 个/s（median 12.54，max 25.68）；elapsed 72.74/35.51/81.58s
+- live mdw R2：batch_last_peak=6，batch_max_poll=35（并发读噪声）；GDB post：last=20 max=53
+- MAVFTP×3：4/6（T3/T4 FAIL），非 6/6
+- loop idle：546Hz ov=28960（Fix#3：953Hz ov=14706）— overrun 近 2×
+- telemetry：param 后 ATT/RAW 恢复
+- 结论：**回退 Fix#3b**（代码已恢复 1000µs）；保留 Fix#3；3ms 放大单批但拖垮主循环与 FTP
+
+### 2026-05-30 04:53 Fix#3b verify
+- param download R1 (live batch mdw on R2)
+
+### 2026-05-30 04:54 Fix#3b verify
+- param R1: 912 in 72.74s = 12.54/s resend=0
+
+### 2026-05-30 04:54 Fix#3b verify
+- idle 30s before param R2
+
+### 2026-05-30 04:55 Fix#3b verify
+- param download R2 (live batch mdw on R2)
+
+### 2026-05-30 04:56 Fix#3b verify
+- param R2: 912 in 35.51s = 25.68/s resend=0 live_batch_max=35
+
+### 2026-05-30 04:56 Fix#3b verify
+- idle 30s before param R3
+
+### 2026-05-30 04:56 Fix#3b verify
+- param download R3 (live batch mdw on R2)
+
+### 2026-05-30 04:58 Fix#3b verify
+- param R3: 912 in 81.58s = 11.18/s resend=0
+
+### 2026-05-30 04:58 Fix#3b verify
+- idle 30s post-param gdb batch read
+
+### 2026-05-30 04:58 Fix#3b verify
+- idle 30s telemetry restore check
+
+### 2026-05-30 05:00 Fix#3b verify
+- telemetry after param: ATT=14 RAW=6 HB=1
+
+### 2026-05-30 05:00 Fix#3b verify
+- idle 30s MAVFTP R1
+
+### 2026-05-30 05:02 Fix#3b verify
+- MAVFTP R1: 4/6 fails=['T3', 'T4']
+
+### 2026-05-30 05:02 Fix#3b verify
+- idle 30s MAVFTP R2
+
+### 2026-05-30 05:04 Fix#3b verify
+- MAVFTP R2: 4/6 fails=['T3', 'T4']
+
+### 2026-05-30 05:04 Fix#3b verify
+- idle 30s MAVFTP R3
+
+### 2026-05-30 05:05 Fix#3b verify
+- MAVFTP R3: 4/6 fails=['T3', 'T4']
+
+### 2026-05-30 05:05 Fix#3b verify
+- idle 30s loop_hz idle + param load
+
+### 2026-05-30 05:07 Fix#3b verify
+- OpenOCD fault check (end)
+
+### 2026-05-30 05:07 Fix#3b verify
+- DONE -> /home/llw/firmare/pogo-apm/.cursor/tmp/fix3b_verify.json
+
+### 2026-05-30 05:09（Fix#3b 回退 + 基线重烧）
+- 动作：GCS_Param.cpp 恢复 1000µs；scons + st-flash 0x08008000
+- 依据：param median 12.54/s、MAVFTP 4/6×3、ov 28960（Fix#3 ~27/s、ov 14706）
+- 结果：不保留 Fix#3b；板上与 Fix#3 代码一致
+- 下一步：bytes_allowed/100ms 批次/TX-overrun 路径
+
+### 2026-05-30 05:17 SPI/CPU param-load measurement (read-only)
+- 动作：nm+GDB mdw + UART7 ap_rate 基线 vs pymavlink param 全量；符号见 SYMS
+- 结果：baseline_idle=0% param_min_idle=0% spi_xfer=0/s param=0@0.0/s ov_delta=0 work_max=4294967151 → Fix#4 INCONCLUSIVE
+
+### 2026-05-30 SPI/CPU param measurement (halt mdw)
+- 结果：idle_cpu 0% param_min 0% spi 0/s param 812@17.8/s ov/iter 0.0000 → Fix#4-MIXED
+
+### 2026-05-30 05:23 SPI/CPU param-load (halt mdw v2)
+- 动作：halt+monitor mdw 基线/负载；pymavlink param 全量；UART7 RTT_CTL
+- 结果：cpu_idle 0%→0% spi~0/s param 877@17.3/s ov/iter=0.0000 → Fix#4-B
+
+### 2026-05-30 05:25 SPI/CPU param (sequential halt mdw v3)
+- 动作：独占 ST-Link；nm 取址；halt+monitor mdw 基线/负载 7 点；pymavlink param 55s；UART7 RTT_CTL 被动读
+- 结果：cpu_idle 17%→0%（负载点 0/53/0/95/72/21/99）；spi~2339/s；param 743@13.5/s；RTT_CTL ov 28135→29082；iter=515826 ov=29488 → **Fix#4-A**
+- 下一步：Fix#4 SPI DMA/阻塞路径（A）；ap_rate msh 无回显，cpu_idle 仅 GDB 可信
+
+### 2026-05-30 06:23 Fix#4-A-low verify
+- IMU + idle idle-phase
+
+### 2026-05-30 06:23 Fix#4-A-low verify
+- IMU + idle idle-phase
+
+### 2026-05-30 06:23 Fix#4-A-low verify
+- IMU + idle idle-phase
+
+### 2026-05-30 06:32 Fix#4-A-low verify
+- IMU + idle idle-phase
+
+### 2026-05-30 06:42 Fix#4-A-low revert verify
+- reverted RTT_SPI_DMA_IRQ_WAIT=0 — IMU guard
+
+### 2026-05-30 06:42 Fix#4-A-low revert verify
+- IMU n=0 acc_ok=False gyro_ok=False
+
+### 2026-05-30 06:43 Fix#4-A-low revert verify
+- param R1: 18.1/s (912 in 50.4s)
+
+### 2026-05-30 06:45 Fix#4-A-low revert verify
+- param R2: 24.88/s (912 in 36.7s)
+
+### 2026-05-30 06:46 Fix#4-A-low revert verify
+- param R3: 16.62/s (912 in 54.9s)
+
+### 2026-05-30 06:49 Fix#4 revert gdb+IMU
+- IMU stream n=9 sample=(126, 145, -1010, 0, -1, 0)
+
+### 2026-05-30 06:52 Fix#4-A-low 结论
+- 动作：RTT_SPI_DMA_IRQ_WAIT=1 烧录验证 → CDC 打开即 disconnect；回退开关=0 重编烧录
+- Fix#4-A-low(=1)：VTOR=0x08008000 CFSR=0 HFSR=0 fallback=0；但 pymavlink/serial 读即 USB 断开，IMU/param 无法闭环
+- 回退(=0)：STANDBY RAW_IMU acc(126,145,-1010) ATTITUDE有效；param×3 18.1/24.9/16.6/s；MAVFTP 4/6；GDB idle=53% ov=19126 spi1_xfer=963554
+- 结论：**回退 Fix#4-A-low**；IRQ+rt_completion_wait 与 USB/调度冲突，需 full LLD 或 IRQ 优先级/完成语义再设计
+
+### 2026-05-30 14:18 Fix#4-B validate
+- Fix#4-B validate start
+
+### 2026-05-30 14:18 Fix#4-B validate
+- halt snap: CFSR=None HFSR=None prev=None cpu_idle=None spi=None
+
+### 2026-05-30 14:18 Fix#4-B validate
+- post-halt reset + 12s
+
+### 2026-05-30 14:19 Fix#4-B validate
+- RAW_IMU n=0 samples=[]
+
+### 2026-05-30 14:19 Fix#4-B validate
+- ATTITUDE=[]
+
+### 2026-05-30 14:23 Fix#4-B validate
+- Fix#4-B validate start
+
+### 2026-05-30 14:23 Fix#4-B validate
+- halt snap: CFSR=None HFSR=None prev=None cpu_idle=None spi=None
+
+### 2026-05-30 14:23 Fix#4-B validate
+- post-halt reset + 12s
+
+### 2026-05-30 14:23 Fix#4-B validate
+- RAW_IMU n=0 samples=[]
+
+### 2026-05-30 14:23 Fix#4-B validate
+- ATTITUDE=[]
+
+### 2026-05-30 14:35 SPI/CPU param-load (halt mdw v2)
+- 动作：halt+monitor mdw 基线/负载；pymavlink param 全量；UART7 RTT_CTL
+- 结果：cpu_idle 0%→0% spi~0/s param 912@15.9/s ov/iter=0.0000 → Fix#4-B
+
+### 2026-05-30 14:33 Fix#4-B 回退闭环
+- 动作：Fix#4-B 烧录后 90s+ 仅 "Initialising ArduPilot"、RAW_IMU/ATTITUDE=0；git checkout Invensense.cpp 重编 st-flash verify
+- 依据：IMU 护栏失败（无 EKF 对齐、无 RAW_IMU）；回退后 22s 内 EKF3 对齐 + RAW acc≈(124,197,-1002) gyro≈0
+- 结果：Fix#4-B **回退**；工作区保留 P0+P1+Fix#1+Fix#3（无 Fix#4-B）；性能 A/B 未对 Fix#4-B 有效测量（IMU 不可用）
+- 下一步：若再试 Fix#4-B，需在 n_samples>0 路径补 fifo_cs_held 的 check_registers 前 CS 释放，并验证 cs_held 下 read_registers(FIFO_COUNT) 与 burst 语义
+
+### 2026-05-30 15:03 milestone-green
+- connect CDC /dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00
+
+### 2026-05-30 15:03 milestone-green
+- HEARTBEAT sys=1 comp=0
+
+### 2026-05-30 15:03 milestone-green
+- HEARTBEAT/STANDBY: {'heartbeat': True, 'standby': False, 'custom_mode': 0, 'statustext_count': 4, 'statustext_sample': ['WDG: T0 SL0 FL0 FT0 FA0 FTP0 FLR0 FICSR0 MM0 MC0 I', 'E0 IEC0 TN:', 'WDG: T0 SL0 FL0 FT0 FA0 FTP0 FLR0 FICSR0 MM0 MC0 I', 'E0 IEC0 TN:'], 'elapsed_s': 25.29}
+
+### 2026-05-30 15:04 milestone-green
+- IMU/ATTITUDE/EKF: {'msg_counts': {'VFR_HUD': 21, 'RAW_IMU': 21, 'SCALED_PRESSURE': 21, 'AHRS': 9, 'GLOBAL_POSITION_INT': 9, 'SYS_STATUS': 9, 'POWER_STATUS': 9, 'MEMINFO': 9, 'NAV_CONTROLLER_OUTPUT': 9, 'MISSION_CURRENT': 9, 'SERVO_OUTPUT_RAW': 9, 'RC_CHANNELS': 9, 'GPS_RAW_INT': 9, 'SYSTEM_TIME': 9, 'TERRAIN_REPORT': 9, 'STATUSTEXT': 5, 'EKF_STATUS_REPORT': 8, 'VIBRATION': 8, 'AHRS2': 27, 'ATTITUDE': 27, 'HEARTBEAT': 10, 'TIMESYNC': 1}, 'raw_imu': {'xacc': 124, 'yacc': 197, 'zacc': -1005, 'xgyro': 2, 'ygyro': 0, 'zgyro': 1}, 'attitude': {'roll': -0.2036, 'pitch': 0.1284, 'yaw': 1.2221}, 'ekf_flags': 167, 'attitude_updates': 27, 'raw_imu_updates': 21}
+
+### 2026-05-30 15:04 milestone-green
+- MAVFTP test start
+
+### 2026-05-30 15:05 milestone-green
+- MAVFTP exit=1
+=== MAVFTP Comprehensive Test ===
+Port: /dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00
+Connected: sys=1 comp=0
+
+T1: ListDirectory '/' ... PASS (8 entries: ['DAPM', 'DAPM', 'Ftest_sd.txt\t9', 'Ftest.txt\t20', 'DAPM']...)
+T2: ListDirectory '/APM' ... PASS (10 entries: ['DSTORAGE', 'DTERRAIN', 'DLOGS', 'DTERRAIN', 'DSTORAGE'])
+T3: Read @PARAM/param.pck ... opened session=0 size=10944 ... FAIL (timeout at offset 7170)
+T4: Write/Read/Delete /APM/test_ftp.tmp ... FAIL (data mismatch: got b'')
+T5: ResetSessions ... PASS
+T6: Post-FTP stability (heartbeat + stream) ... PASS (61 msgs in 3s)
+
+==================================================
+Results: 4/6 PASS
+  T1_list_root: PASS
+  T2_list_apm: PASS
+  T3_read_param: FAIL
+  T4_write_read_del: FAIL
+  T5_reset_sessions: PASS
+  T6_stability: PASS
+
+
+### 2026-05-30 15:05 milestone-green
+- param full download x1 start
+
+### 2026-05-30 15:06 milestone-green
+- param download: {'count': 912, 'elapsed_s': 79.63, 'params_per_s': 11.45}
+
+### 2026-05-30 15:06 milestone-green
+- P0 send_banner path exists=True prev_fault_gate=True
+
+### 2026-05-30 15:01 milestone-green
+- 动作：st-flash write rtthread.bin @0x08008000 + verify + reset；冷启 15s
+- 结果：Flash written and verified jolly good! EXIT=0
+
+### 2026-05-30 15:02 milestone-green
+- 动作：OpenOCD halt → VTOR/CFSR/HFSR/PrevFault → resume → pkill openocd
+- 结果：VTOR=0x8008000 CFSR=0 HFSR=0 PrevFault=1（历史 pending，当前无 HardFault）
+
+### 2026-05-30 15:08 milestone-green
+- 动作：补验 system_status STANDBY + MAVFTP 重跑 + param 重跑
+- 结果：system_status=3 STANDBY=True；MAVFTP 3/6（T6 一度 no heartbeat）→ 第三次 4/6；param2 912@52.23s/17.46个/s
+- 下一步：MAVFTP T3/T4 超时/数据不匹配为里程碑阻塞项；param 首跑 79s 偏慢，次跑 52s 接近 3.6× 下限

@@ -87,6 +87,76 @@
 | CH343 USB-TTL | 1A86:55D3 | /dev/ttyACM0 | usb-1a86_USB_Single_Serial_* | UART7 msh 控制台 |
 | ArduPilot CDC | 1209:5741 | /dev/ttyACM1 | `usb-ArduPilot_CUAVv5_RTT_*` 或 Cherry 下 `usb-APM_CUAV_V5_CDC_1_*` | MAVLink 通信 |
 
+## 历史遗留清理后验证（仅构建，勿并行 `--test=`）
+
+- 用途：子任务 2 收口后确认 **native + cherryusb** 双 backend 全量 ArduCopter 仍可编过；**不**代替 OpenOCD / CDC / 长稳全量验证
+- 命令（**串行**，同一 `build/` 树）：
+  ```bash
+  cd /home/llw/firmare/pogo-apm
+  python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)
+  RTT_USB_BACKEND=cherryusb python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)
+  ```
+- 成功判据：两次均 `scons: done building targets`；`build/rtt_deploy/cuav_v5/rt-thread.elf` 存在；`arm-none-eabi-nm .../rt-thread.elf | rg OTG_FS_IRQHandler` **仅一行**；无 `rtt_spi_lld` / `spi_lld_*_rtt` 符号
+- **禁止**：两个 `scons --target=cuav_v5 --test=...` 并行（曾致 `L4_spi` 链接缺 kernel 对象）
+- CUAV 部署路径：`hwdef/common` + `hwdef/cuav_v5` → `build/rtt_deploy/cuav_v5/`（**非** `rtt_bsp_cuav_v5`）
+
+## D*/E* HAL smoke 串行构建门禁（2026-05-29）
+
+- 用途：manifest 登记的 **8 个** D/E 分层测试固件**串行链接门禁**；固件为 **真实 HAL/FS smoke**（`main.cpp` 调 `hal.*` 或 `E_sdcard` POSIX），**已非** 2026-05-28 的 BUILD_ONLY 单步占位
+- 命令（**必须串行**，勿并行两个 `--test=`）：
+  ```bash
+  cd /home/llw/firmare/pogo-apm
+  for t in D_uart_hal D_spi_hal D_i2c_hal D_storage D_rcoutput D_rcinput E_sdcard E_wspi_flash; do
+    python3 -m SCons --target=cuav_v5 --test="$t" -j$(nproc) || exit 1
+  done
+  ```
+- 成功判据：**8 次**均 `scons: done building targets`；产物 `build/rtt_deploy/cuav_v5/rtthread.bin` 与 `rt-thread.elf`
+- 边界：**仅构建**；**不**烧录、**不** OpenOCD/GDB/pymavlink/UART7 观测；**不等于** 上板通过（RX/loopback、FRAM 持久、PWM 波形、SBUS、插卡 SD、WSPI H7 等见 `open-issues.md`）
+- 常见失败：并行 `--test=` 导致 `build/kernel/...` 对象缺失 → 对失败项**单独重跑**
+
+## 单项 D/E 上板 smoke（`--test=` → 烧录 → UART7 → fault）
+
+- 用途：验收 **一个** manifest 登记的 `D_*` / `E_*` 测试固件（**非**全量 ArduCopter）；已用此流程通过：`D_uart_hal`、`D_spi_hal`、`D_i2c_hal`、`D_storage`、`E_sdcard`（2026-05-29）
+- 前提：`pgrep -a openocd` 为空；CH343 UART7 已接（`usb-1a86_USB_Single_Serial_*` → 通常 ttyACM0）
+- 命令模板（将 `TEST_NAME` 换成如 `D_spi_hal`）：
+  ```bash
+  cd /home/llw/firmare/pogo-apm
+  TEST_NAME=D_uart_hal   # 例：D_uart_hal | D_spi_hal | D_i2c_hal | D_storage | …
+
+  python3 -m SCons --target=cuav_v5 --test="$TEST_NAME" -j$(nproc)
+
+  openocd -f interface/stlink.cfg -f target/stm32f7x.cfg \
+    -c "program build/rtt_deploy/cuav_v5/rtthread.bin 0x08008000 verify reset" \
+    -c "resume" -c "exit"
+  # 烧录后必须无残留：pgrep openocd || echo OK
+
+  # UART7 观测（复位后读；按板子改 by-id）
+  python3 - <<'PY'
+  import serial, time
+  p = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_0001-if00"  # 按 ls by-id 调整
+  s = serial.Serial(p, 115200, timeout=0.2)
+  t0 = time.time()
+  while time.time() - t0 < 16:
+      b = s.read(4096)
+      if b: print(b.decode("utf-8", "replace"), end="")
+  s.close()
+  PY
+
+  openocd -f interface/stlink.cfg -f target/stm32f7x.cfg \
+    -c "init" -c "halt" \
+    -c "mdw 0xE000ED28" -c "mdw 0xE000ED2C" \
+    -c "resume" -c "exit"
+  ```
+- 成功判据：
+  - 烧录：`Verified OK`；OpenOCD **进程已退出**
+  - UART7：固件标签行 + **`RESULT: PASS`**（runner 用 `RESULT:` 而非字面 `TEST_PASS`）
+  - Fault：`0xE000ED28`（CFSR）与 `0xE000ED2C`（HFSR）均为 **0**
+- 边界：**不**代替 USB CDC MAVLink / pymavlink；**不**并行两个 `--test=` 构建；`E_sdcard` 须插卡；`E_wspi_flash` @ cuav_v5 为 N/A；各 test 局限见 `driver-validation-matrix.md`
+- 常见失败：OpenOCD 后台占用 ST-Link；UART 未复位导致 0 字节；`resume` warn 致 openocd exit=1 但 Verified OK 仍有效
+- 已知通过判据（2026-05-29）：
+  - `D_storage`：UART7 见 `D_STORAGE`、tail scratch `readback bytes` pattern、`RESULT: PASS`；CFSR/HFSR=0；仅 RAM stub scratch，非 FRAM 持久。
+  - `E_sdcard`：修复 SD 供电时序和重复 `/sdcard` 挂载后，UART7 见 `[sd] mounted sd on / ok`、`mount ok: stage=10 result=0`、`file smoke ok: /APM/.rtt_e_sdcard_smoke`、`RESULT: PASS`；CFSR/HFSR=0。
+
 ## 分层模块测试构建（bring-up / USB gate）
 
 - 用途：全量验证前，按 `libraries/AP_HAL_RTT/test/README.md` 与 `Tools/scripts/rtt_test_manifest.py` 做**可构建**门禁（不替代实机分层跑测）
@@ -99,6 +169,22 @@
   ```
 - 成功判据：`scons: done building targets`；产物 `build/rtt_deploy/cuav_v5/rtthread.bin` 与 `rt-thread.elf`
 - 常见失败：并行 `--test=` 导致 `build/kernel/...` 对象缺失 → 对失败项**单独重跑**该 test
+
+## L7 CherryUSB CDC echo 上板 smoke（2026-05-29）
+
+- 用途：验证 CherryUSB CDC 分层门禁（echo 固件），**不**代替全量 ArduCopter MAVLink L0。
+- 命令：
+  ```bash
+  cd /home/llw/firmare/pogo-apm
+  python3 -m SCons --target=cuav_v5 --test=L7_cherryusb_cdc -j$(nproc)
+  openocd -f interface/stlink.cfg -f target/stm32f7x.cfg \
+    -c "program build/rtt_cuav_v5/rtthread.bin 0x08008000 verify reset" \
+    -c "resume" -c "exit"
+  lsusb -d 1209:5741
+  ls -l /dev/serial/by-id/
+  ```
+- 成功判据：`lsusb -d 1209:5741` 显示 `Generic L7 CherryUSB`；by-id 出现 `usb-PogoAPM_L7_CherryUSB_0001`（通常 ttyACM1，CH343 UART7 通常 ttyACM0）；pyserial 写入 `HELLO_L7\r\n` 后读回同样字节；CFSR/HFSR=0。
+- 已知结果：2026-05-29 上板通过；`ECHO_OK True`；OpenOCD `resume` warn 不影响 `Verified OK`。
 
 ## USB 后端选择与 L0 验证（2026-05-28）
 

@@ -59,17 +59,18 @@ static inline ADC_TypeDef *_adc(void *p)
  * Poll for up to ~1 ms (5000 iterations × ~200 ns each).
  * Returns true if ADRDY set, false on timeout.
  */
-static bool _wait_adrdy(ADC_TypeDef *adc)
-{
-    uint32_t timeout = 5000U;
-    while (!(adc->SR & ADC_SR_ADRDY)) {
-        if (--timeout == 0) {
-            return false;
-        }
-        __NOP();
-    }
-    return true;
-}
+/* ADC ready wait: NOT used on F7.
+ *
+ * ChibiOS ADCv2 LLD (hal_adc_lld.c:302) does NOT wait for ADRDY after
+ * setting ADON — it just sets the bit and returns.  Our earlier attempt
+ * to add an ADRDY poll consistently timed out (even at 100k NOPs) even
+ * though the ADC works fine for subsequent conversions (0 timeouts).
+ * Per RM0410 §19.3.3: "The ADC can be used immediately after ADON is
+ * set to 1", which contradicts the tSTAB wait in §19.3.7.  Empirical
+ * evidence on CUAV V5 (STM32F767) confirms the ADC works without ADRDY.
+ * The conversion function (adc_lld_convert_channel_rtt) has its own
+ * timeout, which is sufficient protection.
+ */
 
 /* ========================================================================== */
 /* Exported functions                                                         */
@@ -112,18 +113,10 @@ bool adc_lld_init_rtt(void *ADCx, uint32_t adcpre, bool enable_tsvrefe)
 
     /* ---- Step 5: Enable ADC (ChibiOS hal_adc_lld.c:302) ---- */
     /* ChibiOS just sets ADON and returns without ADRDY wait.
-     * On F7 we add an ADRDY poll (RM0410 §19.3.7) so the caller
-     * can safely perform the first single-shot conversion without
-     * an immediate timeout.  If ADRDY never sets, we still return
-     * true (caller will time out on the first conversion instead). */
+     * Per RM0410 §19.3.3 the ADC can be used immediately after ADON.
+     * No ADRDY poll needed — the conversion function has its own timeout. */
     adc->CR2 = ADC_CR2_ADON;
     __DSB();
-
-    if (!_wait_adrdy(adc)) {
-        /* ADC stabilisation timed out — ADC clock may be off */
-        rtt_adc_lld_init_status = 2;
-        /* Continue anyway — the conversion function has its own timeout */
-    }
 
     /* ---- Step 6: Calibration (RM0410 §19.3.3) ---- */
     /* Set ADCAL, wait until hardware clears it (~82 ADCCLK cycles). */

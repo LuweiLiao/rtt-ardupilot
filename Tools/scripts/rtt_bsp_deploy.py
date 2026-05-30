@@ -32,9 +32,9 @@ RTT_TARGETS = {
         'msp_src_rel': 'modules/rt-thread/bsp/stm32/stm32f765-cuav-v5/board/CubeMX_Config/Src/stm32f7xx_hal_msp.c',
         'ports_rel': 'modules/rt-thread/bsp/stm32/stm32f765-cuav-v5/board/ports',
     },
-    # Legacy targets (not yet migrated to hwdef/common):
+    # Legacy targets (not yet migrated to hwdef/common; archived full-tree BSP):
     'pixhawk6c_mini': {
-        'bsp_src_rel': 'libraries/AP_HAL_RTT/rtt_bsp_pixhawk6c_mini',
+        'bsp_src_rel': 'libraries/AP_HAL_RTT/archive/stray-bsp/rtt_bsp_pixhawk6c_mini',
     },
 }
 
@@ -100,13 +100,12 @@ def deploy(ap_root, target):
     if not os.path.isdir(rtt_root):
         return None, "RTT_ROOT not a directory: %s" % rtt_root
 
-    # Clean deploy dir
+    # Incremental deploy: keep deploy_dir so in-flight scons (cwd=deploy) stays valid.
     try:
-        if os.path.isdir(deploy_dir):
-            shutil.rmtree(deploy_dir)
         os.makedirs(os.path.dirname(deploy_dir), exist_ok=True)
+        os.makedirs(deploy_dir, exist_ok=True)
     except Exception as e:
-        return None, "Deploy dir cleanup failed: %s" % e
+        return None, "Deploy dir setup failed: %s" % e
 
     # Dispatch by mode
     if 'hwdef' in tinfo:
@@ -130,9 +129,9 @@ def _deploy_hwdef(ap_root, tinfo, deploy_dir):
     if not os.path.isfile(hwdef_path):
         return "hwdef.dat not found: %s" % hwdef_path
 
-    # 1. Copy common template
+    # 1. Copy/sync common template (dirs_exist_ok: refresh without deleting deploy root)
     try:
-        shutil.copytree(common_dir, deploy_dir)
+        shutil.copytree(common_dir, deploy_dir, dirs_exist_ok=True)
     except Exception as e:
         return "Copy common template failed: %s" % e
 
@@ -189,11 +188,12 @@ def _copy_hwdef_board_overrides(ap_root, tinfo, deploy_dir):
     if msp_src_rel:
         msp_src = os.path.join(ap_root, _norm(msp_src_rel))
         if not os.path.isfile(msp_src):
-            return "Board MSP source not found: %s" % msp_src
-
-        msp_dst = os.path.join(
-            deploy_dir, 'board', 'CubeMX_Config', 'Src', 'stm32f7xx_hal_msp.c')
-        _safe_copy(msp_src, msp_dst)
+            print("Warning: board MSP source not found, using hwdef-generated MSP: %s" % msp_src,
+                  file=sys.stderr)
+        else:
+            msp_dst = os.path.join(
+                deploy_dir, 'board', 'CubeMX_Config', 'Src', 'stm32f7xx_hal_msp.c')
+            _safe_copy(msp_src, msp_dst)
 
     # Overlay board/ports/ files from source BSP onto the deployed board/ports/
     ports_rel = tinfo.get('ports_rel')
@@ -425,6 +425,9 @@ def _find_rtt_bsp_cache(ap_root, target):
         full = os.path.join(rtt_root, 'bsp', rel)
         if os.path.isdir(full) and os.path.isdir(os.path.join(full, 'packages')):
             return full
+    common = os.path.join(ap_root, 'libraries', 'AP_HAL_RTT', 'hwdef', 'common')
+    if os.path.isdir(os.path.join(common, 'packages')):
+        return common
     return None
 
 

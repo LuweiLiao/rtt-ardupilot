@@ -37,6 +37,11 @@
 
 #define HAL_BOARD_NAME "RTT"
 
+/* First I2C bus in I2C_ORDER is internal unless hwdef overrides (ChibiOS default). */
+#ifndef HAL_I2C_INTERNAL_MASK
+#define HAL_I2C_INTERNAL_MASK 1
+#endif
+
 #define HAL_BOARD_SUBTYPE_RTT_GENERIC 7000
 #ifndef CONFIG_HAL_BOARD_SUBTYPE
 #define CONFIG_HAL_BOARD_SUBTYPE HAL_BOARD_SUBTYPE_RTT_GENERIC

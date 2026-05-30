@@ -7,6 +7,7 @@
  */
 
 #include "Storage.h"
+#include "SPIDevice.h"
 #include <AP_HAL/AP_HAL.h>
 #include <cstring>
 #include <stdio.h>
@@ -16,6 +17,10 @@
 #endif
 
 extern volatile uint32_t rtt_dbg_setup_stage;
+volatile uint32_t rtt_dbg_storage_backend;
+volatile uint32_t rtt_dbg_fram_probe; /* 1=init ok, 2=read ok, 3=init fail, 4=read fail */
+volatile uint32_t rtt_dbg_fram_tick_ok;
+volatile uint32_t rtt_dbg_fram_tick_fail;
 
 extern const AP_HAL::HAL& hal;
 
@@ -113,10 +118,46 @@ void Storage::_storage_open(void)
 
     _dirty_mask.clearall();
 
-    // Bypass FRAM and Flash init for now — use RAM stub to get system booting
+#if HAL_WITH_RAMTRON
+    rtt_dbg_setup_stage = 501;  // trying FRAM
+    spi_cmsis_prepare_bus(2);
+    if (_fram.init()) {
+        rtt_dbg_fram_probe = 1;
+        if (_fram.read(0, _buffer, RTT_STORAGE_SIZE)) {
+            rtt_dbg_fram_probe = 2;
+            _initialisedType = StorageBackend::FRAM;
+            rtt_dbg_storage_backend = (uint32_t)_initialisedType;
+            _last_empty_ms = AP_HAL::millis();
+            rtt_dbg_setup_stage = 504;  // FRAM ok
+            hal.console->printf("Initialised Storage type=%u\n",
+                                (unsigned)_initialisedType);
+            return;
+        }
+        rtt_dbg_fram_probe = 4;
+    } else {
+        rtt_dbg_fram_probe = 3;
+    }
+    rtt_dbg_setup_stage = 5011;  // FRAM init/read failed
+#endif
+
+#ifdef STORAGE_FLASH_PAGE
+    rtt_dbg_setup_stage = 502;  // trying Flash
+    _flash_load();
+    if (_initialisedType == StorageBackend::Flash) {
+        rtt_dbg_storage_backend = (uint32_t)_initialisedType;
+        _last_empty_ms = AP_HAL::millis();
+        rtt_dbg_setup_stage = 505;  // Flash ok
+        hal.console->printf("Initialised Storage type=%u\n",
+                            (unsigned)_initialisedType);
+        return;
+    }
+#endif
+
     rtt_dbg_setup_stage = 503;  // using stub
     memset(_buffer, 0xFF, RTT_STORAGE_SIZE);
     _initialisedType = StorageBackend::Stub;
+    rtt_dbg_storage_backend = (uint32_t)_initialisedType;
+    hal.console->printf("Initialised Storage type=%u\n", (unsigned)_initialisedType);
 }
 
 void Storage::_mark_dirty(uint16_t loc, uint16_t length)
@@ -194,13 +235,8 @@ void Storage::_timer_tick(void)
 
 #if HAL_WITH_RAMTRON
     if (_initialisedType == StorageBackend::FRAM) {
+        /* Match ChibiOS: AP_RAMTRON::write() already verifies first 32 bytes */
         write_ok = _fram.write(RTT_STORAGE_LINE_SIZE * i, _tmpline, RTT_STORAGE_LINE_SIZE);
-        if (write_ok) {
-            // Read back to verify
-            uint8_t verify_buf[RTT_STORAGE_LINE_SIZE];
-            write_ok = _fram.read(RTT_STORAGE_LINE_SIZE * i, verify_buf, RTT_STORAGE_LINE_SIZE) &&
-                       memcmp(verify_buf, _tmpline, RTT_STORAGE_LINE_SIZE) == 0;
-        }
     }
 #endif
 
@@ -211,11 +247,22 @@ void Storage::_timer_tick(void)
 #endif
 
     if (write_ok) {
+#if HAL_WITH_RAMTRON
+        if (_initialisedType == StorageBackend::FRAM) {
+            rtt_dbg_fram_tick_ok++;
+        }
+#endif
         _sem.take_blocking();
         if (memcmp(_tmpline, &_buffer[RTT_STORAGE_LINE_SIZE * i], RTT_STORAGE_LINE_SIZE) == 0) {
             _dirty_mask.clear(i);
         }
         _sem.give();
+    } else {
+#if HAL_WITH_RAMTRON
+        if (_initialisedType == StorageBackend::FRAM) {
+            rtt_dbg_fram_tick_fail++;
+        }
+#endif
     }
 }
 

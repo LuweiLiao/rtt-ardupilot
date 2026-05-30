@@ -59,4 +59,7 @@ private:
     uint32_t _br;           /* SPI baud rate divider (BR field in CR1) */
 };
 
+/* Early CMSIS SPI bus setup before Storage/FRAM (GPIO + bus mutex). */
+void spi_cmsis_prepare_bus(uint8_t bus);
+
 } // namespace RTT

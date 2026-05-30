@@ -33,6 +33,10 @@
 /* STM32F7 HAL/CMSIS registers for RCC/PWR/RTC backup domain access */
 #include <stm32f7xx.h>
 
+#include "rtt_dbg_bkp.h"
+
+volatile uint32_t rtt_dbg_sw_reboot_count = 0;
+
 #if HAL_WITH_IO_MCU
 /* ch.h provides thread_t / chThdGetSelfX for AP_IOMCU's thread_main.
  * thread_create must allocate a thread_t wrapper and set rt_thread->user_data
@@ -617,20 +621,14 @@ void Scheduler::reboot(bool hold_in_bootloader)
     /* Tell bootloader what to do after reset — mirrors ChibiOS
      * Scheduler.cpp:311  set_fast_reboot(hold_in_bootloader ? RTC_BOOT_HOLD : RTC_BOOT_FAST) */
     {
-        /* Enable PWR + backup domain write access */
-        RCC->APB1ENR |= RCC_APB1ENR_PWREN;
-        (void)RCC->APB1ENR;
-        if ((RCC->BDCR & RCC_BDCR_RTCEN) == 0) {
-            RCC->BDCR |= (RCC_BDCR_RTCSEL_0); /* LSE default */
-            RCC->BDCR |= RCC_BDCR_RTCEN;
-        }
-        PWR->CR1 |= PWR_CR1_DBP;             /* enable backup domain write (F7: CR1, not CR) */
-        __DSB();
-        *(volatile uint32_t *)0x40002850UL =      /* TAMP_BKP0R */
-            hold_in_bootloader ? 0xb0070001UL     /* RTC_BOOT_HOLD */
-                               : 0xb0070002UL;    /* RTC_BOOT_FAST */
+        rtt_dbg_bkp_enable_domain();
+        RTC->BKP0R = hold_in_bootloader ? 0xb0070001UL     /* RTC_BOOT_HOLD */
+                                        : 0xb0070002UL;    /* RTC_BOOT_FAST */
         __DSB();
     }
+
+    rtt_dbg_sw_reboot_count++;
+    rtt_dbg_bkp_stamp_sw_reboot();
 
     rt_hw_interrupt_disable();
     rt_hw_cpu_reset();

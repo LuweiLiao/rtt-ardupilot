@@ -20,7 +20,9 @@ class RCOutput;
 class Storage;
 class AnalogIn;
 class Flash;
+class SoftSigReader;
 class SoftSigReaderInt;
+class Shared_DMA;
 class CANIface;
 class DSP;
 }  // namespace RTT

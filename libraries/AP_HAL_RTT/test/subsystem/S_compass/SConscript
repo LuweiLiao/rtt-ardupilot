@@ -1,0 +1,110 @@
+import os
+import sys
+from building import *
+
+cwd = GetCurrentDir()
+common_dir = os.path.normpath(os.path.join(cwd, '..', '..', '_common'))
+
+if common_dir not in sys.path:
+    sys.path.insert(0, common_dir)
+import rtt_test_compass_subsystem_link as _compass_link
+
+_scripts = os.path.join(
+    os.environ.get('AP_ROOT', _compass_link._ap_root_from_test_dir(cwd)),
+    'Tools', 'scripts')
+if _scripts not in sys.path:
+    sys.path.insert(0, _scripts)
+import scons_ardupilot_sources as _sas
+
+ap_root, hal_src = _compass_link.collect_compass_subsystem_sources(cwd)
+
+bsp_dir = os.environ.get('BSP_DIR', '')
+if not bsp_dir:
+    bsp_dir = os.path.join(ap_root, 'libraries', 'AP_HAL_RTT', 'hwdef', 'common')
+board = os.environ.get('RTT_BOARD', 'rtt_cuav_v5')
+hwdef_build = os.path.join(ap_root, 'build', board)
+
+src = Glob('*.cpp')
+src += Glob(os.path.join(common_dir, 'test_runner.c'))
+src += Glob(os.path.join(common_dir, 'test_stubs.c'))
+src += Glob(os.path.join(common_dir, 'test_hal_uart_stubs.cpp'))
+src += Glob(os.path.join(common_dir, 'ap_strings_shim.c'))
+src += hal_src
+
+CPPPATH = [cwd, common_dir, hwdef_build]
+CPPPATH += _compass_link.collect_compass_subsystem_cpppath(ap_root, bsp_dir, board=board)
+
+ap_config_h = os.path.join(hwdef_build, 'ap_config.h')
+if not os.path.isfile(ap_config_h):
+    os.makedirs(hwdef_build, exist_ok=True)
+    with open(ap_config_h, 'w') as f:
+        f.write('#ifndef _AP_CONFIG_H_\n#define _AP_CONFIG_H_\n#include "hwdef.h"\n#endif\n')
+
+force_include = os.path.join(common_dir, 'ap_test_force_include.h')
+
+CPPDEFINES = _sas._collect_defines(board=board)
+
+# Trim compass drivers to IST8310 only; skip AHRS hook in Compass::init.
+COMPASS_SUBSYSTEM_DEFINES = [
+    '-UHAL_WITH_IO_MCU',
+    '-DHAL_WITH_IO_MCU=0',
+    '-DHAL_LOGGING_ENABLED=0',
+    '-DHAL_MAVLINK_BINDINGS_ENABLED=0',
+    '-DHAL_GCS_ENABLED=0',
+    '-DHAL_BUILD_AP_PERIPH=1',
+    '-DCOMPASS_CAL_ENABLED=0',
+    '-DCOMPASS_LEARN_ENABLED=0',
+    '-DAP_COMPASS_AK8963_ENABLED=0',
+    '-DAP_COMPASS_AK09916_ENABLED=0',
+    '-DAP_COMPASS_BMM150_ENABLED=0',
+    '-DAP_COMPASS_BMM350_ENABLED=0',
+    '-DAP_COMPASS_HMC5843_ENABLED=0',
+    '-DAP_COMPASS_LSM303D_ENABLED=0',
+    '-DAP_COMPASS_LSM9DS1_ENABLED=0',
+    '-DAP_COMPASS_LIS3MDL_ENABLED=0',
+    '-DAP_COMPASS_ICM20948_ENABLED=0',
+    '-DAP_COMPASS_MMC3416_ENABLED=0',
+    '-DAP_COMPASS_DRONECAN_ENABLED=0',
+    '-DAP_COMPASS_QMC5883L_ENABLED=0',
+    '-DAP_COMPASS_QMC5883P_ENABLED=0',
+    '-DAP_COMPASS_SITL_ENABLED=0',
+    '-DAP_COMPASS_MAG3110_ENABLED=0',
+    '-DAP_COMPASS_IST8308_ENABLED=0',
+    '-DAP_COMPASS_RM3100_ENABLED=0',
+    '-DAP_COMPASS_MSP_ENABLED=0',
+    '-DAP_COMPASS_MMC5xx3_ENABLED=0',
+    '-DAP_COMPASS_IIS2MDC_ENABLED=0',
+    '-DAP_COMPASS_EXTERNALAHRS_ENABLED=0',
+    '-DAP_COMPASS_IST8310_ENABLED=1',
+    '-DCOMPASS_MOT_ENABLED=0',
+    '-DAP_CUSTOMROTATIONS_ENABLED=0',
+]
+
+CCFLAGS = ['-include', force_include, '-fsingle-precision-constant'] + COMPASS_SUBSYSTEM_DEFINES
+CXXFLAGS = [
+    '-include', force_include,
+    '-std=gnu++11',
+    '-fno-exceptions',
+    '-fno-rtti',
+    '-Wno-unused-parameter',
+    '-fsingle-precision-constant',
+] + COMPASS_SUBSYSTEM_DEFINES
+
+_env = Env
+_old_lflags = _env.get('LINKFLAGS', '')
+if isinstance(_old_lflags, list):
+    _old_lflags = ' '.join(str(v) for v in _old_lflags)
+if '-lstdc++' not in _old_lflags:
+    _env.Append(LINKFLAGS=' -Wl,--start-group -lstdc++ -lsupc++ -lgcc -Wl,--end-group')
+    _env.Append(LIBS=['stdc++', 'supc++', 'gcc'])
+
+group = DefineGroup(
+    'test_S_compass',
+    src,
+    depend=[''],
+    CPPPATH=CPPPATH,
+    CPPDEFINES=CPPDEFINES,
+    CCFLAGS=CCFLAGS,
+    CXXFLAGS=CXXFLAGS,
+)
+Return('group')

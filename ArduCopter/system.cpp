@@ -221,6 +221,8 @@ void Copter::init_ardupilot()
 //******************************************************************************
 void Copter::startup_INS_ground()
 {
+    extern volatile uint32_t rtt_dbg_setup_stage;
+    rtt_dbg_setup_stage = 655;  /* ENTERED startup_INS_ground — EXTRA marker */
     rtt_dbg_setup_stage = 660;
     // initialise ahrs (may push imu calibration into the mpu6000 if using that device).
     ahrs.init();

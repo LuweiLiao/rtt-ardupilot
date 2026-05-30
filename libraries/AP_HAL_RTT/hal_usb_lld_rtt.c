@@ -1,300 +1,523 @@
 /*
- * RTT adaptation of ChibiOS STM32 OTGv1 LLD (hal_usb_lld_rtt.c).
+ * RTT adaptation of ChibiOS STM32 OTGv1 USB LLD (hal_usb_lld_rtt.c)
  *
- * Complete self-contained DWC2 USB device driver:
- *  - Direct DWC2 register operations (polling mode, no interrupts)
- *  - EP0 control transfers: USB enumeration, standard requests
- *  - CDC ACM class: EP1 IN (bulk, device→host), EP2 OUT (bulk, host→device)
- *  - Embedded USB descriptors (device, config, string)
- *  - No CherryUSB dependency
+ * 1:1 port of modules/ChibiOS/os/hal/ports/STM32/LLD/OTGv1/hal_usb_lld.c
+ * with the HAL state machine (_usb_reset, _usb_ep0setup, etc.) from
+ * modules/ChibiOS/os/hal/src/hal_usb.c.
  *
- * ChibiOS reference:
- *   modules/ChibiOS/os/hal/ports/STM32/LLD/OTGv1/hal_usb_lld.c
- *   modules/ChibiOS/os/hal/ports/STM32/LLD/OTGv1/stm32_otg.h
+ * Self-contained: no ChibiOS dependency, no CherryUSB dependency.
+ * Targeted at STM32F767 (CUAV V5) with OTG_FS.
  *
- * STM32F767 DWC2 register layout (RM0410 §45):
- *   Global:   base + 0x000  (USB_OTG_GlobalTypeDef)
- *   Device:   base + 0x800  (USB_OTG_DeviceTypeDef)
- *   IN EP:    base + 0x900 + ep*0x20
- *   OUT EP:   base + 0xB00 + ep*0x20
- *   FIFO:     base + 0x1000 + ep*4
+ * Register layout: ChibiOS stm32_otg_t (single struct covering all DWC2 regs).
+ * CMSIS headers used for RCC, NVIC, GPIO, and core.
+ *
+ * ChibiOS Copyright (C) 2006..2018 Giovanni Di Sirio
+ *   Licensed under the Apache License, Version 2.0
  */
 
+/* ========================================================================== */
+/* Includes                                                                   */
+/* ========================================================================== */
+
 #include "hal_usb_lld_rtt.h"
+#include "usb_cdc_rtt.h"
+#include <rtthread.h>
 #include <stm32f7xx.h>
 #include <string.h>
 
-/* ========================================================================== */
-/* DWC2 register bit definitions (RM0410 §45)                                */
-/* ========================================================================== */
+/* Debug counters (referenced by rtt_ctl_telemetry.c) */
+volatile uint32_t rtt_dbg_usb_init       = 0;
+volatile uint32_t rtt_dbg_usb_usbrst     = 0;
+volatile uint32_t rtt_dbg_usb_enumdne    = 0;
+volatile uint32_t rtt_dbg_usb_setup_stup = 0;
+volatile uint32_t rtt_dbg_usb_set_addr   = 0;
+volatile uint32_t rtt_dbg_usb_ep0_cont   = 0;  /* EP0 IN multi-packet continuation in ISR */
+volatile uint32_t rtt_dbg_usb_ep0_zlp    = 0;  /* EP0 IN ZLP after exact-MPS data stage */
+volatile uint32_t rtt_dbg_usb_ep0_sts_in = 0;  /* EP0 STATUS IN ZLP (host→device, wLength=0) */
 
-/* ---- GOTGCTL (0x000) ---- */
-#define GOTGCTL_BVALOEN         0x00400000UL
-#define GOTGCTL_BVALOVAL        0x00800000UL
-
-/* ---- GAHBCFG (0x008) ---- */
-#define GAHBCFG_GINTMSK         0x00000001UL
-#define GAHBCFG_TXFELVL         0x00000080UL
-#define GAHBCFG_PTXFELVL        0x00000100UL
-
-/* ---- GUSBCFG (0x00C) ---- */
-#define GUSBCFG_FDMOD           0x40000000UL
-#define GUSBCFG_PHYSEL          0x00000040UL
-#define GUSBCFG_TRDT_MASK       0x00001C00UL
-#define GUSBCFG_TRDT_SHIFT      10
-#define GUSBCFG_TRDT(n)         (((n) << GUSBCFG_TRDT_SHIFT) & GUSBCFG_TRDT_MASK)
-#define GUSBCFG_SRPCAP          0x00000100UL
-#define GUSBCFG_HNPCAP          0x00000200UL
-
-/* ---- GRSTCTL (0x010) ---- */
-#define GRSTCTL_CSRST           0x00000001UL
-#define GRSTCTL_HCSFT           0x00000002UL
-#define GRSTCTL_RXFFLSH         0x00000010UL
-#define GRSTCTL_TXFFLSH         0x00000020UL
-#define GRSTCTL_TXFNUM_MASK     0x000007C0UL
-#define GRSTCTL_TXFNUM_SHIFT    6
-#define GRSTCTL_TXFNUM(n)       (((n) << GRSTCTL_TXFNUM_SHIFT) & GRSTCTL_TXFNUM_MASK)
-#define GRSTCTL_AHBIDL          0x00000080UL
-
-/* ---- GINTSTS / GINTMSK (0x014 / 0x018) ---- */
-#define GINTMSK_USBRSTM         0x00000002UL
-#define GINTMSK_ESUSPM          0x00000080UL
-#define GINTMSK_SOFM            0x00000008UL
-#define GINTMSK_RXFLVLM         0x00000010UL
-#define GINTMSK_USBSUSPM        0x00000001UL
-#define GINTMSK_WKUPM           0x80000000UL
-#define GINTMSK_SRQM            0x40000000UL
-#define GINTMSK_ENUMDNEM        0x00002000UL
-#define GINTMSK_IISOIXFRM       0x00100000UL
-#define GINTMSK_IISOOXFRM       0x00200000UL
-#define GINTMSK_OEPM            0x00080000UL
-#define GINTMSK_IEPM            0x00040000UL
-
-#define GINTSTS_USBRST          0x00000002UL
-#define GINTSTS_WKUPINT         0x80000000UL
-#define GINTSTS_USBSUSP         0x00000001UL
-#define GINTSTS_ENUMDNE         0x00002000UL
-#define GINTSTS_SOF             0x00000008UL
-#define GINTSTS_RXFLVL          0x00000010UL
-#define GINTSTS_OEPINT          0x00080000UL
-#define GINTSTS_IEPINT          0x00040000UL
-#define GINTSTS_IISOIXFR        0x00100000UL
-#define GINTSTS_IISOOXFR        0x00200000UL
-
-/* ---- GRXSTSP / GRXSTSR ---- */
-#define GRXSTSP_BCNT_MASK       0x0000001FUL
-#define GRXSTSP_BCNT_SHIFT      0
-#define GRXSTSP_EPNUM_MASK      0x07C00000UL
-#define GRXSTSP_EPNUM_SHIFT     22
-#define GRXSTSP_PKTSTS_MASK     0x001E0000UL
-#define GRXSTSP_PKTSTS_SHIFT    17
-#define GRXSTSP_SETUP_DATA      2
-#define GRXSTSP_SETUP_COMP      4
-#define GRXSTSP_OUT_DATA        1
-#define GRXSTSP_OUT_COMP        3
-#define GRXSTSP_OUT_DONE        5   /* Global IN NAK? Not common, but handle */
-
-/* ---- DCFG (0x800) ---- */
-#define DCFG_DSPD_MASK          0x00000003UL
-#define DCFG_DSPD_FS11          0x00000003UL       /* 48MHz FS 1.1 PHY */
-#define DCFG_DSPD_HS            0x00000000UL
-#define DCFG_DSPD_HS_FS         0x00000001UL
-#define DCFG_DAD_MASK           0x00007FF0UL
-#define DCFG_DAD_SHIFT          4
-#define DCFG_DAD(addr)          (((addr) << DCFG_DAD_SHIFT) & DCFG_DAD_MASK)
-
-/* ---- DSTS (0x808) ---- */
-#define DSTS_ENUMSPD_MASK       0x00000006UL
-#define DSTS_ENUMSPD_SHIFT      1
-#define DSTS_ENUMSPD_FS11       0x00000002UL
-#define DSTS_ENUMSPD_HS         0x00000000UL
-#define DSTS_ENUMSPD_FS48       0x00000004UL
-#define DSTS_FNSOF_ODD          0x80000000UL
-
-/* ---- DCTL (0x804) ---- */
-#define DCTL_RWUSIG             0x00000001UL
-#define DCTL_SDIS               0x00000002UL
-#define DCTL_CGIN               0x00000100UL
-#define DCTL_CGON               0x00000200UL
-
-/* ---- DIEPMSK (0x810) ---- */
-#define DIEPMSK_XFRCM           0x00000001UL
-#define DIEPMSK_EPDM            0x00000002UL
-#define DIEPMSK_TOM             0x00000008UL
-#define DIEPMSK_TXFIFOEM        0x00000080UL
-
-/* ---- DOEPMSK (0x814) ---- */
-#define DOEPMSK_XFRCM           0x00000001UL
-#define DOEPMSK_STUPM           0x00000008UL
-
-/* ---- DAINTMSK (0x81C) ---- */
-#define DAINTMSK_IEPM(n)        (1UL << (n))
-#define DAINTMSK_OEPM(n)        (1UL << (16 + (n)))
-
-/* ---- DIEPCTL / DOEPCTL ---- */
-#define DIEPCTL_MPSIZ_MASK      0x000007FFUL
-#define DIEPCTL_MPSIZ(n)        ((n) & DIEPCTL_MPSIZ_MASK)
-#define DIEPCTL_EPTYP_MASK      0x00030000UL
-#define DIEPCTL_EPTYP_SHIFT     16
-#define DIEPCTL_EPTYP_ISO       0x00000000UL
-#define DIEPCTL_EPTYP_BULK      0x00010000UL
-#define DIEPCTL_EPTYP_CTRL      0x00000000UL
-#define DIEPCTL_EPTYP_INTR      0x00030000UL
-#define DIEPCTL_SD0PID          0x10000000UL
-#define DIEPCTL_SODDFRM         DIEPCTL_SD0PID
-#define DIEPCTL_SEVNFRM         0x08000000UL
-#define DIEPCTL_TXFNUM_MASK     0x07C00000UL
-#define DIEPCTL_TXFNUM_SHIFT    22
-#define DIEPCTL_TXFNUM(n)       (((n) << DIEPCTL_TXFNUM_SHIFT) & DIEPCTL_TXFNUM_MASK)
-#define DIEPCTL_STALL           0x00200000UL
-#define DIEPCTL_SNAK            0x00100000UL
-#define DIEPCTL_CNAK            0x00080000UL
-#define DIEPCTL_USBAEP          0x00008000UL
-#define DIEPCTL_EPDIS           0x40000000UL
-#define DIEPCTL_EPENA           0x80000000UL
-#define DIEPCTL_MPSIZ64         64
-
-/* ---- DIEPINT ---- */
-#define DIEPINT_XFRC            0x00000001UL
-#define DIEPINT_EPDISBLD        0x00000004UL
-#define DIEPINT_TOC             0x00000008UL
-#define DIEPINT_TXFE            0x00000080UL
-#define DIEPINT_INEPNE          0x00000040UL
-
-/* ---- DOEPINT ---- */
-#define DOEPINT_XFRC            0x00000001UL
-#define DOEPINT_EPDISBLD        0x00000004UL
-#define DOEPINT_STUP            0x00000008UL
-
-/* ---- DIEPTSIZ ---- */
-#define DIEPTSIZ_XFRSIZ_MASK    0x0007FFFFUL
-#define DIEPTSIZ_XFRSIZ_SHIFT   0
-#define DIEPTSIZ_XFRSIZ(n)      (((n) << DIEPTSIZ_XFRSIZ_SHIFT) & DIEPTSIZ_XFRSIZ_MASK)
-#define DIEPTSIZ_PKTCNT_MASK    0x1FF80000UL
-#define DIEPTSIZ_PKTCNT_SHIFT   19
-#define DIEPTSIZ_PKTCNT(n)      (((n) << DIEPTSIZ_PKTCNT_SHIFT) & DIEPTSIZ_PKTCNT_MASK)
-#define DIEPTSIZ_MCNT_MASK      0x60000000UL
-#define DIEPTSIZ_MCNT_SHIFT     29
-#define DIEPTSIZ_MCNT(n)        (((n) << DIEPTSIZ_MCNT_SHIFT) & DIEPTSIZ_MCNT_MASK)
-
-/* ---- DOEPTSIZ ---- */
-#define DOEPTSIZ_STUPCNT_MASK   0x18000000UL
-#define DOEPTSIZ_STUPCNT_SHIFT  27
-#define DOEPTSIZ_STUPCNT(n)     (((n) << DOEPTSIZ_STUPCNT_SHIFT) & DOEPTSIZ_STUPCNT_MASK)
-#define DOEPTSIZ_XFRSIZ_MASK    0x0007FFFFUL
-#define DOEPTSIZ_XFRSIZ_SHIFT   0
-#define DOEPTSIZ_XFRSIZ(n)      (((n) << DOEPTSIZ_XFRSIZ_SHIFT) & DOEPTSIZ_XFRSIZ_MASK)
-#define DOEPTSIZ_PKTCNT_MASK    0x1FF80000UL
-#define DOEPTSIZ_PKTCNT_SHIFT   19
-#define DOEPTSIZ_PKTCNT(n)      (((n) << DOEPTSIZ_PKTCNT_SHIFT) & DOEPTSIZ_PKTCNT_MASK)
-
-/* ---- DIEPTXF0 / DIEPTXF ---- */
-#define DIEPTXF_INEPTXSA_MASK   0x0000FFFFUL
-#define DIEPTXF_INEPTXSA_SHIFT  0
-#define DIEPTXF_INEPTXSA(n)     (((n) << DIEPTXF_INEPTXSA_SHIFT) & DIEPTXF_INEPTXSA_MASK)
-#define DIEPTXF_INEPTXFD_MASK   0xFFFF0000UL
-#define DIEPTXF_INEPTXFD_SHIFT  16
-#define DIEPTXF_INEPTXFD(n)     (((n) << DIEPTXF_INEPTXFD_SHIFT) & DIEPTXF_INEPTXFD_MASK)
-
-/* ---- GCCFG (0x038) ---- */
-#define GCCFG_PWRDWN            0x00010000UL
-#define GCCFG_VBDEN             0x40000000UL   /* Bit 30 (NOT 0x00100000! That's SOFOUTEN) */
-#define GCCFG_VBUSASEN          0x00040000UL
-#define GCCFG_VBUSBSEN          0x00080000UL
-#define GCCFG_NOVBUSSENS        0x00200000UL
-
-/* ---- DTXFSTS ---- */
-#define DTXFSTS_INEPTFSAV_MASK  0x0000FFFFUL
-
-/* ---- PCGCCTL (USB 0xE00) ---- */
-#define PCGCCTL_STPPCLK         0x00000001UL
-#define PCGCCTL_GATEHCLK        0x00000002UL
-#define _PCGCCTL                (*((volatile uint32_t *)(USB_OTG_FS_PERIPH_BASE + 0xE00)))
-
-/* ---- DIEPEMPMSK ---- */
-#define DIEPEMPMSK_INEPTXFEM(ep) (1UL << (ep))
+/* ---- End of Debug Counters ---- */
 
 /* ========================================================================== */
-/* DWC2 register access via CMSIS types                                       */
+/* stm32_otg_t — DWC2 register map (ORIGINAL hybrid layout for F767 stepping 2)
+ * Host registers at 0x400, channels at 0x500,
+ * Device registers at 0x800, IN endpoints at 0x900, OUT endpoints at 0xB00.
+ * DCFG writable at 0x800, read-only aliased at 0x400 (F767 stepping 2 quirk).
+ * DCTL writable at both 0x404 and 0x804.
+ * Host HCFG/HFIR/HFNUM/HPTXSTS writable at 0x400.
+ * See RM0410 §44.10 and experimental HW verification on F767 stepping 2.     */
 /* ========================================================================== */
 
-#define _OTG                    ((USB_OTG_GlobalTypeDef *)USB_OTG_FS_PERIPH_BASE)
-#define _DEV                    ((USB_OTG_DeviceTypeDef *)(USB_OTG_FS_PERIPH_BASE + 0x800))
-#define _IN_EP(n)               ((USB_OTG_INEndpointTypeDef *)(USB_OTG_FS_PERIPH_BASE + 0x900 + (n) * 0x20))
-#define _OUT_EP(n)              ((USB_OTG_OUTEndpointTypeDef *)(USB_OTG_FS_PERIPH_BASE + 0xB00 + (n) * 0x20))
-#define _FIFO(n)                (*((volatile uint32_t *)(USB_OTG_FS_PERIPH_BASE + 0x1000 + (n) * 4)))
+typedef struct {
+    volatile uint32_t HCCHAR;
+    volatile uint32_t resvd8;
+    volatile uint32_t HCINT;
+    volatile uint32_t HCINTMSK;
+    volatile uint32_t HCTSIZ;
+    volatile uint32_t resvd14;
+    volatile uint32_t resvd18;
+    volatile uint32_t resvd1c;
+} stm32_otg_host_chn_t;
+
+typedef struct {
+    volatile uint32_t DIEPCTL;
+    volatile uint32_t resvd4;
+    volatile uint32_t DIEPINT;
+    volatile uint32_t resvdC;
+    volatile uint32_t DIEPTSIZ;
+    volatile uint32_t resvd14;
+    volatile uint32_t DTXFSTS;
+    volatile uint32_t resvd1C;
+} stm32_otg_in_ep_t;
+
+typedef struct {
+    volatile uint32_t DOEPCTL;
+    volatile uint32_t resvd4;
+    volatile uint32_t DOEPINT;
+    volatile uint32_t resvdC;
+    volatile uint32_t DOEPTSIZ;
+    volatile uint32_t resvd14;
+    volatile uint32_t resvd18;
+    volatile uint32_t resvd1C;
+} stm32_otg_out_ep_t;
+
+typedef struct {
+    /* Global registers — offset 0x000 */
+    volatile uint32_t GOTGCTL;
+    volatile uint32_t GOTGINT;
+    volatile uint32_t GAHBCFG;
+    volatile uint32_t GUSBCFG;
+    volatile uint32_t GRSTCTL;
+    volatile uint32_t GINTSTS;
+    volatile uint32_t GINTMSK;
+    volatile uint32_t GRXSTSR;
+    volatile uint32_t GRXSTSP;
+    volatile uint32_t GRXFSIZ;
+    volatile uint32_t DIEPTXF0;
+    volatile uint32_t HNPTXSTS;
+    volatile uint32_t resvd30;
+    volatile uint32_t resvd34;
+    volatile uint32_t GCCFG;
+    volatile uint32_t CID;
+    volatile uint32_t resvd58[48];     /* 0x040 – 0x0FF */
+    volatile uint32_t HPTXFSIZ;        /* 0x100 */
+    volatile uint32_t DIEPTXF[15];     /* 0x104 – 0x13C */
+    volatile uint32_t resvd140[176];   /* 0x140 – 0x3FF */
+
+    /* Host-mode registers — offset 0x400 (HOST layout, original position) */
+    volatile uint32_t HCFG;            /* 0x400 */
+    volatile uint32_t HFIR;            /* 0x404 */
+    volatile uint32_t HFNUM;           /* 0x408 */
+    volatile uint32_t resvd40C;        /* 0x40C */
+    volatile uint32_t HPTXSTS;         /* 0x410 */
+    volatile uint32_t HAINT;           /* 0x414 */
+    volatile uint32_t HAINTMSK;        /* 0x418 */
+    volatile uint32_t resvd41C[9];     /* 0x41C – 0x43C */
+    volatile uint32_t HPRT;            /* 0x440 */
+    volatile uint32_t resvd444[47];    /* 0x444 – 0x4FC */
+    stm32_otg_host_chn_t hc[16];      /* 0x500 – 0x6FC */
+    volatile uint32_t resvd700[64];    /* 0x700 – 0x7FC */
+
+    /* Device-mode registers — offset 0x800 (DEVICE layout, original position) */
+    volatile uint32_t DCFG;            /* 0x800 */
+    volatile uint32_t DCTL;            /* 0x804 */
+    volatile uint32_t DSTS;            /* 0x808 */
+    volatile uint32_t resvd80C;        /* 0x80C */
+    volatile uint32_t DIEPMSK;         /* 0x810 */
+    volatile uint32_t DOEPMSK;         /* 0x814 */
+    volatile uint32_t DAINT;           /* 0x818 */
+    volatile uint32_t DAINTMSK;        /* 0x81C */
+    volatile uint32_t resvd820;        /* 0x820 */
+    volatile uint32_t resvd824;        /* 0x824 */
+    volatile uint32_t DVBUSDIS;        /* 0x828 */
+    volatile uint32_t DVBUSPULSE;      /* 0x82C */
+    volatile uint32_t resvd830;        /* 0x830 */
+    volatile uint32_t DIEPEMPMSK;      /* 0x834 */
+    volatile uint32_t resvd838;        /* 0x838 */
+    volatile uint32_t resvd83C;        /* 0x83C */
+    volatile uint32_t resvd840[16];    /* 0x840 – 0x87C */
+    volatile uint32_t resvd880[16];    /* 0x880 – 0x8BC */
+    volatile uint32_t resvd8C0[16];    /* 0x8C0 – 0x8FC */
+
+    /* IN endpoint registers — offset 0x900 (original position) */
+    stm32_otg_in_ep_t  ie[16];         /* 0x900 – 0xAFC (16 * 0x20) */
+
+    /* OUT endpoint registers — offset 0xB00 (original position)
+       NOTE: ie[8..15] and oe[0..7] overlap at 0xA00-0xAFF
+       (DWC2 hardware design — the struct address overlap is expected) */
+    stm32_otg_out_ep_t oe[16];         /* 0xB00 – 0xCFC (16 * 0x20) */
+    volatile uint32_t resvdD00[64];    /* 0xD00 – 0xDFC */
+
+    volatile uint32_t PCGCCTL;         /* 0xE00 */
+    volatile uint32_t resvdE04[127];   /* 0xE04 – 0xEFF */
+
+    /* FIFO access — 0x1000+ */
+    volatile uint32_t FIFO[16][1024];
+} stm32_otg_t;
 
 /* ========================================================================== */
-/* Constants                                                                  */
+/* Register bit definitions (ChibiOS stm32_otg.h, 1:1)                       */
 /* ========================================================================== */
 
-#define TRDT_VALUE_FS           5               /* Turn-around time for FS */
-#define RX_FIFO_SIZE_WORDS      128             /* 512 bytes / 4 */
-#define EP0_TX_FIFO_SIZE_WORDS  16              /* 64 bytes / 4 */
-#define EP1_TX_FIFO_SIZE_WORDS  16              /* 64 bytes / 4 */
+/* GOTGCTL */
+#define GOTGCTL_BSVLD           (1U << 19)
+#define GOTGCTL_ASVLD           (1U << 18)
+#define GOTGCTL_BVALOVAL        (1U << 7)
+#define GOTGCTL_BVALOEN         (1U << 6)
+
+/* GAHBCFG */
+#define GAHBCFG_PTXFELVL        (1U << 8)
+#define GAHBCFG_TXFELVL         (1U << 7)
+#define GAHBCFG_DMAEN           (1U << 5)
+#define GAHBCFG_GINTMSK         (1U << 0)
+
+/* GUSBCFG */
+#define GUSBCFG_CTXPKT          (1U << 31)
+#define GUSBCFG_FDMOD           (1U << 30)
+#define GUSBCFG_FHMOD           (1U << 29)
+#define GUSBCFG_TRDT_MASK       (15U << 10)
+#define GUSBCFG_TRDT(n)         ((n) << 10)
+#define GUSBCFG_HNPCAP          (1U << 9)
+#define GUSBCFG_SRPCAP          (1U << 8)
+#define GUSBCFG_PHYSEL          (1U << 6)
+
+/* GRSTCTL */
+#define GRSTCTL_AHBIDL          (1U << 31)
+#define GRSTCTL_TXFNUM_MASK     (31U << 6)
+#define GRSTCTL_TXFNUM(n)       ((n) << 6)
+#define GRSTCTL_TXFFLSH         (1U << 5)
+#define GRSTCTL_RXFFLSH         (1U << 4)
+#define GRSTCTL_FCRST           (1U << 2)
+#define GRSTCTL_HSRST           (1U << 1)
+#define GRSTCTL_CSRST           (1U << 0)
+
+/* GINTSTS / GINTMSK */
+#define GINTSTS_WKUPINT         (1U << 31)
+#define GINTSTS_SRQINT          (1U << 30)
+#define GINTSTS_DISCINT         (1U << 29)
+#define GINTSTS_CIDSCHG         (1U << 28)
+#define GINTSTS_PTXFE           (1U << 26)
+#define GINTSTS_HCINT           (1U << 25)
+#define GINTSTS_HPRTINT         (1U << 24)
+#define GINTSTS_IPXFR           (1U << 21)
+#define GINTSTS_IISOOXFR        (1U << 21)
+#define GINTSTS_IISOIXFR        (1U << 20)
+#define GINTSTS_OEPINT          (1U << 19)
+#define GINTSTS_IEPINT          (1U << 18)
+#define GINTSTS_EOPF            (1U << 15)
+#define GINTSTS_ISOODRP         (1U << 14)
+#define GINTSTS_ENUMDNE         (1U << 13)
+#define GINTSTS_USBRST          (1U << 12)
+#define GINTSTS_USBSUSP         (1U << 11)
+#define GINTSTS_ESUSP           (1U << 10)
+#define GINTSTS_GONAKEFF        (1U << 7)
+#define GINTSTS_GINAKEFF        (1U << 6)
+#define GINTSTS_NPTXFE          (1U << 5)
+#define GINTSTS_RXFLVL          (1U << 4)
+#define GINTSTS_SOF             (1U << 3)
+#define GINTSTS_OTGINT          (1U << 2)
+#define GINTSTS_MMIS            (1U << 1)
+#define GINTSTS_CMOD            (1U << 0)
+
+#define GINTMSK_WKUM            (1U << 31)
+#define GINTMSK_SRQM            (1U << 30)
+#define GINTMSK_DISCM           (1U << 29)
+#define GINTMSK_CIDSCHGM        (1U << 28)
+#define GINTMSK_PTXFEM          (1U << 26)
+#define GINTMSK_HCM             (1U << 25)
+#define GINTMSK_HPRTM           (1U << 24)
+#define GINTMSK_IPXFRM          (1U << 21)
+#define GINTMSK_IISOOXFRM       (1U << 21)
+#define GINTMSK_IISOIXFRM       (1U << 20)
+#define GINTMSK_OEPM            (1U << 19)
+#define GINTMSK_IEPM            (1U << 18)
+#define GINTMSK_EOPFM           (1U << 15)
+#define GINTMSK_ISOODRPM        (1U << 14)
+#define GINTMSK_ENUMDNEM        (1U << 13)
+#define GINTMSK_USBRSTM         (1U << 12)
+#define GINTMSK_USBSUSPM        (1U << 11)
+#define GINTMSK_ESUSPM          (1U << 10)
+#define GINTMSK_GONAKEFFM       (1U << 7)
+#define GINTMSK_GINAKEFFM       (1U << 6)
+#define GINTMSK_NPTXFEM         (1U << 5)
+#define GINTMSK_RXFLVLM         (1U << 4)
+#define GINTMSK_SOFM            (1U << 3)
+#define GINTMSK_OTGM            (1U << 2)
+#define GINTMSK_MMISM           (1U << 1)
+
+/* GRXSTSP / GRXSTSR */
+#define GRXSTSP_PKTSTS_MASK     (15U << 17)
+#define GRXSTSP_PKTSTS(n)       ((n) << 17)
+#define GRXSTSP_OUT_GLOBAL_NAK  GRXSTSP_PKTSTS(1)
+#define GRXSTSP_OUT_DATA        GRXSTSP_PKTSTS(2)
+#define GRXSTSP_OUT_COMP        GRXSTSP_PKTSTS(3)
+#define GRXSTSP_SETUP_COMP      GRXSTSP_PKTSTS(4)
+#define GRXSTSP_SETUP_DATA      GRXSTSP_PKTSTS(6)
+#define GRXSTSP_BCNT_MASK       (0x7FFU << 4)
+#define GRXSTSP_BCNT_OFF        4
+#define GRXSTSP_EPNUM_MASK      (15U << 0)
+#define GRXSTSP_EPNUM_OFF       0
+
+/* GCCFG */
+#define GCCFG_NOVBUSSENS        (1U << 21)
+#define GCCFG_SOFOUTEN          (1U << 20)
+#define GCCFG_VBUSBSEN          (1U << 19)
+#define GCCFG_VBUSASEN          (1U << 18)
+#define GCCFG_VBDEN             (1U << 21)
+#define GCCFG_PWRDWN            (1U << 16)
+
+/* DCFG */
+#define DCFG_PFIVL_MASK         (3U << 11)
+#define DCFG_PFIVL(n)           ((n) << 11)
+#define DCFG_DAD_MASK           (0x7FU << 4)
+#define DCFG_DAD(n)             ((n) << 4)
+#define DCFG_NZLSOHSK           (1U << 2)
+#define DCFG_DSPD_MASK          (3U << 0)
+#define DCFG_DSPD_HS            (0U << 0)
+#define DCFG_DSPD_HS_FS         (1U << 0)
+#define DCFG_DSPD_FS11          (3U << 0)
+
+/* DSTS */
+#define DSTS_FNSOF_MASK         (0x3FFU << 8)
+#define DSTS_FNSOF(n)           ((n) << 8)
+#define DSTS_FNSOF_ODD          (1U << 8)
+#define DSTS_EERR               (1U << 3)
+#define DSTS_ENUMSPD_MASK       (3U << 1)
+#define DSTS_ENUMSPD_FS_48      (3U << 1)
+#define DSTS_ENUMSPD_HS_480     (0U << 1)
+#define DSTS_SUSPSTS            (1U << 0)
+
+/* DCTL */
+#define DCTL_POPRGDNE           (1U << 11)
+#define DCTL_CGONAK             (1U << 10)
+#define DCTL_SGONAK             (1U << 9)
+#define DCTL_CGINAK             (1U << 8)
+#define DCTL_SGINAK             (1U << 7)
+#define DCTL_GONSTS             (1U << 3)
+#define DCTL_GINSTS             (1U << 2)
+#define DCTL_SDIS               (1U << 1)
+#define DCTL_RWUSIG             (1U << 0)
+
+/* DIEPMSK */
+#define DIEPMSK_TXFEM           (1U << 6)
+#define DIEPMSK_INEPNEM         (1U << 6)
+#define DIEPMSK_ITTXFEMSK       (1U << 4)
+#define DIEPMSK_TOCM            (1U << 3)
+#define DIEPMSK_EPDM            (1U << 1)
+#define DIEPMSK_XFRCM           (1U << 0)
+
+/* DOEPMSK */
+#define DOEPMSK_OTEPDM          (1U << 4)
+#define DOEPMSK_STUPM           (1U << 3)
+#define DOEPMSK_EPDM            (1U << 1)
+#define DOEPMSK_XFRCM           (1U << 0)
+
+/* DAINT / DAINTMSK */
+#define DAINT_OEPINT(n)         (1U << (16 + (n)))
+#define DAINT_IEPINT(n)         (1U << (n))
+#define DAINTMSK_OEPM(n)        (1U << (16 + (n)))
+#define DAINTMSK_IEPM(n)        (1U << (n))
+
+/* DIEPCTL / DOEPCTL */
+#define DIEPCTL_EPENA           (1U << 31)
+#define DIEPCTL_EPDIS           (1U << 30)
+#define DIEPCTL_SD1PID          (1U << 29)
+#define DIEPCTL_SODDFRM         (1U << 29)
+#define DIEPCTL_SD0PID          (1U << 28)
+#define DIEPCTL_SEVNFRM         (1U << 28)
+#define DIEPCTL_SNAK            (1U << 27)
+#define DIEPCTL_CNAK            (1U << 26)
+#define DIEPCTL_TXFNUM_MASK     (15U << 22)
+#define DIEPCTL_TXFNUM(n)       ((n) << 22)
+#define DIEPCTL_STALL           (1U << 21)
+#define DIEPCTL_SNPM            (1U << 20)
+#define DIEPCTL_EPTYP_MASK      (3U << 18)
+#define DIEPCTL_EPTYP_CTRL      (0U << 18)
+#define DIEPCTL_EPTYP_ISO       (1U << 18)
+#define DIEPCTL_EPTYP_BULK      (2U << 18)
+#define DIEPCTL_EPTYP_INTR      (3U << 18)
+#define DIEPCTL_NAKSTS          (1U << 17)
+#define DIEPCTL_EONUM           (1U << 16)
+#define DIEPCTL_DPID            (1U << 16)
+#define DIEPCTL_USBAEP          (1U << 15)
+#define DIEPCTL_MPSIZ_MASK      (0x3FFU << 0)
+#define DIEPCTL_MPSIZ(n)        ((n) << 0)
+
+/* DIEPINT */
+#define DIEPINT_TXFE            (1U << 7)
+#define DIEPINT_INEPNE          (1U << 6)
+#define DIEPINT_ITTXFE          (1U << 4)
+#define DIEPINT_TOC             (1U << 3)
+#define DIEPINT_EPDISD          (1U << 1)
+#define DIEPINT_XFRC            (1U << 0)
+
+/* DIEPTSIZ */
+#define DIEPTSIZ_MCNT_MASK      (3U << 29)
+#define DIEPTSIZ_MCNT(n)        ((n) << 29)
+#define DIEPTSIZ_PKTCNT_MASK    (0x3FFU << 19)
+#define DIEPTSIZ_PKTCNT(n)      ((n) << 19)
+#define DIEPTSIZ_XFRSIZ_MASK    (0x7FFFFU << 0)
+#define DIEPTSIZ_XFRSIZ(n)      ((n) << 0)
+
+/* DOEPCTL (same bits as DIEPCTL) */
+#define DOEPCTL_EPENA           DIEPCTL_EPENA
+#define DOEPCTL_EPDIS           DIEPCTL_EPDIS
+#define DOEPCTL_SD1PID          DIEPCTL_SD1PID
+#define DOEPCTL_SODDFRM         DIEPCTL_SODDFRM
+#define DOEPCTL_SD0PID          DIEPCTL_SD0PID
+#define DOEPCTL_SEVNFRM         DIEPCTL_SEVNFRM
+#define DOEPCTL_SNAK            DIEPCTL_SNAK
+#define DOEPCTL_CNAK            DIEPCTL_CNAK
+#define DOEPCTL_STALL           DIEPCTL_STALL
+#define DOEPCTL_SNPM            DIEPCTL_SNPM
+#define DOEPCTL_EPTYP_MASK      DIEPCTL_EPTYP_MASK
+#define DOEPCTL_EPTYP_CTRL      DIEPCTL_EPTYP_CTRL
+#define DOEPCTL_EPTYP_ISO       DIEPCTL_EPTYP_ISO
+#define DOEPCTL_EPTYP_BULK      DIEPCTL_EPTYP_BULK
+#define DOEPCTL_EPTYP_INTR      DIEPCTL_EPTYP_INTR
+#define DOEPCTL_NAKSTS          DIEPCTL_NAKSTS
+#define DOEPCTL_EONUM           DIEPCTL_EONUM
+#define DOEPCTL_DPID            DIEPCTL_DPID
+#define DOEPCTL_USBAEP          DIEPCTL_USBAEP
+#define DOEPCTL_MPSIZ_MASK      DIEPCTL_MPSIZ_MASK
+#define DOEPCTL_MPSIZ(n)        DIEPCTL_MPSIZ(n)
+
+/* DOEPINT */
+#define DOEPINT_SETUP_RCVD      (1U << 15)
+#define DOEPINT_B2BSTUP         (1U << 6)
+#define DOEPINT_OTEPDIS         (1U << 4)
+#define DOEPINT_STUP            (1U << 3)
+#define DOEPINT_EPDISD          (1U << 1)
+#define DOEPINT_XFRC            (1U << 0)
+
+/* DOEPTSIZ */
+#define DOEPTSIZ_RXDPID_MASK    (3U << 29)
+#define DOEPTSIZ_RXDPID(n)      ((n) << 29)
+#define DOEPTSIZ_STUPCNT_MASK   (3U << 29)
+#define DOEPTSIZ_STUPCNT(n)     ((n) << 29)
+#define DOEPTSIZ_PKTCNT_MASK    (0x3FFU << 19)
+#define DOEPTSIZ_PKTCNT(n)      ((n) << 19)
+#define DOEPTSIZ_XFRSIZ_MASK    (0x7FFFFU << 0)
+#define DOEPTSIZ_XFRSIZ(n)      ((n) << 0)
+
+/* DTXFSTS */
+#define DTXFSTS_INEPTFSAV_MASK  (0xFFFFU << 0)
+
+/* DIEPTXF */
+#define DIEPTXF_INEPTXFD_MASK   (0xFFFFU << 16)
+#define DIEPTXF_INEPTXFD(n)     ((n) << 16)
+#define DIEPTXF_INEPTXSA_MASK   (0xFFFFU << 0)
+#define DIEPTXF_INEPTXSA(n)     ((n) << 0)
+
+/* DIEPEMPMSK */
+#define DIEPEMPMSK_INEPTXFEM(n) (1U << (n))
+
+/* PCGCCTL */
+#define PCGCCTL_PHYSUSP         (1U << 4)
+#define PCGCCTL_GATEHCLK        (1U << 1)
+#define PCGCCTL_STPPCLK         (1U << 0)
+
+/* GRXFSIZ */
+#define GRXFSIZ_RXFD(n)         ((n) << 0)
+
+/* ========================================================================== */
+/* Driver local definitions                                                   */
+/* ========================================================================== */
+
+#define TRDT_VALUE_FS           5
+#define TRDT_VALUE_HS           9
+
+/* FIFO sizes in words (32-bit words, not bytes) */
+#define RX_FIFO_SIZE_WORDS      128     /* 512 bytes */
+#define EP0_TX_FIFO_SIZE_WORDS  16      /* 64 bytes */
+#define EP1_TX_FIFO_SIZE_WORDS  32      /* 128 bytes for CDC bulk IN */
+#define EP3_TX_FIFO_SIZE_WORDS  4       /* 16 bytes for CDC notification */
+
+/* Maximum packet sizes */
 #define EP0_MAX_PACKET          64
 #define EP1_MAX_PACKET          64
 #define EP2_MAX_PACKET          64
-#define SEND_TIMEOUT            50000           /* Poll loop timeout */
-#define OTG_FIFO_MEM_SIZE       320             /* OTG1 FS FIFO size in words */
 
-/* USB standard request codes */
-#define USB_REQ_GET_STATUS          0x00
-#define USB_REQ_CLEAR_FEATURE       0x01
-#define USB_REQ_SET_FEATURE         0x03
-#define USB_REQ_SET_ADDRESS         0x05
-#define USB_REQ_GET_DESCRIPTOR      0x06
-#define USB_REQ_SET_DESCRIPTOR      0x07
-#define USB_REQ_GET_CONFIGURATION   0x08
-#define USB_REQ_SET_CONFIGURATION   0x09
-#define USB_REQ_GET_INTERFACE       0x0A
-#define USB_REQ_SET_INTERFACE       0x0B
+#define OTG_FIFO_MEM_SIZE       320     /* OTG1 FS FIFO RAM in words */
+#define NUM_ENDPOINTS           4       /* EP0..EP3 */
+#define OTG_FS_BASE             0x50000000UL  /* STM32F7 OTG_FS base */
 
-/* Descriptor types */
-#define USB_DTYPE_DEVICE            1
-#define USB_DTYPE_CONFIG            2
-#define USB_DTYPE_STRING            3
-#define USB_DTYPE_INTERFACE         4
-#define USB_DTYPE_ENDPOINT          5
-#define USB_DTYPE_DEVICE_QUALIFIER  6
-#define USB_DTYPE_OTHER_SPEED       7
-#define USB_DTYPE_IAD               0x0B   /* Interface Association Descriptor */
+/* STM32F767 is OTG stepping 2 */
+#define STM32_OTG_STEPPING      2
 
-/* CDC class codes */
-#define CDC_COMM_INTFACE            2
-#define CDC_DATA_INTFACE            0x0A
-#define CDC_SCS_HEADER              0x00
-#define CDC_SCS_CALL_MGMT           0x01
-#define CDC_SCS_ACM                 0x02
-#define CDC_SCS_UNION               0x06
+/* GCCFG init value for stepping 2 with internal VBUS sensing */
+#define GCCFG_INIT_VALUE        (GCCFG_VBDEN | GCCFG_PWRDWN)
 
-/* CDC ACM class requests (PSTN subclass) */
-#define CDC_GET_LINE_CODING           0x21U
-#define CDC_SET_LINE_CODING           0x20U
-#define CDC_SET_CONTROL_LINE_STATE    0x22U
-
-/* EP0 state machine */
-#define EP0_STATE_IDLE              0
-#define EP0_STATE_DATA_IN           1   /* Sending data to host */
-#define EP0_STATE_DATA_OUT          2   /* Receiving data from host */
-#define EP0_STATE_STATUS_IN         3   /* Zero-length status IN */
-#define EP0_STATE_STATUS_OUT        4   /* Zero-length status OUT */
-#define EP0_STATE_STALL             5   /* Stalled */
+/* OSAL substitutes */
+#define osalSysPolledDelayX(n)  do { volatile uint32_t _d = (n); while (_d--) { __NOP(); } } while (0)
 
 /* ========================================================================== */
-/* USB Descriptors (CDC ACM, IAD)                                             */
+/* Peripheral-specific parameters block                                       */
 /* ========================================================================== */
 
-/*
- * Device descriptor: CDC ACM, vid=0x1209, pid=0x5741
- */
+typedef struct {
+    uint32_t rx_fifo_size;
+    uint32_t otg_ram_size;
+    uint32_t num_endpoints;
+} stm32_otg_params_t;
+
+static const stm32_otg_params_t fs_params = {
+    RX_FIFO_SIZE_WORDS,
+    OTG_FIFO_MEM_SIZE,
+    NUM_ENDPOINTS
+};
+
+/* ========================================================================== */
+/* EP0 static state structures (ChibiOS pattern)                              */
+/* ========================================================================== */
+
+/* EP0 uses both IN and OUT states (union — never used simultaneously) */
+static union {
+    USBInEndpointState  in;
+    USBOutEndpointState out;
+} ep0_state;
+
+/* EP0 setup buffer (8 bytes for one SETUP packet) */
+static uint8_t ep0setup_buffer[8];
+
+/* Forward declarations of EP0 callback functions */
+static void _usb_ep0setup(void *usbp, usbep_t ep);
+static void _usb_ep0in(void *usbp, usbep_t ep);
+static void _usb_ep0out(void *usbp, usbep_t ep);
+static bool default_handler(void *usbp);
+static void _usb_reset(void *usbp);
+static void _usb_suspend(void *usbp);
+static void _usb_wakeup(void *usbp);
+
+/* EP0 endpoint configuration */
+static RT_USBEndpointConfig ep0config;
+
+/* Initialize ep0 config at runtime (C++ can't use static addresses in designated initializers) */
+static void ep0config_init(void)
+{
+    ep0config.ep_mode       = USB_EP_MODE_TYPE_CTRL;
+    ep0config.setup_cb      = _usb_ep0setup;
+    ep0config.in_cb         = _usb_ep0in;
+    ep0config.out_cb        = _usb_ep0out;
+    ep0config.in_maxsize    = EP0_MAX_PACKET;
+    ep0config.out_maxsize   = EP0_MAX_PACKET;
+    ep0config.in_state      = &ep0_state.in;
+    ep0config.out_state     = &ep0_state.out;
+    ep0config.in_multiplier = 1;
+    ep0config.setup_buf     = ep0setup_buffer;
+}
+
+/* ========================================================================== */
+/* USB descriptors (CDC ACM with IAD) — fallback if no get_descriptor_cb      */
+/* ========================================================================== */
+/* ========================================================================== */
+
 static const uint8_t usb_dev_desc[] = {
     18,                    /* bLength */
-    USB_DTYPE_DEVICE,      /* bDescriptorType */
+    1,                     /* bDescriptorType = DEVICE */
     0x00, 0x02,            /* bcdUSB = 2.00 */
-    0x02,                  /* bDeviceClass: CDC (Communications Device Class) */
-    0x00,                  /* bDeviceSubClass */
-    0x00,                  /* bDeviceProtocol */
+    0xEF,                  /* bDeviceClass: Misc (IAD) */
+    0x02,                  /* bDeviceSubClass: Common */
+    0x01,                  /* bDeviceProtocol: IAD */
     EP0_MAX_PACKET,        /* bMaxPacketSize0 */
     0x09, 0x12,            /* idVendor = 0x1209 */
     0x41, 0x57,            /* idProduct = 0x5741 */
@@ -305,270 +528,234 @@ static const uint8_t usb_dev_desc[] = {
     0x01                   /* bNumConfigurations */
 };
 
-/*
- * Configuration descriptor with CDC ACM IAD:
- *   IAD + CDC Communication Interface (EP3 IN interrupt for notification)
- *   + CDC Data Interface (EP1 IN bulk, EP2 OUT bulk)
- */
 static const uint8_t usb_cfg_desc[] = {
-    /* ---- Configuration descriptor ---- */
+    /* Configuration descriptor */
     9,                     /* bLength */
-    USB_DTYPE_CONFIG,      /* bDescriptorType */
-    0x43, 0x00,            /* wTotalLength = 67 */
+    2,                     /* bDescriptorType = CONFIGURATION */
+    0x4B, 0x00,            /* wTotalLength = 75 */
     2,                     /* bNumInterfaces */
     1,                     /* bConfigurationValue */
     0,                     /* iConfiguration */
     0xC0,                  /* bmAttributes: Self-powered */
     50,                    /* bMaxPower = 100mA */
 
-    /* ---- IAD (Interface Association Descriptor) ---- */
+    /* IAD */
     8,                     /* bLength */
-    USB_DTYPE_IAD,         /* bDescriptorType */
+    0x0B,                  /* bDescriptorType = IAD */
     0,                     /* bFirstInterface */
     2,                     /* bInterfaceCount */
-    CDC_COMM_INTFACE,      /* bFunctionClass */
-    2,                     /* bFunctionSubClass: Abstract Control Model */
-    1,                     /* bFunctionProtocol: AT-commands (v.250 etc.) */
+    2,                     /* bFunctionClass = CDC Comm */
+    2,                     /* bFunctionSubClass = ACM */
+    1,                     /* bFunctionProtocol = AT */
     0,                     /* iFunction */
 
-    /* ---- Interface 0: CDC Communication Interface ---- */
-    9,                     /* bLength */
-    USB_DTYPE_INTERFACE,   /* bDescriptorType */
-    0,                     /* bInterfaceNumber */
-    0,                     /* bAlternateSetting */
+    /* Interface 0: CDC Communication */
+    9, 4,                  /* bLength, bDescriptorType = INTERFACE */
+    0, 0,                  /* bInterfaceNumber, bAlternateSetting */
     1,                     /* bNumEndpoints */
-    CDC_COMM_INTFACE,      /* bInterfaceClass: Communications */
-    2,                     /* bInterfaceSubClass: Abstract Control Model */
-    1,                     /* bInterfaceProtocol: AT-commands */
+    2, 2, 1,               /* bInterfaceClass/SubClass/Protocol */
     0,                     /* iInterface */
 
-    /* CDC Header Functional Descriptor */
-    5,                     /* bFunctionLength */
-    0x24,                  /* bDescriptorType: CS_INTERFACE */
-    CDC_SCS_HEADER,        /* bDescriptorSubtype */
+    /* CDC Header FD */
+    5, 0x24, 0x00,         /* bLength, CS_INTERFACE, HEADER */
     0x10, 0x01,            /* bcdCDC = 1.10 */
 
-    /* CDC Call Management Functional Descriptor */
-    5,                     /* bFunctionLength */
-    0x24,                  /* bDescriptorType: CS_INTERFACE */
-    CDC_SCS_CALL_MGMT,     /* bDescriptorSubtype */
-    0x01,                  /* bmCapabilities: Device handles call management */
+    /* CDC Call Management FD */
+    5, 0x24, 0x01,         /* bLength, CS_INTERFACE, CALL_MGMT */
+    0x01,                  /* bmCapabilities */
     1,                     /* bDataInterface */
 
-    /* CDC ACM Functional Descriptor */
-    4,                     /* bFunctionLength */
-    0x24,                  /* bDescriptorType: CS_INTERFACE */
-    CDC_SCS_ACM,           /* bDescriptorSubtype */
-    0x02,                  /* bmCapabilities: Device supports line coding + serial state */
+    /* CDC ACM FD */
+    4, 0x24, 0x02,         /* bLength, CS_INTERFACE, ACM */
+    0x02,                  /* bmCapabilities */
 
-    /* CDC Union Functional Descriptor */
-    5,                     /* bFunctionLength */
-    0x24,                  /* bDescriptorType: CS_INTERFACE */
-    CDC_SCS_UNION,         /* bDescriptorSubtype */
-    0,                     /* bMasterInterface (CDC Comm) */
-    1,                     /* bSlaveInterface0 (CDC Data) */
+    /* CDC Union FD */
+    5, 0x24, 0x06,         /* bLength, CS_INTERFACE, UNION */
+    0,                     /* bMasterInterface */
+    1,                     /* bSlaveInterface */
 
-    /* EP3 IN: Interrupt (CDC notification endpoint) */
-    7,                     /* bLength */
-    USB_DTYPE_ENDPOINT,    /* bDescriptorType */
+    /* EP3 IN: Interrupt (CDC notification) */
+    7, 5,                  /* bLength, bDescriptorType = ENDPOINT */
     0x83,                  /* bEndpointAddress: IN EP3 */
     0x03,                  /* bmAttributes: Interrupt */
     0x08, 0x00,            /* wMaxPacketSize = 8 */
     0x10,                  /* bInterval = 16ms */
 
-    /* ---- Interface 1: CDC Data Interface ---- */
-    9,                     /* bLength */
-    USB_DTYPE_INTERFACE,   /* bDescriptorType */
-    1,                     /* bInterfaceNumber */
-    0,                     /* bAlternateSetting */
+    /* Interface 1: CDC Data */
+    9, 4,
+    1, 0,                  /* bInterfaceNumber, bAlternateSetting */
     2,                     /* bNumEndpoints */
-    CDC_DATA_INTFACE,      /* bInterfaceClass: CDC Data */
-    0x00,                  /* bInterfaceSubClass */
-    0x00,                  /* bInterfaceProtocol */
+    0x0A, 0x00, 0x00,      /* bInterfaceClass/SubClass/Protocol = CDC Data */
     0,                     /* iInterface */
 
     /* EP1 IN: Bulk (CDC data device→host) */
-    7,                     /* bLength */
-    USB_DTYPE_ENDPOINT,    /* bDescriptorType */
+    7, 5,
     0x81,                  /* bEndpointAddress: IN EP1 */
     0x02,                  /* bmAttributes: Bulk */
     EP1_MAX_PACKET, 0x00,  /* wMaxPacketSize = 64 */
-    0x00,                  /* bInterval (ignored for bulk) */
+    0x00,                  /* bInterval */
 
     /* EP2 OUT: Bulk (CDC data host→device) */
-    7,                     /* bLength */
-    USB_DTYPE_ENDPOINT,    /* bDescriptorType */
+    7, 5,
     0x02,                  /* bEndpointAddress: OUT EP2 */
     0x02,                  /* bmAttributes: Bulk */
     EP2_MAX_PACKET, 0x00,  /* wMaxPacketSize = 64 */
-    0x00,                  /* bInterval (ignored for bulk) */
+    0x00,                  /* bInterval */
 };
 
-/*
- * String descriptors
- */
+/* String descriptors */
 static const uint8_t usb_str_lang[] = {
-    4,                     /* bLength */
-    USB_DTYPE_STRING,      /* bDescriptorType */
-    0x09, 0x04,            /* wLANGID[0] = 0x0409 (English US) */
+    4, 3,                  /* bLength, STRING */
+    0x09, 0x04,            /* wLANGID = 0x0409 (English US) */
 };
 
 static const uint8_t usb_str_manufacturer[] = {
-    8,                     /* bLength = 2 + 2 * (num chars) */
-    USB_DTYPE_STRING,      /* bDescriptorType */
-    'A', 0,
-    'P', 0,
-    'M', 0,
+    8, 3,                  /* bLength, STRING */
+    'A', 0, 'P', 0, 'M', 0,
 };
 
 static const uint8_t usb_str_product[] = {
-    28,                    /* bLength = 2 + 2 * 13 */
-    USB_DTYPE_STRING,      /* bDescriptorType */
-    'C', 0,
-    'U', 0,
-    'A', 0,
-    'V', 0,
-    ' ', 0,
-    'V', 0,
-    '5', 0,
-    ' ', 0,
-    'C', 0,
-    'D', 0,
-    'C', 0,
-    ' ', 0,
-    '1', 0,
+    28, 3,                 /* bLength = 2 + 2*13, STRING */
+    'C', 0, 'U', 0, 'A', 0, 'V', 0, ' ', 0,
+    'V', 0, '5', 0, ' ', 0,
+    'C', 0, 'D', 0, 'C', 0, ' ', 0, '1', 0,
 };
 
 static const uint8_t usb_str_serial[] = {
-    12,                    /* bLength = 2 + 2 * 5 */
-    USB_DTYPE_STRING,      /* bDescriptorType */
-    '0', 0,
-    '0', 0,
-    '0', 0,
-    '0', 0,
-    '1', 0,
+    12, 3,                 /* bLength = 2 + 2*5, STRING */
+    '0', 0, '0', 0, '0', 0, '0', 0, '1', 0,
 };
 
 /* ========================================================================== */
-/* Internal state                                                             */
+/* Global driver instance                                                     */
 /* ========================================================================== */
 
-/* EP0 control transfer state */
-static struct {
-    uint8_t  setup[8];         /* Current setup packet */
-    uint8_t  ep0state;         /* EP0_STATE_* */
-    const uint8_t *data_ptr;   /* Pointer to data for EP0 IN transfer */
-    uint32_t data_len;         /* Total bytes to send/receive */
-    uint32_t data_sent;        /* Bytes already sent in current transaction */
-    uint32_t pkt_pending;      /* IN packets remaining */
-    bool     zlp;              /* Need zero-length status IN? */
-    uint8_t  stall_ep;         /* Which endpoint to stall */
-    uint32_t ctrl_remaining;   /* Data stage remaining for multi-packet */
-} _ep0;
+RT_USBDriver rtt_usb;
+static bool _usb_driver_inited = false;
 
-/* CDC Serial State notification (for serial state changes via EP3 IN) */
-static struct {
-    volatile uint32_t serial_state; /* CDC SERIAL_STATE_* bits */
-} _cdc;
-
-/* Default 57600 8N1 — matches SERIAL0_BAUD on CUAV V5 */
-static uint8_t _cdc_line_coding[7] = {
-    0x00, 0xE1, 0x00, 0x00,  /* dwDTERate = 57600 */
-    0,                       /* bCharFormat = 1 stop bit */
-    0,                       /* bParityType = none */
-    8                        /* bDataBits = 8 */
-};
-
-/* User callbacks */
-static usb_rx_callback_t _rx_cb = NULL;
-static void *_rx_cb_arg = NULL;
-
-/* DWC2 core state */
-static struct {
-    volatile bool initialized;
-    volatile bool enumerated;
-    volatile bool configured;
-    volatile uint8_t device_addr;
-    /* FIFO RAM allocator */
-    uint32_t pmnext;
-} _usb;
+static void _usb_set_address_after_status(void *usbp);
 
 /* ========================================================================== */
-/* Forward declarations                                                       */
+/* Forward declarations of internal functions                                  */
 /* ========================================================================== */
 
-static void _otg_core_reset(void);
-static void _otg_txfifo_flush(uint32_t fifo_num);
-static void _otg_rxfifo_flush(void);
-static void _otg_disable_endpoints(void);
-static void _otg_ram_reset(void);
-static uint32_t _otg_ram_alloc(uint32_t size_words);
-/* DEBUG: USB init entry/progress tracing */
-volatile uint32_t rtt_dbg_usb_init = 0;
-
-static void _otg_fifo_write(volatile uint32_t *fifop, const uint8_t *buf, size_t n);
-static void _otg_fifo_read(volatile uint32_t *fifop, uint8_t *buf, size_t n);
-static void _usb_reset(void);
-static void _ep0_handle_setup(void);
-static int _ep0_handle_std_request(void);
-static int _ep0_handle_class_request(void);
-static void _ep0_send_data(const uint8_t *data, uint32_t len);
-static void _ep0_send_status(void);
-static void _ep0_stall(void);
-static void _ep0_out_term(bool success);
-static void _ep0_in_term(bool success);
-static void _ep0_setup_term(void);
+static void otg_core_reset(RT_USBDriver *usbp);
+static void otg_disable_ep(RT_USBDriver *usbp);
+static void otg_rxfifo_flush(RT_USBDriver *usbp);
+static void otg_txfifo_flush(RT_USBDriver *usbp, uint32_t fifo);
+static void otg_ram_reset(RT_USBDriver *usbp);
+static uint32_t otg_ram_alloc(RT_USBDriver *usbp, size_t size);
+static void otg_fifo_write_from_buffer(volatile uint32_t *fifop,
+                                        const uint8_t *buf, size_t n);
+static void otg_fifo_read_to_buffer(volatile uint32_t *fifop,
+                                     uint8_t *buf, size_t n, size_t max);
+static void otg_rxfifo_handler(RT_USBDriver *usbp);
+static bool otg_txfifo_handler(RT_USBDriver *usbp, usbep_t ep);
+static void otg_epin_handler(RT_USBDriver *usbp, usbep_t ep);
+static void otg_epout_handler(RT_USBDriver *usbp, usbep_t ep);
+static void otg_isoc_in_failed_handler(RT_USBDriver *usbp);
+static void otg_isoc_out_failed_handler(RT_USBDriver *usbp);
 
 /* ========================================================================== */
-/* Internal: FIFO RAM allocator                                               */
+/* Internal helper functions (1:1 from ChibiOS hal_usb_lld.c)                 */
 /* ========================================================================== */
 
-static void _otg_ram_reset(void)
+static void otg_core_reset(RT_USBDriver *usbp)
 {
-    _usb.pmnext = RX_FIFO_SIZE_WORDS;
+    stm32_otg_t *otgp = (stm32_otg_t *)usbp->otg;
+
+    /* Wait AHB idle. */
+    while ((otgp->GRSTCTL & GRSTCTL_AHBIDL) == 0)
+        ;
+
+    /* Core reset and delay of at least 3 PHY cycles. */
+    otgp->GRSTCTL = GRSTCTL_CSRST;
+    osalSysPolledDelayX(12);
+    while ((otgp->GRSTCTL & GRSTCTL_CSRST) != 0)
+        ;
+
+    osalSysPolledDelayX(18);
+
+    /* Wait AHB idle again. */
+    while ((otgp->GRSTCTL & GRSTCTL_AHBIDL) == 0)
+        ;
 }
 
-static uint32_t _otg_ram_alloc(uint32_t size_words)
+static void otg_disable_ep(RT_USBDriver *usbp)
 {
-    uint32_t addr = _usb.pmnext;
-    _usb.pmnext += size_words;
-    if (_usb.pmnext > OTG_FIFO_MEM_SIZE) {
-        _usb.pmnext = OTG_FIFO_MEM_SIZE;
+    stm32_otg_t *otgp = (stm32_otg_t *)usbp->otg;
+    const stm32_otg_params_t *par = (const stm32_otg_params_t *)usbp->otgparams;
+    unsigned i;
+
+    for (i = 0; i <= par->num_endpoints; i++) {
+        if ((otgp->ie[i].DIEPCTL & DIEPCTL_EPENA) != 0U)
+            otgp->ie[i].DIEPCTL |= DIEPCTL_EPDIS;
+        if ((otgp->oe[i].DOEPCTL & DIEPCTL_EPENA) != 0U)
+            otgp->oe[i].DOEPCTL |= DIEPCTL_EPDIS;
+        otgp->ie[i].DIEPINT = 0xFFFFFFFF;
+        otgp->oe[i].DOEPINT = 0xFFFFFFFF;
     }
-    return addr;
+    otgp->DAINTMSK = DAINTMSK_OEPM(0) | DAINTMSK_IEPM(0);
 }
 
-/* ========================================================================== */
-/* Internal: FIFO operations                                                  */
-/* ========================================================================== */
-
-static void _otg_fifo_write(volatile uint32_t *fifop,
-                            const uint8_t *buf, size_t n)
+static void otg_rxfifo_flush(RT_USBDriver *usbp)
 {
-    if (n == 0) return;
-    while (n > 4) {
-        uint32_t w;
-        memcpy(&w, buf, 4);
-        *fifop = w;
+    stm32_otg_t *otgp = (stm32_otg_t *)usbp->otg;
+
+    otgp->GRSTCTL = GRSTCTL_RXFFLSH;
+    while ((otgp->GRSTCTL & GRSTCTL_RXFFLSH) != 0)
+        ;
+    osalSysPolledDelayX(18);
+}
+
+static void otg_txfifo_flush(RT_USBDriver *usbp, uint32_t fifo)
+{
+    stm32_otg_t *otgp = (stm32_otg_t *)usbp->otg;
+
+    otgp->GRSTCTL = GRSTCTL_TXFNUM(fifo) | GRSTCTL_TXFFLSH;
+    while ((otgp->GRSTCTL & GRSTCTL_TXFFLSH) != 0)
+        ;
+    osalSysPolledDelayX(18);
+}
+
+static void otg_ram_reset(RT_USBDriver *usbp)
+{
+    usbp->pmnext = ((const stm32_otg_params_t *)usbp->otgparams)->rx_fifo_size;
+}
+
+static uint32_t otg_ram_alloc(RT_USBDriver *usbp, size_t size)
+{
+    uint32_t next;
+    next = usbp->pmnext;
+    usbp->pmnext += size;
+    RT_ASSERT(usbp->pmnext <= ((const stm32_otg_params_t *)usbp->otgparams)->otg_ram_size);
+    return next;
+}
+
+static void otg_fifo_write_from_buffer(volatile uint32_t *fifop,
+                                        const uint8_t *buf, size_t n)
+{
+    RT_ASSERT(n > 0);
+
+    while (true) {
+        *fifop = *((const uint32_t *)buf);
+        if (n <= 4)
+            break;
         n -= 4;
         buf += 4;
     }
-    if (n > 0) {
-        uint32_t w = 0;
-        memcpy(&w, buf, n);
-        *fifop = w;
-    }
 }
 
-static void _otg_fifo_read(volatile uint32_t *fifop, uint8_t *buf, size_t n)
+static void otg_fifo_read_to_buffer(volatile uint32_t *fifop,
+                                     uint8_t *buf, size_t n, size_t max)
 {
-    size_t i = 0;
     uint32_t w = 0;
+    size_t i = 0;
+
     while (i < n) {
-        if ((i & 3) == 0) {
+        if ((i & 3) == 0)
             w = *fifop;
-        }
-        if (buf && i < n) {
+        if (i < max) {
             *buf++ = (uint8_t)w;
             w >>= 8;
         }
@@ -577,1013 +764,1559 @@ static void _otg_fifo_read(volatile uint32_t *fifop, uint8_t *buf, size_t n)
 }
 
 /* ========================================================================== */
-/* Internal: Core reset (ChibiOS: otg_core_reset)                             */
+/* TX FIFO handler (ChibiOS 1:1)                                              */
 /* ========================================================================== */
 
-static void _otg_core_reset(void)
+static bool otg_txfifo_handler(RT_USBDriver *usbp, usbep_t ep)
 {
-    uint32_t timeout = 100000;
-    while ((_OTG->GRSTCTL & GRSTCTL_AHBIDL) == 0) {
-        if (--timeout == 0) break;
-        __NOP();
+    stm32_otg_t *otgp = (stm32_otg_t *)usbp->otg;
+    USBInEndpointState *isp = (USBInEndpointState *)usbp->epc[ep]->in_state;
+
+    while (true) {
+        uint32_t n;
+
+        if (isp->txcnt >= isp->txsize) {
+            otgp->DIEPEMPMSK &= ~DIEPEMPMSK_INEPTXFEM(ep);
+            return true;
+        }
+
+        n = isp->txsize - isp->txcnt;
+        if (n > usbp->epc[ep]->in_maxsize)
+            n = usbp->epc[ep]->in_maxsize;
+
+        if (((otgp->ie[ep].DTXFSTS & DTXFSTS_INEPTFSAV_MASK) * 4) < n)
+            return false;
+
+#if 0 /* STM32_USB_OTGFIFO_FILL_BASEPRI — disabled by default (value 0) */
+        __set_BASEPRI(STM32_USB_OTGFIFO_FILL_BASEPRI);
+#endif
+        otg_fifo_write_from_buffer(otgp->FIFO[ep], isp->txbuf, n);
+        isp->txbuf += n;
+        isp->txcnt += n;
+#if 0
+        __set_BASEPRI(0);
+#endif
     }
-    _OTG->GRSTCTL = GRSTCTL_CSRST;
-    (void)_OTG->GRSTCTL;
-    { volatile uint32_t _d = 20; while (_d--) { __NOP(); } }
-    timeout = 100000;
-    while ((_OTG->GRSTCTL & GRSTCTL_CSRST) != 0) {
-        if (--timeout == 0) break;
-        __NOP();
-    }
-    { volatile uint32_t _d = 20; while (_d--) { __NOP(); } }
-    while ((_OTG->GRSTCTL & GRSTCTL_AHBIDL) != 0) {}
 }
 
 /* ========================================================================== */
-/* Internal: FIFO flush                                                       */
+/* RX FIFO handler (ChibiOS 1:1)                                              */
 /* ========================================================================== */
 
-static void _otg_txfifo_flush(uint32_t fifo_num)
+static void otg_rxfifo_handler(RT_USBDriver *usbp)
 {
-    _OTG->GRSTCTL = GRSTCTL_TXFNUM(fifo_num) | GRSTCTL_TXFFLSH;
-    while ((_OTG->GRSTCTL & GRSTCTL_TXFFLSH) != 0) {}
-    { volatile uint32_t _d = 20; while (_d--) { __NOP(); } }
-}
+    stm32_otg_t *otgp = (stm32_otg_t *)usbp->otg;
+    uint32_t sts, cnt, ep;
 
-static void _otg_rxfifo_flush(void)
-{
-    _OTG->GRSTCTL = GRSTCTL_RXFFLSH;
-    while ((_OTG->GRSTCTL & GRSTCTL_RXFFLSH) != 0) {}
-    { volatile uint32_t _d = 20; while (_d--) { __NOP(); } }
-}
+    sts = otgp->GRXSTSP;
 
-/* ========================================================================== */
-/* Internal: Disable all endpoints                                            */
-/* ========================================================================== */
+    cnt = (sts & GRXSTSP_BCNT_MASK) >> GRXSTSP_BCNT_OFF;
+    ep  = (sts & GRXSTSP_EPNUM_MASK) >> GRXSTSP_EPNUM_OFF;
 
-static void _otg_disable_endpoints(void)
-{
-    unsigned i;
-    for (i = 0; i <= 4; i++) {
-        if ((_IN_EP(i)->DIEPCTL & DIEPCTL_EPENA) != 0) {
-            _IN_EP(i)->DIEPCTL |= DIEPCTL_EPDIS;
-        }
-        if ((_OUT_EP(i)->DOEPCTL & DIEPCTL_EPENA) != 0) {
-            _OUT_EP(i)->DOEPCTL |= DIEPCTL_EPDIS;
-        }
-        _IN_EP(i)->DIEPINT = 0xFFFFFFFFU;
-        _OUT_EP(i)->DOEPINT = 0xFFFFFFFFU;
-    }
-    _DEV->DAINTMSK = DAINTMSK_OEPM(0) | DAINTMSK_IEPM(0);
-}
+    switch (sts & GRXSTSP_PKTSTS_MASK) {
+    case GRXSTSP_SETUP_DATA:
+        otg_fifo_read_to_buffer(otgp->FIFO[0],
+                                usbp->epc[ep]->setup_buf, cnt, 8);
+        break;
 
-/* ========================================================================== */
-/* Internal: Reset state after USB bus reset                                  */
-/* ========================================================================== */
+    case GRXSTSP_SETUP_COMP:
+        break;
 
-static void _usb_reset(void)
-{
-    _otg_txfifo_flush(0);
-    _DEV->DIEPEMPMSK = 0;
-    _DEV->DAINTMSK = DAINTMSK_OEPM(0) | DAINTMSK_IEPM(0);
-
-    for (unsigned i = 0; i <= 4; i++) {
-        _IN_EP(i)->DIEPCTL = DIEPCTL_SNAK;
-        _OUT_EP(i)->DOEPCTL = DIEPCTL_SNAK;
-        _IN_EP(i)->DIEPINT = 0xFFFFFFFFU;
-        _OUT_EP(i)->DOEPINT = 0xFFFFFFFFU;
-    }
-
-    _otg_ram_reset();
-
-    _OTG->GRXFSIZ = RX_FIFO_SIZE_WORDS;
-    _otg_rxfifo_flush();
-
-    _DEV->DCFG = (_DEV->DCFG & ~DCFG_DAD_MASK) | DCFG_DAD(0);
-
-    _OTG->GINTMSK |= GINTMSK_RXFLVLM | GINTMSK_OEPM | GINTMSK_IEPM;
-    _DEV->DIEPMSK = DIEPMSK_XFRCM | DIEPMSK_TOM;
-    _DEV->DOEPMSK = DOEPMSK_STUPM | DOEPMSK_XFRCM;
-
-    /* ---- EP0 initialization ---- */
-    _OUT_EP(0)->DOEPTSIZ = DOEPTSIZ_STUPCNT(3);
-    _OUT_EP(0)->DOEPCTL = DIEPCTL_SD0PID | DIEPCTL_USBAEP |
-                          DIEPCTL_EPTYP_CTRL | DIEPCTL_MPSIZ(EP0_MAX_PACKET);
-    __DSB();
-
-    _IN_EP(0)->DIEPTSIZ = 0;
-    _IN_EP(0)->DIEPCTL = DIEPCTL_SD0PID | DIEPCTL_USBAEP |
-                         DIEPCTL_EPTYP_CTRL |
-                         DIEPCTL_TXFNUM(0) | DIEPCTL_MPSIZ(EP0_MAX_PACKET);
-    __DSB();
-
-    /* EP0 TX FIFO */
-    _OTG->DIEPTXF0_HNPTXFSIZ =
-        DIEPTXF_INEPTXFD(EP0_TX_FIFO_SIZE_WORDS) |
-        DIEPTXF_INEPTXSA(_otg_ram_alloc(EP0_TX_FIFO_SIZE_WORDS));
-    __DSB();
-
-    /* EP1 TX FIFO (for CDC data IN) */
-    _OTG->DIEPTXF[0] =
-        DIEPTXF_INEPTXFD(EP1_TX_FIFO_SIZE_WORDS) |
-        DIEPTXF_INEPTXSA(_otg_ram_alloc(EP1_TX_FIFO_SIZE_WORDS));
-    _otg_txfifo_flush(1);
-
-    /* EP1: bulk IN endpoint (CDC data device→host) */
-    _IN_EP(1)->DIEPTSIZ = 0;
-    _IN_EP(1)->DIEPCTL = DIEPCTL_SD0PID | DIEPCTL_USBAEP |
-                         DIEPCTL_EPTYP_BULK |
-                         DIEPCTL_TXFNUM(1) | DIEPCTL_MPSIZ(EP1_MAX_PACKET);
-    _DEV->DAINTMSK |= DAINTMSK_IEPM(1);
-    __DSB();
-
-    /* EP2: bulk OUT endpoint (CDC data host→device) */
-    _IN_EP(2)->DIEPTSIZ = 0;
-    _OUT_EP(2)->DOEPTSIZ = DOEPTSIZ_STUPCNT(3) | DOEPTSIZ_PKTCNT(1) |
-                           DOEPTSIZ_XFRSIZ(EP2_MAX_PACKET);
-    _OUT_EP(2)->DOEPCTL = DIEPCTL_SD0PID | DIEPCTL_USBAEP |
-                          DIEPCTL_EPTYP_BULK | DIEPCTL_MPSIZ(EP2_MAX_PACKET);
-    _DEV->DAINTMSK |= DAINTMSK_OEPM(2);
-    __DSB();
-
-    /* EP3: interrupt IN endpoint (CDC notification) */
-    _IN_EP(3)->DIEPTSIZ = 0;
-    _IN_EP(3)->DIEPCTL = DIEPCTL_SD0PID | DIEPCTL_USBAEP |
-                         DIEPCTL_EPTYP_INTR |
-                         DIEPCTL_TXFNUM(3) | DIEPCTL_MPSIZ(8);
-    _DEV->DAINTMSK |= DAINTMSK_IEPM(3);
-    __DSB();
-
-    /* Enable EP2 OUT */
-    _OUT_EP(2)->DOEPCTL |= DIEPCTL_EPENA | DIEPCTL_CNAK;
-    __DSB();
-
-    /* Init EP0 state */
-    _ep0.ep0state = EP0_STATE_IDLE;
-    _usb.enumerated = false;
-    _usb.device_addr = 0;
-    _usb.configured = false;
-    /* DCTL.SDIS must be cleared: core auto-sets SDIS when host sends USB reset.
-     * If not cleared, device stays in soft-disconnect and never enumerates.
-     * ChibiOS reference: same approach — DCTL=0 after reset. */
-    _DEV->DCTL = 0;
-    __DSB();
-}
-
-/* ========================================================================== */
-/* Internal: EP0 send data (for EP0 IN data stage)                           */
-/* ========================================================================== */
-
-static void _ep0_send_data(const uint8_t *data, uint32_t len)
-{
-    uint32_t pkt_size = (len > EP0_MAX_PACKET) ? EP0_MAX_PACKET : len;
-    uint32_t pcnt = (pkt_size > 0) ? 1 : 0;
-
-    /* If ZLP needed, send one */
-    if (pkt_size == 0 && len == 0) {
-        pcnt = 1;
-    }
-
-    /* Write data to EP0 TX FIFO */
-    if (pkt_size > 0) {
-        uint32_t fifo_avail = _IN_EP(0)->DTXFSTS & DTXFSTS_INEPTFSAV_MASK;
-        uint32_t needed = (pkt_size + 3) / 4;
-        if (fifo_avail < needed) {
-            /* Will need to poll until space — but for EP0 this is rare */
-            return;
-        }
-        _otg_fifo_write(&_FIFO(0), data, pkt_size);
-    }
-
-    /* Set TSIZ */
-    _IN_EP(0)->DIEPTSIZ = DIEPTSIZ_MCNT(1) |
-                          DIEPTSIZ_PKTCNT(pcnt) |
-                          DIEPTSIZ_XFRSIZ(pkt_size);
-    __DSB();
-
-    /* Enable IN EP0 */
-    _IN_EP(0)->DIEPCTL |= DIEPCTL_EPENA | DIEPCTL_CNAK;
-    __DSB();
-}
-
-/*
- * Send EP0 status stage (zero-length IN packet)
- */
-static void _ep0_send_status(void)
-{
-    _ep0_send_data(NULL, 0);
-}
-
-/*
- * Stall EP0
- */
-static void _ep0_stall(void)
-{
-    _IN_EP(0)->DIEPCTL |= DIEPCTL_STALL;
-    _OUT_EP(0)->DOEPCTL |= DIEPCTL_STALL;
-    _ep0.ep0state = EP0_STATE_STALL;
-}
-
-/* ========================================================================== */
-/* Internal: Handle USB standard requests                                     */
-/* ========================================================================== */
-
-static int _ep0_handle_std_request(void)
-{
-    uint8_t bmReqType = _ep0.setup[0];
-    uint8_t bRequest   = _ep0.setup[1];
-    uint16_t wValue   = _ep0.setup[2] | ((uint16_t)_ep0.setup[3] << 8);
-    uint16_t wIndex   = _ep0.setup[4] | ((uint16_t)_ep0.setup[5] << 8);
-    uint16_t wLength  = _ep0.setup[6] | ((uint16_t)_ep0.setup[7] << 8);
-
-    /* Standard requests only (bmReqType bits 5:6 = 00) */
-    uint8_t req_type = bmReqType & 0x60;
-    if (req_type != 0x00) {
-        return -1; /* Not standard — pass to class handler */
-    }
-
-    switch (bRequest) {
-
-    case USB_REQ_GET_STATUS:
-    {
-        /* Return 2-byte status */
-        static const uint8_t zero_status[2] = {0, 0};
-        _ep0_send_data(zero_status, 2);
-        _ep0.ep0state = EP0_STATE_DATA_IN;
-        _ep0.data_ptr = zero_status;
-        _ep0.data_len = 2;
-        _ep0.data_sent = 0;
-        return 0;
-    }
-
-    case USB_REQ_CLEAR_FEATURE:
-    {
-        uint8_t ep = (uint8_t)(wIndex & 0x7F);
-        uint8_t dir = (uint8_t)(wIndex >> 7);
-        if (wValue == 0) { /* ENDPOINT_HALT */
-            if (dir) {
-                _IN_EP(ep)->DIEPCTL &= ~DIEPCTL_STALL;
-            } else {
-                _OUT_EP(ep)->DOEPCTL &= ~DIEPCTL_STALL;
-            }
-        }
-        _ep0_send_status();
-        _ep0.ep0state = EP0_STATE_STATUS_IN;
-        return 0;
-    }
-
-    case USB_REQ_SET_FEATURE:
-    {
-        if (wValue == 0) { /* ENDPOINT_HALT */
-            uint8_t ep = (uint8_t)(wIndex & 0x7F);
-            uint8_t dir = (uint8_t)(wIndex >> 7);
-            if (dir) {
-                _IN_EP(ep)->DIEPCTL |= DIEPCTL_STALL;
-            } else if (ep > 0) {
-                _OUT_EP(ep)->DOEPCTL |= DIEPCTL_STALL;
-            }
-        } else if (wValue == 1) { /* TEST_MODE — just skip, not implemented */
-            /* Skip */
-        }
-        _ep0_send_status();
-        _ep0.ep0state = EP0_STATE_STATUS_IN;
-        return 0;
-    }
-
-    case USB_REQ_SET_ADDRESS:
-    {
-        /* Per spec, address is set after status stage completes.
-         * We store it now and apply in _ep0_in_term when status completes.
-         * The USB spec says: device must respond with status IN (ZLP) at
-         * address 0, then switch to new address. */
-        _usb.device_addr = (uint8_t)(wValue & 0x7F);
-        _ep0_send_status();
-        _ep0.ep0state = EP0_STATE_STATUS_IN;
-        return 0;
-    }
-
-    case USB_REQ_GET_DESCRIPTOR:
-    {
-        uint8_t dtype = (uint8_t)(wValue >> 8);
-        uint8_t dindex = (uint8_t)(wValue & 0xFF);
-        const uint8_t *desc = NULL;
-        uint32_t dlen = 0;
-
-        switch (dtype) {
-
-        case USB_DTYPE_DEVICE:
-            desc = usb_dev_desc;
-            dlen = (uint32_t)usb_dev_desc[0];
-            break;
-
-        case USB_DTYPE_CONFIG:
-            desc = usb_cfg_desc;
-            dlen = (uint32_t)usb_cfg_desc[2] |
-                   ((uint32_t)usb_cfg_desc[3] << 8);
-            break;
-
-        case USB_DTYPE_STRING:
-            switch (dindex) {
-            case 0:  desc = usb_str_lang;       dlen = usb_str_lang[0]; break;
-            case 1:  desc = usb_str_manufacturer; dlen = usb_str_manufacturer[0]; break;
-            case 2:  desc = usb_str_product;     dlen = usb_str_product[0]; break;
-            case 3:  desc = usb_str_serial;      dlen = usb_str_serial[0]; break;
-            default: /* Unsupported string index */
-                _ep0_stall();
-                return 0;
-            }
-            break;
-
-        case USB_DTYPE_DEVICE_QUALIFIER:
-        case USB_DTYPE_OTHER_SPEED:
-            /* Device qualifier: request error (stall), not required for FS */
-            _ep0_stall();
-            return 0;
-
-        default:
-            _ep0_stall();
-            return 0;
-        }
-
-        if (desc == NULL) {
-            _ep0_stall();
-            return 0;
-        }
-
-        /* Clamp length to wLength */
-        uint32_t send_len = dlen;
-        if (wLength < send_len) {
-            send_len = wLength;
-        }
-
-        _ep0_send_data(desc, send_len);
-        _ep0.ep0state = EP0_STATE_DATA_IN;
-        _ep0.data_ptr = desc;
-        _ep0.data_len = dlen;
-        _ep0.data_sent = send_len;
-        return 0;
-    }
-
-    case USB_REQ_SET_CONFIGURATION:
-    {
-        uint8_t cfg = (uint8_t)(wValue & 0xFF);
-        if (cfg == 0) {
-            _usb.configured = false;
-            /* Re-arm EP2 */
-        } else if (cfg == 1) {
-            _usb.configured = true;
-            /* Enable EP2 OUT for reception */
-            _OUT_EP(2)->DOEPTSIZ = DOEPTSIZ_STUPCNT(3) |
-                                   DOEPTSIZ_PKTCNT(1) |
-                                   DOEPTSIZ_XFRSIZ(EP2_MAX_PACKET);
-            _OUT_EP(2)->DOEPCTL |= DIEPCTL_EPENA | DIEPCTL_CNAK;
-            __DSB();
+    case GRXSTSP_OUT_DATA: {
+        USBOutEndpointState *osp = (USBOutEndpointState *)usbp->epc[ep]->out_state;
+        if (osp != NULL && osp->rxbuf != NULL) {
+            otg_fifo_read_to_buffer(otgp->FIFO[0], osp->rxbuf, cnt,
+                                    osp->rxsize - osp->rxcnt);
+            osp->rxbuf += cnt;
+            osp->rxcnt += cnt;
         } else {
-            _ep0_stall();
-            return 0;
+            /* No buffer — discard */
+            otg_fifo_read_to_buffer(otgp->FIFO[0], NULL, cnt, 0);
         }
-        _cdc.serial_state = 0x00000000; /* Clear serial state */
-        _ep0_send_status();
-        _ep0.ep0state = EP0_STATE_STATUS_IN;
-        return 0;
+        break;
     }
 
-    case USB_REQ_GET_CONFIGURATION:
-    {
-        uint8_t cfg_val = _usb.configured ? 1 : 0;
-        _ep0_send_data(&cfg_val, 1);
-        _ep0.ep0state = EP0_STATE_DATA_IN;
-        return 0;
-    }
-
-    case USB_REQ_GET_INTERFACE:
-    {
-        uint8_t alt = 0;
-        _ep0_send_data(&alt, 1);
-        _ep0.ep0state = EP0_STATE_DATA_IN;
-        return 0;
-    }
-
-    case USB_REQ_SET_INTERFACE:
-    {
-        _ep0_send_status();
-        _ep0.ep0state = EP0_STATE_STATUS_IN;
-        return 0;
-    }
-
-    case USB_REQ_SET_DESCRIPTOR:
+    case GRXSTSP_OUT_COMP:
+    case GRXSTSP_OUT_GLOBAL_NAK:
     default:
-        _ep0_stall();
-        return 0;
-    }
-}
-
-/* ========================================================================== */
-/* Internal: Handle CDC class requests on EP0 (ChibiOS sduRequestsHook)      */
-/* ========================================================================== */
-
-static int _ep0_handle_class_request(void)
-{
-    uint8_t bmReqType = _ep0.setup[0];
-    uint8_t bRequest  = _ep0.setup[1];
-    uint16_t wValue   = _ep0.setup[2] | ((uint16_t)_ep0.setup[3] << 8);
-    uint16_t wLength  = _ep0.setup[6] | ((uint16_t)_ep0.setup[7] << 8);
-
-    if ((bmReqType & 0x60U) != 0x20U) {
-        return -1;
-    }
-
-    switch (bRequest) {
-    case CDC_GET_LINE_CODING:
-        if (wLength > sizeof(_cdc_line_coding)) {
-            wLength = sizeof(_cdc_line_coding);
-        }
-        _ep0_send_data(_cdc_line_coding, wLength);
-        _ep0.ep0state = EP0_STATE_DATA_IN;
-        return 0;
-
-    case CDC_SET_LINE_CODING:
-        _ep0.data_ptr = _cdc_line_coding;
-        _ep0.data_len = (wLength > sizeof(_cdc_line_coding)) ?
-                        sizeof(_cdc_line_coding) : wLength;
-        _ep0.data_sent = 0;
-        _ep0.ep0state = EP0_STATE_DATA_OUT;
-        return 0;
-
-    case CDC_SET_CONTROL_LINE_STATE:
-        if (wValue & 0x0001U) {
-            _cdc.serial_state |= 0x0001U;
-        } else {
-            _cdc.serial_state &= ~0x0001U;
-        }
-        if (wValue & 0x0002U) {
-            _cdc.serial_state |= 0x0002U;
-        } else {
-            _cdc.serial_state &= ~0x0002U;
-        }
-        _ep0_send_status();
-        _ep0.ep0state = EP0_STATE_STATUS_IN;
-        return 0;
-
-    default:
-        return -1;
-    }
-}
-
-/* ========================================================================== */
-/* Internal: Handle setup packet from RX FIFO                                */
-/* ========================================================================== */
-
-static void _ep0_handle_setup(void)
-{
-    /* Read setup packet from the internal buffer (already copied from RX FIFO)
-     * The setup packet is already in _ep0.setup[8] from otg_rxfifo_handler */
-    uint8_t bmReqType = _ep0.setup[0];
-    uint16_t wLength  = _ep0.setup[6] | ((uint16_t)_ep0.setup[7] << 8);
-
-    /* Clear any previous state */
-    _ep0.ep0state = EP0_STATE_IDLE;
-    _ep0.data_ptr = NULL;
-    _ep0.data_len = 0;
-    _ep0.data_sent = 0;
-
-    /* If there's a pending setup on EP0, handle it */
-    int handled = _ep0_handle_std_request();
-    if (handled != 0) {
-        handled = _ep0_handle_class_request();
-    }
-
-    if (handled != 0) {
-        /* Not a standard or class request */
-        _ep0_stall();
-    }
-}
-
-/* ========================================================================== */
-/* Internal: RX FIFO handler                                                  */
-/* ========================================================================== */
-
-static void _otg_rxfifo_handler(void)
-{
-    /* Pop one entry from RX FIFO (ChibiOS otg_rxfifo_handler) */
-    if ((_OTG->GINTSTS & GINTSTS_RXFLVL) == 0) {
-        return;
-    }
-
-    uint32_t sts = _OTG->GRXSTSP;
-    (void)_OTG->GRXSTSP;
-
-    uint32_t cnt  = (sts & GRXSTSP_BCNT_MASK) >> GRXSTSP_BCNT_SHIFT;
-    uint32_t ep   = (sts & GRXSTSP_EPNUM_MASK) >> GRXSTSP_EPNUM_SHIFT;
-    uint32_t pkt  = (sts & GRXSTSP_PKTSTS_MASK) >> GRXSTSP_PKTSTS_SHIFT;
-
-    switch (pkt) {
-    case GRXSTSP_SETUP_DATA: {
-        _otg_fifo_read(&_FIFO(0), _ep0.setup, 8);
-        _ep0_setup_term();
-        break;
-    }
-    case GRXSTSP_SETUP_COMP: {
-        /* Setup handling is done on DOEPINT_STUP (ChibiOS path) */
-        break;
-    }
-        case GRXSTSP_OUT_DATA: {
-            if (ep == 0 && _ep0.ep0state == EP0_STATE_DATA_OUT &&
-                _ep0.data_ptr != NULL) {
-                uint32_t space = _ep0.data_len - _ep0.data_sent;
-                uint32_t rd = cnt;
-                if (rd > space) {
-                    rd = space;
-                }
-                _otg_fifo_read(&_FIFO(0), _ep0.data_ptr + _ep0.data_sent, rd);
-                _ep0.data_sent += rd;
-                if (cnt > rd) {
-                    _otg_fifo_read(&_FIFO(0), NULL, cnt - rd);
-                }
-                if (_ep0.data_sent >= _ep0.data_len) {
-                    _ep0_send_status();
-                    _ep0.ep0state = EP0_STATE_STATUS_IN;
-                }
-            } else if (ep == 2) {
-                /* CDC data from host — read into bounce buffer */
-                if (_rx_cb != NULL) {
-                    uint8_t buf[EP2_MAX_PACKET];
-                    _otg_fifo_read(&_FIFO(0), buf, (cnt > sizeof(buf)) ? sizeof(buf) : cnt);
-                    _rx_cb(buf, (cnt > EP2_MAX_PACKET) ? EP2_MAX_PACKET : cnt, _rx_cb_arg);
-                } else {
-                    /* No callback — discard */
-                    _otg_fifo_read(&_FIFO(0), NULL, cnt);
-                }
-            } else {
-                /* Unknown EP — discard */
-                _otg_fifo_read(&_FIFO(0), NULL, cnt);
-            }
-            break;
-        }
-        case GRXSTSP_OUT_COMP: {
-            /* OUT transfer complete on EP2 — re-arm for next packet */
-            if (ep == 2 && _usb.configured) {
-                _OUT_EP(2)->DOEPTSIZ = DOEPTSIZ_STUPCNT(3) |
-                                       DOEPTSIZ_PKTCNT(1) |
-                                       DOEPTSIZ_XFRSIZ(EP2_MAX_PACKET);
-                _OUT_EP(2)->DOEPCTL |= DIEPCTL_EPENA | DIEPCTL_CNAK;
-                __DSB();
-            }
-            break;
-        }
-        default:
-            break;
-        }
-}
-
-/* ========================================================================== */
-/* Internal: EP0 control transfer completions                                 */
-/* ========================================================================== */
-
-static void _ep0_setup_term(void)
-{
-    /* Setup packet received — the RX FIFO handler called this.
-     * We defer actual handling to SETUP_COMP completion. */
-}
-
-static void _ep0_in_term(bool success)
-{
-    if (!success) {
-        _ep0.ep0state = EP0_STATE_IDLE;
-        return;
-    }
-
-    switch (_ep0.ep0state) {
-    case EP0_STATE_DATA_IN: {
-        /* Data stage completed.
-         * Check if we need to send more data (multi-packet). */
-        if (_ep0.data_sent < _ep0.data_len) {
-            uint32_t remaining = _ep0.data_len - _ep0.data_sent;
-            uint32_t chunk = (remaining > EP0_MAX_PACKET) ? EP0_MAX_PACKET : remaining;
-            _ep0_send_data(_ep0.data_ptr + _ep0.data_sent, chunk);
-            _ep0.data_sent += chunk;
-        } else {
-            /* All data sent — transition to status OUT */
-            // Status OUT will be handled by host — just wait
-            _ep0.ep0state = EP0_STATE_STATUS_OUT;
-        }
-        break;
-    }
-    case EP0_STATE_STATUS_IN: {
-        /* Status stage completed for SET_ADDRESS — apply address now */
-        if (_usb.device_addr > 0) {
-            _DEV->DCFG = (_DEV->DCFG & ~DCFG_DAD_MASK) |
-                         DCFG_DAD(_usb.device_addr);
-            __DSB();
-        }
-        _ep0.ep0state = EP0_STATE_IDLE;
-        break;
-    }
-    default:
-        _ep0.ep0state = EP0_STATE_IDLE;
         break;
     }
 }
 
-static void _ep0_out_term(bool success)
-{
-    (void)success;
-    if (_ep0.ep0state == EP0_STATE_DATA_OUT) {
-        _ep0_send_status();
-        _ep0.ep0state = EP0_STATE_STATUS_IN;
-        return;
-    }
-    /* Status OUT from host after control read — transfer complete */
-    _ep0.ep0state = EP0_STATE_IDLE;
-}
-
 /* ========================================================================== */
-/* Internal: Endpoint IN handler (DIEPINT)                                   */
+/* EP IN handler (ChibiOS 1:1)                                                */
 /* ========================================================================== */
 
-static void _otg_epin_handler(uint32_t ep)
+static void otg_epin_handler(RT_USBDriver *usbp, usbep_t ep)
 {
-    uint32_t epint = _IN_EP(ep)->DIEPINT;
-    _IN_EP(ep)->DIEPINT = epint;
+    stm32_otg_t *otgp = (stm32_otg_t *)usbp->otg;
+    uint32_t epint = otgp->ie[ep].DIEPINT;
+
+    otgp->ie[ep].DIEPINT = epint;
 
     if (epint & DIEPINT_TOC) {
-        /* Timeout — clear and disable */
-        _IN_EP(ep)->DIEPCTL |= DIEPCTL_EPDIS;
+        /* Timeouts not handled. */
     }
 
-    if (epint & DIEPINT_XFRC) {
-        /* Transfer complete */
-        if (ep == 0) {
-            _ep0_in_term(true);
+    if ((epint & DIEPINT_XFRC) && (otgp->DIEPMSK & DIEPMSK_XFRCM)) {
+        USBInEndpointState *isp = (USBInEndpointState *)usbp->epc[ep]->in_state;
+
+        if (isp->txsize < isp->totsize) {
+            if (ep == 0) {
+                rtt_dbg_usb_ep0_cont++;
+            }
+            isp->txsize = isp->totsize - isp->txsize;
+            isp->txcnt  = 0;
+            __disable_irq();
+            usb_lld_start_in(usbp, ep);
+            __enable_irq();
+        } else {
+            /* Transfer complete — invoke IN callback. */
+            if (usbp->epc[ep]->in_cb)
+                usbp->epc[ep]->in_cb(usbp, ep);
         }
-        /* EP1 (CDC data IN) is handled via usb_lld_send_rtt polling */
-        if (ep == 3) {
-            /* EP3 notification — nothing special needed */
-        }
+    }
+
+    if ((epint & DIEPINT_TXFE) &&
+        (otgp->DIEPEMPMSK & DIEPEMPMSK_INEPTXFEM(ep))) {
+        otg_txfifo_handler(usbp, ep);
     }
 }
 
 /* ========================================================================== */
-/* Internal: Endpoint OUT handler (DOEPINT)                                  */
+/* EP OUT handler (ChibiOS 1:1)                                               */
 /* ========================================================================== */
 
-static void _otg_epout_handler(uint32_t ep)
+static void otg_epout_handler(RT_USBDriver *usbp, usbep_t ep)
 {
-    uint32_t epint = _OUT_EP(ep)->DOEPINT;
-    _OUT_EP(ep)->DOEPINT = epint;
+    stm32_otg_t *otgp = (stm32_otg_t *)usbp->otg;
+    uint32_t epint = otgp->oe[ep].DOEPINT;
 
-    if (epint & DOEPINT_STUP) {
-        if (ep == 0) {
-            _ep0_handle_setup();
-        }
+    otgp->oe[ep].DOEPINT = epint;
+
+    if ((epint & DOEPINT_STUP) && (otgp->DOEPMSK & DOEPMSK_STUPM)) {
+        if (usbp->epc[ep]->setup_cb)
+            usbp->epc[ep]->setup_cb(usbp, ep);
     }
 
-    if (epint & DOEPINT_XFRC) {
-        /* OUT transfer complete */
+    if ((epint & DOEPINT_XFRC) && (otgp->DOEPMSK & DOEPMSK_XFRCM)) {
+        USBOutEndpointState *osp = (USBOutEndpointState *)usbp->epc[ep]->out_state;
+
         if (ep == 0) {
-            _ep0_out_term(true);
-        }
-        if (ep == 2) {
-            /* CDC OUT complete — re-arm */
-            if (_usb.configured) {
-                _OUT_EP(2)->DOEPTSIZ = DOEPTSIZ_STUPCNT(3) |
-                                       DOEPTSIZ_PKTCNT(1) |
-                                       DOEPTSIZ_XFRSIZ(EP2_MAX_PACKET);
-                _OUT_EP(2)->DOEPCTL |= DIEPCTL_EPENA | DIEPCTL_CNAK;
-                __DSB();
+            if (((osp->rxcnt % usbp->epc[ep]->out_maxsize) == 0) &&
+                (osp->rxsize < osp->totsize)) {
+                osp->rxsize = osp->totsize - osp->rxsize;
+                osp->rxcnt  = 0;
+                __disable_irq();
+                usb_lld_start_out(usbp, ep);
+                __enable_irq();
+                return;
             }
         }
+
+        if (usbp->epc[ep]->out_cb)
+            usbp->epc[ep]->out_cb(usbp, ep);
     }
 }
 
 /* ========================================================================== */
-/* Exported: usb_lld_init_rtt                                                 */
+/* Isochronous IN/OUT failed handlers (ChibiOS 1:1)                           */
 /* ========================================================================== */
+
+static void otg_isoc_in_failed_handler(RT_USBDriver *usbp)
+{
+    stm32_otg_t *otgp = (stm32_otg_t *)usbp->otg;
+    const stm32_otg_params_t *par = (const stm32_otg_params_t *)usbp->otgparams;
+    usbep_t ep;
+
+    for (ep = 0; ep <= par->num_endpoints; ep++) {
+        if (((otgp->ie[ep].DIEPCTL & DIEPCTL_EPTYP_MASK) == DIEPCTL_EPTYP_ISO) &&
+            ((otgp->ie[ep].DIEPCTL & DIEPCTL_EPENA) != 0)) {
+            otgp->ie[ep].DIEPCTL |= (DIEPCTL_EPDIS | DIEPCTL_SNAK);
+            while (otgp->ie[ep].DIEPCTL & DIEPCTL_EPENA)
+                ;
+            otg_txfifo_flush(usbp, ep);
+            if (usbp->epc[ep]->in_cb)
+                usbp->epc[ep]->in_cb(usbp, ep);
+        }
+    }
+}
+
+static void otg_isoc_out_failed_handler(RT_USBDriver *usbp)
+{
+    stm32_otg_t *otgp = (stm32_otg_t *)usbp->otg;
+    const stm32_otg_params_t *par = (const stm32_otg_params_t *)usbp->otgparams;
+    usbep_t ep;
+
+    for (ep = 0; ep <= par->num_endpoints; ep++) {
+        if (((otgp->oe[ep].DOEPCTL & DOEPCTL_EPTYP_MASK) == DOEPCTL_EPTYP_ISO) &&
+            ((otgp->oe[ep].DOEPCTL & DOEPCTL_EPENA) != 0)) {
+            if (usbp->epc[ep]->out_cb)
+                usbp->epc[ep]->out_cb(usbp, ep);
+        }
+    }
+}
+
+/* ========================================================================== */
+/* usb_lld_serve_interrupt — OTG shared ISR (ChibiOS 1:1)                     */
+/* ========================================================================== */
+
+void usb_lld_serve_interrupt(void *usbp)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+    stm32_otg_t *otgp = (stm32_otg_t *)drv->otg;
+    uint32_t sts, src;
+
+    sts  = otgp->GINTSTS;
+    sts &= otgp->GINTMSK;
+    otgp->GINTSTS = sts;
+
+    /* Reset interrupt handling. */
+    if (sts & GINTSTS_USBRST) {
+        _usb_reset(drv);
+        return;
+    }
+
+    /* Wake-up handling. */
+    if (sts & GINTSTS_WKUPINT) {
+        if (otgp->PCGCCTL & (PCGCCTL_STPPCLK | PCGCCTL_GATEHCLK))
+            otgp->PCGCCTL &= ~(PCGCCTL_STPPCLK | PCGCCTL_GATEHCLK);
+        otgp->DCTL &= ~DCTL_RWUSIG;
+        _usb_wakeup(drv);
+    }
+
+    /* Suspend handling. */
+    if (sts & GINTSTS_USBSUSP) {
+        otg_disable_ep(drv);
+        _usb_suspend(drv);
+    }
+
+    /* Enumeration done. */
+    if (sts & GINTSTS_ENUMDNE) {
+        if ((otgp->DSTS & DSTS_ENUMSPD_MASK) == DSTS_ENUMSPD_HS_480)
+            otgp->GUSBCFG = (otgp->GUSBCFG & ~GUSBCFG_TRDT_MASK) |
+                            GUSBCFG_TRDT(TRDT_VALUE_HS);
+        else
+            otgp->GUSBCFG = (otgp->GUSBCFG & ~GUSBCFG_TRDT_MASK) |
+                            GUSBCFG_TRDT(TRDT_VALUE_FS);
+    }
+
+    /* SOF interrupt handling. */
+    if (sts & GINTSTS_SOF) {
+        const RTT_USBConfig *cfg = (const RTT_USBConfig *)drv->config;
+        if (cfg == NULL || cfg->sof_cb == NULL)
+            otgp->GINTMSK &= ~GINTMSK_SOFM;
+
+        if (drv->state == USB_STATE_SUSPENDED) {
+            if (otgp->PCGCCTL & (PCGCCTL_STPPCLK | PCGCCTL_GATEHCLK))
+                otgp->PCGCCTL &= ~(PCGCCTL_STPPCLK | PCGCCTL_GATEHCLK);
+            _usb_wakeup(drv);
+        }
+
+        if (cfg && cfg->sof_cb)
+            cfg->sof_cb(drv);
+    }
+
+    /* Isochronous IN failed. */
+    if (sts & GINTSTS_IISOIXFR)
+        otg_isoc_in_failed_handler(drv);
+
+    /* Isochronous OUT failed. */
+    if (sts & GINTSTS_IISOOXFR)
+        otg_isoc_out_failed_handler(drv);
+
+    /* RX FIFO emptying — must happen before endpoint event handling. */
+    if ((sts & GINTSTS_RXFLVL) != 0U)
+        otg_rxfifo_handler(drv);
+
+    /* IN/OUT endpoint event handling. */
+    src = otgp->DAINT;
+
+    if (sts & GINTSTS_OEPINT) {
+        if (src & (1U << 16)) otg_epout_handler(drv, 0);
+        if (src & (1U << 17)) otg_epout_handler(drv, 1);
+        if (src & (1U << 18)) otg_epout_handler(drv, 2);
+        if (src & (1U << 19)) otg_epout_handler(drv, 3);
+    }
+
+    if (sts & GINTSTS_IEPINT) {
+        if (src & (1U << 0))  otg_epin_handler(drv, 0);
+        if (src & (1U << 1))  otg_epin_handler(drv, 1);
+        if (src & (1U << 2))  otg_epin_handler(drv, 2);
+        if (src & (1U << 3))  otg_epin_handler(drv, 3);
+    }
+}
+
+/* ========================================================================== */
+/* HAL state machine functions (from ChibiOS hal_usb.c)                       */
+/* ========================================================================== */
+
+static void _usb_reset(void *usbp)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+
+    usb_lld_reset(drv);
+
+    /* Clear EP0 state. */
+    drv->ep0state  = USB_EP0_STATE_IDLE;
+    drv->ep0data   = NULL;
+    drv->ep0len    = 0;
+    drv->ep0max    = EP0_MAX_PACKET;
+    drv->ep0endcb  = NULL;
+
+    /* Clear endpoint bitmaps. */
+    drv->transmitting = 0;
+    drv->receiving    = 0;
+
+    /* Reset configuration. */
+    drv->configuration = 0;
+    drv->address       = 0;
+
+    /* State transition. */
+    drv->state = USB_STATE_SELECTED;
+
+    /* Event notification. */
+    if (drv->config) {
+        const RTT_USBConfig *cfg = (const RTT_USBConfig *)drv->config;
+        if (cfg->event_cb)
+            cfg->event_cb(drv, USB_EVENT_RESET);
+    }
+}
+
+static void _usb_suspend(void *usbp)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+
+    drv->state = USB_STATE_SUSPENDED;
+
+    if (drv->config) {
+        const RTT_USBConfig *cfg = (const RTT_USBConfig *)drv->config;
+        if (cfg->event_cb)
+            cfg->event_cb(drv, USB_EVENT_SUSPEND);
+    }
+}
+
+static void _usb_wakeup(void *usbp)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+
+    drv->state = USB_STATE_ACTIVE;
+
+    if (drv->config) {
+        const RTT_USBConfig *cfg = (const RTT_USBConfig *)drv->config;
+        if (cfg->event_cb)
+            cfg->event_cb(drv, USB_EVENT_WAKEUP);
+    }
+}
+
+static void _usb_set_address_after_status(void *usbp)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+
+    rtt_dbg_usb_set_addr++;
+    usb_lld_set_address(drv);
+    drv->state = USB_STATE_SELECTED;
+
+    if (drv->config) {
+        const RTT_USBConfig *cfg = (const RTT_USBConfig *)drv->config;
+        if (cfg->event_cb)
+            cfg->event_cb(drv, USB_EVENT_ADDRESS);
+    }
+}
+
+/* ========================================================================== */
+/* Standard request handler (ChibiOS default_handler)                         */
+/* ========================================================================== */
+
+static bool default_handler(void *usbp)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+    uint8_t *setup = drv->setup;
+
+    uint8_t  bmReqType = setup[0];
+    uint8_t  bRequest  = setup[1];
+    uint16_t wValue    = setup[2] | ((uint16_t)setup[3] << 8);
+    uint16_t wIndex    = setup[4] | ((uint16_t)setup[5] << 8);
+    uint16_t wLength   = setup[6] | ((uint16_t)setup[7] << 8);
+    uint8_t  recipient = bmReqType & USB_RECIPIENT_MASK;
+
+    /* Only handle standard requests. */
+    if ((bmReqType & USB_TYPE_MASK) != USB_TYPE_STANDARD)
+        return false;
+
+    switch (recipient) {
+
+    case USB_RECIPIENT_DEVICE:
+        switch (bRequest) {
+
+        case USB_REQ_GET_STATUS: {
+            static const uint8_t status[2] = {0, 0};
+            usb_setup_transfer(drv, status, 2, NULL);
+            return true;
+        }
+
+        case USB_REQ_CLEAR_FEATURE:
+            if (wValue == USB_FEATURE_REMOTE_WAKEUP)
+                drv->status &= ~(1U << 1);
+            usb_setup_transfer(drv, NULL, 0, NULL);
+            return true;
+
+        case USB_REQ_SET_FEATURE:
+            if (wValue == USB_FEATURE_REMOTE_WAKEUP)
+                drv->status |= (1U << 1);
+            usb_setup_transfer(drv, NULL, 0, NULL);
+            return true;
+
+        case USB_REQ_SET_ADDRESS:
+            drv->address = (uint8_t)(wValue & 0x7F);
+#if defined(USB_SET_ADDRESS_MODE) && USB_SET_ADDRESS_MODE
+            /* Early set address — apply immediately. */
+            usb_lld_set_address(drv);
+            usb_setup_transfer(drv, NULL, 0, NULL);
+#else
+            /* Apply address after EP0 status IN (ChibiOS default). */
+            usb_setup_transfer(drv, NULL, 0, _usb_set_address_after_status);
+#endif
+            return true;
+
+        case USB_REQ_GET_DESCRIPTOR: {
+            uint8_t dtype  = (uint8_t)(wValue >> 8);
+            uint8_t dindex = (uint8_t)(wValue & 0xFF);
+            const uint8_t *desc = NULL;
+            size_t dlen = 0;
+            const RTT_USBConfig *dcfg = (const RTT_USBConfig *)drv->config;
+
+            if (dcfg && dcfg->get_descriptor_cb)
+                desc = dcfg->get_descriptor_cb(drv, dtype, dindex, wIndex);
+
+            if (desc == NULL) {
+                switch (dtype) {
+                case USB_DTYPE_DEVICE:
+                    desc = usb_dev_desc;
+                    dlen = usb_dev_desc[0];
+                    break;
+                case USB_DTYPE_CONFIGURATION:
+                    desc = usb_cfg_desc;
+                    dlen = (size_t)usb_cfg_desc[2] | ((size_t)usb_cfg_desc[3] << 8);
+                    break;
+                case USB_DTYPE_STRING:
+                    switch (dindex) {
+                    case 0:  desc = usb_str_lang;          dlen = usb_str_lang[0];          break;
+                    case 1:  desc = usb_str_manufacturer;  dlen = usb_str_manufacturer[0];  break;
+                    case 2:  desc = usb_str_product;       dlen = usb_str_product[0];       break;
+                    case 3:  desc = usb_str_serial;        dlen = usb_str_serial[0];        break;
+                    default:
+                        break;
+                    }
+                    break;
+                case USB_DTYPE_DEVICE_QUALIFIER:
+                case USB_DTYPE_OTHER_SPEED:
+                default:
+                    break;
+                }
+            } else {
+                dlen = desc[0];
+                if (dtype == USB_DTYPE_CONFIGURATION)
+                    dlen = (size_t)desc[2] | ((size_t)desc[3] << 8);
+            }
+
+            if (desc == NULL) {
+                usb_lld_stall_in(drv, 0);
+                usb_lld_stall_out(drv, 0);
+                return true;
+            }
+
+            if (wLength < dlen)
+                dlen = wLength;
+            usb_setup_transfer(drv, desc, dlen, NULL);
+            return true;
+        }
+
+        case USB_REQ_GET_CONFIGURATION: {
+            uint8_t cfg_val = drv->configuration;
+            usb_setup_transfer(drv, &cfg_val, 1, NULL);
+            return true;
+        }
+
+        case USB_REQ_SET_CONFIGURATION: {
+            uint8_t cfg = (uint8_t)(wValue & 0xFF);
+            const RTT_USBConfig *dcfg = (const RTT_USBConfig *)drv->config;
+
+            /* ChibiOS: tear down active config before selecting a new one. */
+            if (drv->state == USB_STATE_ACTIVE) {
+                usb_lld_disable_endpoints(drv);
+                drv->configuration = 0;
+                drv->state = USB_STATE_SELECTED;
+                if (dcfg && dcfg->event_cb)
+                    dcfg->event_cb(drv, USB_EVENT_RESET);
+            }
+
+            drv->configuration = cfg;
+            if (cfg != 0) {
+                drv->state = USB_STATE_ACTIVE;
+                if (dcfg && dcfg->event_cb)
+                    dcfg->event_cb(drv, USB_EVENT_CONFIGURED);
+            } else {
+                drv->state = USB_STATE_SELECTED;
+            }
+
+            usb_setup_transfer(drv, NULL, 0, NULL);
+            return true;
+        }
+
+        case USB_REQ_GET_INTERFACE: {
+            uint8_t alt = 0;
+            usb_setup_transfer(drv, &alt, 1, NULL);
+            return true;
+        }
+
+        case USB_REQ_SET_INTERFACE:
+            usb_setup_transfer(drv, NULL, 0, NULL);
+            return true;
+
+        case USB_REQ_SET_DESCRIPTOR:
+        default:
+            usb_lld_stall_in(drv, 0);
+            usb_lld_stall_out(drv, 0);
+            return true;
+        }
+
+    case USB_RECIPIENT_INTERFACE:
+        /* Interface requests: CDC class requests handled in EP0 setup. */
+        return false;
+
+    case USB_RECIPIENT_ENDPOINT:
+        switch (bRequest) {
+
+        case USB_REQ_GET_STATUS: {
+            uint8_t ep_st;
+            if (wIndex & 0x80)
+                ep_st = usb_lld_get_status_in(drv, (usbep_t)(wIndex & 0x7F));
+            else
+                ep_st = usb_lld_get_status_out(drv, (usbep_t)(wIndex & 0x7F));
+            {
+                uint8_t eps[2] = {(ep_st == EP_STATUS_STALLED) ? 1U : 0U, 0};
+                usb_setup_transfer(drv, eps, 2, NULL);
+            }
+            return true;
+        }
+
+        case USB_REQ_CLEAR_FEATURE:
+            if (wValue == USB_FEATURE_ENDPOINT_HALT) {
+                if (wIndex & 0x80)
+                    usb_lld_clear_in(drv, (usbep_t)(wIndex & 0x7F));
+                else
+                    usb_lld_clear_out(drv, (usbep_t)(wIndex & 0x7F));
+            }
+            usb_setup_transfer(drv, NULL, 0, NULL);
+            return true;
+
+        case USB_REQ_SET_FEATURE:
+            if (wValue == USB_FEATURE_ENDPOINT_HALT) {
+                if (wIndex & 0x80)
+                    usb_lld_stall_in(drv, (usbep_t)(wIndex & 0x7F));
+                else
+                    usb_lld_stall_out(drv, (usbep_t)(wIndex & 0x7F));
+            }
+            usb_setup_transfer(drv, NULL, 0, NULL);
+            return true;
+
+        case USB_REQ_SYNCH_FRAME: {
+            uint8_t sf[2] = {0, 0};
+            usb_setup_transfer(drv, sf, 2, NULL);
+            return true;
+        }
+
+        default:
+            usb_lld_stall_in(drv, 0);
+            usb_lld_stall_out(drv, 0);
+            return true;
+        }
+
+    default:
+        return false;
+    }
+}
+
+/* ========================================================================== */
+/* EP0 SETUP callback                                                         */
+/* ========================================================================== */
+
+static void _usb_ep0setup(void *usbp, usbep_t ep)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+
+    (void)ep;
+
+    /* Read setup packet into driver buffer. */
+    usb_lld_read_setup(drv, 0, drv->setup);
+
+    /* Clear EP0 state. */
+    drv->ep0state  = USB_EP0_STATE_IDLE;
+    drv->ep0data   = NULL;
+    drv->ep0len    = 0;
+    drv->ep0max    = ((RT_USBEndpointConfig *)drv->epc[0])->in_maxsize;
+    drv->ep0endcb  = NULL;
+
+    /* Clear stall condition if previously stalled (USB 2.0 8.4.2). */
+    {
+        stm32_otg_t *otgp = (stm32_otg_t *)drv->otg;
+        otgp->ie[0].DIEPCTL &= ~DIEPCTL_STALL;
+        otgp->oe[0].DOEPCTL &= ~DIEPCTL_STALL;
+    }
+
+    /* Try standard request handler first. */
+    if (default_handler(drv))
+        return;
+
+    /* Class/vendor hooks (CDC layer via requests_hook_cb). */
+    if (drv->config) {
+        const RTT_USBConfig *cfg = (const RTT_USBConfig *)drv->config;
+        uint8_t bmReqType = drv->setup[0];
+
+        if ((bmReqType & USB_TYPE_MASK) == USB_TYPE_CLASS && cfg->requests_hook_cb) {
+            cfg->requests_hook_cb(drv);
+            return;
+        }
+    }
+
+    /* Not handled — stall. */
+    usb_lld_stall_in(drv, 0);
+    usb_lld_stall_out(drv, 0);
+}
+
+/* ========================================================================== */
+/* EP0 IN callback — called when IN data stage completes                       */
+/* ========================================================================== */
+
+static void _usb_ep0in(void *usbp, usbep_t ep)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+    (void)ep;
+
+    switch (drv->ep0state) {
+
+    case USB_EP0_STATE_WAITING_DATA_IN: {
+        /* Data stage complete (possibly multi-packet via otg_epin_handler). */
+        const uint16_t wLength = (uint16_t)drv->setup[6] |
+                                 ((uint16_t)drv->setup[7] << 8);
+        const size_t sent = drv->ep0len;
+
+        /* ChibiOS: ZLP required when sent < wLength and sent is MPS-aligned. */
+        if (sent > 0 && sent < wLength && (sent % drv->ep0max) == 0) {
+            rtt_dbg_usb_ep0_zlp++;
+            drv->ep0state = USB_EP0_STATE_WAITING_IN_ZLP;
+            {
+                USBInEndpointState *isp =
+                    (USBInEndpointState *)drv->epc[0]->in_state;
+                isp->txbuf  = NULL;
+                isp->txsize = 0;
+                isp->txcnt  = 0;
+            }
+            usb_lld_start_in(drv, 0);
+            break;
+        }
+
+        drv->ep0data = NULL;
+        drv->ep0len  = 0;
+        drv->ep0state = USB_EP0_STATE_WAITING_STATUS_OUT;
+        {
+            USBOutEndpointState *osp =
+                (USBOutEndpointState *)drv->epc[0]->out_state;
+            osp->rxbuf   = NULL;
+            osp->rxsize  = 0;
+            osp->rxcnt   = 0;
+            osp->totsize = 0;
+        }
+        usb_lld_start_out(drv, 0);
+        break;
+    }
+
+    case USB_EP0_STATE_WAITING_IN_ZLP:
+        drv->ep0data = NULL;
+        drv->ep0len  = 0;
+        drv->ep0state = USB_EP0_STATE_WAITING_STATUS_OUT;
+        {
+            USBOutEndpointState *osp =
+                (USBOutEndpointState *)drv->epc[0]->out_state;
+            osp->rxbuf   = NULL;
+            osp->rxsize  = 0;
+            osp->rxcnt   = 0;
+            osp->totsize = 0;
+        }
+        usb_lld_start_out(drv, 0);
+        break;
+
+    case USB_EP0_STATE_WAITING_STATUS_IN:
+        /* Status stage complete — run deferred SET_ADDRESS etc. */
+        if (drv->ep0endcb != NULL)
+            drv->ep0endcb(drv);
+        drv->ep0endcb  = NULL;
+        drv->ep0state = USB_EP0_STATE_IDLE;
+        break;
+
+    default:
+        break;
+    }
+}
+
+/* ========================================================================== */
+/* EP0 OUT callback — called when OUT data stage completes                     */
+/* ========================================================================== */
+
+static void _usb_ep0out(void *usbp, usbep_t ep)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+    (void)ep;
+
+    switch (drv->ep0state) {
+
+    case USB_EP0_STATE_WAITING_DATA_OUT: {
+        /* Data arrived from host (e.g. SET_LINE_CODING data). */
+        if (drv->ep0endcb != NULL) {
+            void (*cb)(void *) = drv->ep0endcb;
+            drv->ep0endcb = NULL;
+            cb(drv);
+        }
+
+        /* Send ZLP status IN. */
+        drv->ep0state = USB_EP0_STATE_WAITING_STATUS_IN;
+        {
+            USBInEndpointState *isp = (USBInEndpointState *)drv->epc[0]->in_state;
+            isp->txbuf  = NULL;
+            isp->txsize = 0;
+            isp->txcnt  = 0;
+            isp->totsize = 0;
+        }
+        usb_lld_start_in(drv, 0);
+        break;
+    }
+
+    case USB_EP0_STATE_WAITING_STATUS_OUT: {
+        stm32_otg_t *otgp = (stm32_otg_t *)drv->otg;
+        /* Status OUT from host after a control read. */
+        if (drv->ep0endcb != NULL)
+            drv->ep0endcb(drv);
+        drv->ep0endcb  = NULL;
+        drv->ep0state = USB_EP0_STATE_IDLE;
+        /* Re-arm EP0 for next SETUP (STUPCNT only). */
+        otgp->oe[0].DOEPTSIZ = DOEPTSIZ_STUPCNT(3);
+        otgp->oe[0].DOEPCTL |= DOEPCTL_EPENA | DOEPCTL_CNAK;
+        break;
+    }
+
+    default:
+        break;
+    }
+}
+
+/* ========================================================================== */
+/* ========================================================================== */
+/* 14 public LLD functions (ChibiOS API)                                      */
+/* ========================================================================== */
+/* ========================================================================== */
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_init — initialize driver object and OTG params                     */
+/* -------------------------------------------------------------------------- */
+
+void usb_lld_init(void *usbp)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+
+    drv->otg       = (void *)OTG_FS_BASE;
+    drv->otgparams = (void *)&fs_params;
+    drv->state     = USB_STATE_UNINIT;
+
+    /* usbObjectInit — clear state fields. */
+    drv->config         = NULL;
+    drv->transmitting   = 0;
+    drv->receiving      = 0;
+    drv->address        = 0;
+    drv->configuration  = 0;
+    drv->pmnext         = 0;
+    drv->ep0state       = USB_EP0_STATE_IDLE;
+    drv->ep0data        = NULL;
+    drv->ep0len         = 0;
+    drv->ep0max         = EP0_MAX_PACKET;
+    drv->ep0endcb       = NULL;
+    drv->event_cb       = NULL;
+    memset(drv->epc, 0, sizeof(drv->epc));
+    memset(drv->setup, 0, sizeof(drv->setup));
+
+    drv->state = USB_STATE_STOP;
+}
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_start — configures and activates the USB peripheral                 */
+/* -------------------------------------------------------------------------- */
+
+void usb_lld_start(void *usbp)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+    stm32_otg_t *otgp = (stm32_otg_t *)drv->otg;
+    const RTT_USBConfig *cfg = (const RTT_USBConfig *)drv->config;
+
+    if (drv->state == USB_STATE_STOP) {
+        /* Enable OTG_FS clock and reset. */
+        RCC->AHB2ENR |= RCC_AHB2ENR_OTGFSEN;
+        __DSB();
+        RCC->AHB2RSTR |= RCC_AHB2RSTR_OTGFSRST;
+        __DSB();
+        RCC->AHB2RSTR &= ~RCC_AHB2RSTR_OTGFSRST;
+        __DSB();
+
+        /* Enable NVIC. */
+        NVIC_SetPriority(OTG_FS_IRQn, NVIC_EncodePriority(
+            NVIC_GetPriorityGrouping(), 5, 0));
+        NVIC_EnableIRQ(OTG_FS_IRQn);
+
+        /* Force device mode, FS 1.1 PHY, turn-around time. */
+        otgp->GUSBCFG = GUSBCFG_FDMOD | GUSBCFG_TRDT(TRDT_VALUE_FS) |
+                        GUSBCFG_PHYSEL;
+
+        /* 48MHz 1.1 PHY. */
+        otgp->DCFG = 0x02200000 | DCFG_DSPD_FS11;
+
+        /* PHY enabled. */
+        otgp->PCGCCTL = 0;
+
+        /* VBUS sensing. */
+        otgp->GOTGCTL = GOTGCTL_BVALOEN | GOTGCTL_BVALOVAL;
+
+        /* GCCFG: stepping 2 with VBUS sensing. */
+        otgp->GCCFG = GCCFG_INIT_VALUE;
+
+        /* Core reset. */
+        otg_core_reset(drv);
+
+        /* Re-program GUSBCFG after core reset (CSRST resets it). */
+        otgp->GUSBCFG = GUSBCFG_FDMOD | GUSBCFG_TRDT(TRDT_VALUE_FS) |
+                        GUSBCFG_PHYSEL;
+
+        /* Interrupts on TXFIFOs half empty. */
+        otgp->GAHBCFG = 0;
+
+        /* Endpoints re-initialization. */
+        otg_disable_ep(drv);
+
+        /* Clear all pending Device Interrupts. */
+        otgp->DIEPMSK  = 0;
+        otgp->DOEPMSK  = 0;
+        otgp->DAINTMSK = 0;
+
+        /* Initial interrupt mask (no RX/EP masks yet — added in usb_lld_reset). */
+        otgp->GINTMSK  = GINTMSK_ENUMDNEM | GINTMSK_USBRSTM |
+                         GINTMSK_USBSUSPM | GINTMSK_ESUSPM |
+                         GINTMSK_SRQM     | GINTMSK_WKUM |
+                         GINTMSK_IISOIXFRM | GINTMSK_IISOOXFRM;
+
+        if (cfg && cfg->sof_cb != NULL)
+            otgp->GINTMSK |= GINTMSK_SOFM;
+
+        /* Clear all pending IRQs. */
+        otgp->GINTSTS = 0xFFFFFFFF;
+
+        /* Enable global interrupts. */
+        otgp->GAHBCFG |= GAHBCFG_GINTMSK;
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_stop — deactivates the USB peripheral                              */
+/* -------------------------------------------------------------------------- */
+
+void usb_lld_stop(void *usbp)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+    stm32_otg_t *otgp = (stm32_otg_t *)drv->otg;
+
+    if (drv->state != USB_STATE_STOP) {
+        otg_disable_ep(drv);
+
+        otgp->DAINTMSK = 0;
+        otgp->GAHBCFG  = 0;
+        otgp->GCCFG    = 0;
+
+        NVIC_DisableIRQ(OTG_FS_IRQn);
+        RCC->AHB2ENR &= ~RCC_AHB2ENR_OTGFSEN;
+
+        drv->state = USB_STATE_STOP;
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_reset — USB bus reset                                              */
+/* -------------------------------------------------------------------------- */
+
+void usb_lld_reset(void *usbp)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+    stm32_otg_t *otgp = (stm32_otg_t *)drv->otg;
+    unsigned i;
+
+    /* Flush TX FIFO 0. */
+    otg_txfifo_flush(drv, 0);
+
+    /* Endpoint interrupts all disabled and cleared. */
+    otgp->DIEPEMPMSK = 0;
+    otgp->DAINTMSK   = DAINTMSK_OEPM(0) | DAINTMSK_IEPM(0);
+
+    /* All endpoints in NAK mode, interrupts cleared. */
+    for (i = 0; i <= ((const stm32_otg_params_t *)drv->otgparams)->num_endpoints; i++) {
+        otgp->ie[i].DIEPCTL = DIEPCTL_SNAK;
+        otgp->oe[i].DOEPCTL = DIEPCTL_SNAK;
+        otgp->ie[i].DIEPINT = 0xFFFFFFFF;
+        otgp->oe[i].DOEPINT = 0xFFFFFFFF;
+    }
+
+    /* Reset FIFO allocator. */
+    otg_ram_reset(drv);
+
+    /* RX FIFO size initialization. */
+    otgp->GRXFSIZ = GRXFSIZ_RXFD(((const stm32_otg_params_t *)drv->otgparams)->rx_fifo_size);
+    otg_rxfifo_flush(drv);
+
+    /* Reset device address to zero. */
+    otgp->DCFG = (otgp->DCFG & ~DCFG_DAD_MASK) | DCFG_DAD(0);
+
+    /* Enable RX/EP interrupt sources (ChibiOS: added here, not in start). */
+    otgp->GINTMSK  |= GINTMSK_RXFLVLM | GINTMSK_OEPM | GINTMSK_IEPM;
+    otgp->DIEPMSK   = DIEPMSK_TOCM | DIEPMSK_XFRCM;
+    otgp->DOEPMSK   = DOEPMSK_STUPM | DOEPMSK_XFRCM;
+
+    /* EP0 initialization (special case). */
+    ep0config_init();
+    drv->epc[0] = (RT_USBEndpointConfig *)&ep0config;
+
+    otgp->oe[0].DOEPTSIZ = DOEPTSIZ_STUPCNT(3);
+    otgp->oe[0].DOEPCTL  = DOEPCTL_SD0PID | DOEPCTL_USBAEP |
+                           DOEPCTL_EPTYP_CTRL |
+                           DOEPCTL_MPSIZ(ep0config.out_maxsize);
+
+    otgp->ie[0].DIEPTSIZ = 0;
+    otgp->ie[0].DIEPCTL  = DIEPCTL_SD0PID | DIEPCTL_USBAEP |
+                           DIEPCTL_EPTYP_CTRL |
+                           DIEPCTL_TXFNUM(0) |
+                           DIEPCTL_MPSIZ(ep0config.in_maxsize);
+
+    otgp->DIEPTXF0 = DIEPTXF_INEPTXFD(ep0config.in_maxsize / 4) |
+                     DIEPTXF_INEPTXSA(otg_ram_alloc(drv,
+                                                    ep0config.in_maxsize / 4));
+}
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_set_address — sets the USB device address                           */
+/* -------------------------------------------------------------------------- */
+
+void usb_lld_set_address(void *usbp)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+    stm32_otg_t *otgp = (stm32_otg_t *)drv->otg;
+
+    otgp->DCFG = (otgp->DCFG & ~DCFG_DAD_MASK) | DCFG_DAD(drv->address);
+}
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_init_endpoint — enables an endpoint                                 */
+/* -------------------------------------------------------------------------- */
+
+void usb_lld_init_endpoint(void *usbp, usbep_t ep)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+    stm32_otg_t *otgp = (stm32_otg_t *)drv->otg;
+    RT_USBEndpointConfig *epcp = drv->epc[ep];
+    uint32_t ctl, fsize;
+
+    if (ep == 0 || epcp == NULL)
+        return;
+
+    /* IN and OUT common parameters. */
+    switch (epcp->ep_mode & USB_EP_MODE_TYPE) {
+    case USB_EP_MODE_TYPE_CTRL:
+        ctl = DIEPCTL_SD0PID | DIEPCTL_USBAEP | DIEPCTL_EPTYP_CTRL;
+        break;
+    case USB_EP_MODE_TYPE_ISO:
+        ctl = DIEPCTL_SD0PID | DIEPCTL_USBAEP | DIEPCTL_EPTYP_ISO;
+        break;
+    case USB_EP_MODE_TYPE_BULK:
+        ctl = DIEPCTL_SD0PID | DIEPCTL_USBAEP | DIEPCTL_EPTYP_BULK;
+        break;
+    case USB_EP_MODE_TYPE_INTR:
+        ctl = DIEPCTL_SD0PID | DIEPCTL_USBAEP | DIEPCTL_EPTYP_INTR;
+        break;
+    default:
+        return;
+    }
+
+    /* OUT endpoint activation or deactivation. */
+    otgp->oe[ep].DOEPTSIZ = 0;
+    if (epcp->out_state != NULL) {
+        otgp->oe[ep].DOEPCTL = ctl | DOEPCTL_MPSIZ(epcp->out_maxsize);
+        otgp->DAINTMSK |= DAINTMSK_OEPM(ep);
+    } else {
+        otgp->oe[ep].DOEPCTL &= ~DOEPCTL_USBAEP;
+        otgp->DAINTMSK &= ~DAINTMSK_OEPM(ep);
+    }
+
+    /* IN endpoint activation or deactivation. */
+    otgp->ie[ep].DIEPTSIZ = 0;
+    if (epcp->in_state != NULL) {
+        fsize = epcp->in_maxsize / 4;
+        if (epcp->in_multiplier > 1)
+            fsize *= epcp->in_multiplier;
+        otgp->DIEPTXF[ep - 1] = DIEPTXF_INEPTXFD(fsize) |
+                                DIEPTXF_INEPTXSA(otg_ram_alloc(drv, fsize));
+        otg_txfifo_flush(drv, ep);
+
+        otgp->ie[ep].DIEPCTL = ctl |
+                               DIEPCTL_TXFNUM(ep) |
+                               DIEPCTL_MPSIZ(epcp->in_maxsize);
+        otgp->DAINTMSK |= DAINTMSK_IEPM(ep);
+    } else {
+        otgp->DIEPTXF[ep - 1] = 0x02000400; /* Reset value. */
+        otg_txfifo_flush(drv, ep);
+        otgp->ie[ep].DIEPCTL &= ~DIEPCTL_USBAEP;
+        otgp->DAINTMSK &= ~DAINTMSK_IEPM(ep);
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_disable_endpoints — disables all endpoints except EP0               */
+/* -------------------------------------------------------------------------- */
+
+void usb_lld_disable_endpoints(void *usbp)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+
+    otg_ram_reset(drv);
+    otg_disable_ep(drv);
+}
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_get_status_out — returns status of an OUT endpoint                  */
+/* -------------------------------------------------------------------------- */
+
+usbepstatus_t usb_lld_get_status_out(void *usbp, usbep_t ep)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+    stm32_otg_t *otgp = (stm32_otg_t *)drv->otg;
+    uint32_t ctl = otgp->oe[ep].DOEPCTL;
+
+    if (!(ctl & DOEPCTL_USBAEP))
+        return EP_STATUS_DISABLED;
+    if (ctl & DOEPCTL_STALL)
+        return EP_STATUS_STALLED;
+    return EP_STATUS_ACTIVE;
+}
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_get_status_in — returns status of an IN endpoint                    */
+/* -------------------------------------------------------------------------- */
+
+usbepstatus_t usb_lld_get_status_in(void *usbp, usbep_t ep)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+    stm32_otg_t *otgp = (stm32_otg_t *)drv->otg;
+    uint32_t ctl = otgp->ie[ep].DIEPCTL;
+
+    if (!(ctl & DIEPCTL_USBAEP))
+        return EP_STATUS_DISABLED;
+    if (ctl & DIEPCTL_STALL)
+        return EP_STATUS_STALLED;
+    return EP_STATUS_ACTIVE;
+}
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_read_setup — reads a setup packet from the dedicated buffer        */
+/* -------------------------------------------------------------------------- */
+
+void usb_lld_read_setup(void *usbp, usbep_t ep, uint8_t *buf)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+
+    memcpy(buf, drv->epc[ep]->setup_buf, 8);
+}
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_start_out — starts a receive operation on an OUT endpoint          */
+/* -------------------------------------------------------------------------- */
+
+void usb_lld_start_out(void *usbp, usbep_t ep)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+    stm32_otg_t *otgp = (stm32_otg_t *)drv->otg;
+    USBOutEndpointState *osp = (USBOutEndpointState *)drv->epc[ep]->out_state;
+    uint32_t pcnt, rxsize;
+
+    if (osp == NULL)
+        return;
+
+    osp->totsize = osp->rxsize;
+    if ((ep == 0) && (osp->rxsize > EP0_MAX_PACKET))
+        osp->rxsize = EP0_MAX_PACKET;
+
+    if (osp->rxsize == 0U) {
+        pcnt = 1U;
+        rxsize = 0U;
+    } else {
+        pcnt   = (osp->rxsize + drv->epc[ep]->out_maxsize - 1U) /
+                 drv->epc[ep]->out_maxsize;
+        rxsize = (pcnt * drv->epc[ep]->out_maxsize + 3U) & 0xFFFFFFFCU;
+    }
+
+    /* EP0 status OUT must not set STUPCNT; EP0 data OUT keeps STUPCNT(3) per ChibiOS. */
+    if ((ep == 0U) && (osp->rxsize == 0U)) {
+        otgp->oe[ep].DOEPTSIZ = DOEPTSIZ_PKTCNT(pcnt) | DOEPTSIZ_XFRSIZ(rxsize);
+    } else if (ep == 0U) {
+        otgp->oe[ep].DOEPTSIZ = DOEPTSIZ_STUPCNT(3) |
+                                DOEPTSIZ_PKTCNT(pcnt) |
+                                DOEPTSIZ_XFRSIZ(rxsize);
+    } else {
+        otgp->oe[ep].DOEPTSIZ = DOEPTSIZ_PKTCNT(pcnt) | DOEPTSIZ_XFRSIZ(rxsize);
+    }
+
+    if ((drv->epc[ep]->ep_mode & USB_EP_MODE_TYPE) == USB_EP_MODE_TYPE_ISO) {
+        if (otgp->DSTS & DSTS_FNSOF_ODD)
+            otgp->oe[ep].DOEPCTL |= DOEPCTL_SEVNFRM;
+        else
+            otgp->oe[ep].DOEPCTL |= DOEPCTL_SODDFRM;
+    }
+
+    otgp->oe[ep].DOEPCTL |= DOEPCTL_EPENA | DOEPCTL_CNAK;
+}
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_start_in — starts a transmit operation on an IN endpoint           */
+/* -------------------------------------------------------------------------- */
+
+void usb_lld_start_in(void *usbp, usbep_t ep)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+    stm32_otg_t *otgp = (stm32_otg_t *)drv->otg;
+    USBInEndpointState *isp = (USBInEndpointState *)drv->epc[ep]->in_state;
+
+    if (isp == NULL)
+        return;
+
+    isp->totsize = isp->txsize;
+
+    if (isp->txsize == 0) {
+        /* Match ChibiOS usb_lld_start_in() ZLP: PKTCNT(1)|XFRSIZ(0) only. */
+        otgp->ie[ep].DIEPTSIZ = DIEPTSIZ_PKTCNT(1) | DIEPTSIZ_XFRSIZ(0);
+    } else {
+        if ((ep == 0) && (isp->txsize > EP0_MAX_PACKET))
+            isp->txsize = EP0_MAX_PACKET;
+
+        uint32_t pcnt = (isp->txsize + drv->epc[ep]->in_maxsize - 1) /
+                        drv->epc[ep]->in_maxsize;
+        otgp->ie[ep].DIEPTSIZ = DIEPTSIZ_MCNT(1) |
+                                DIEPTSIZ_PKTCNT(pcnt) |
+                                DIEPTSIZ_XFRSIZ(isp->txsize);
+    }
+
+    if ((drv->epc[ep]->ep_mode & USB_EP_MODE_TYPE) == USB_EP_MODE_TYPE_ISO) {
+        if (otgp->DSTS & DSTS_FNSOF_ODD)
+            otgp->ie[ep].DIEPCTL |= DIEPCTL_SEVNFRM;
+        else
+            otgp->ie[ep].DIEPCTL |= DIEPCTL_SODDFRM;
+    }
+
+    otgp->ie[ep].DIEPCTL |= DIEPCTL_EPENA | DIEPCTL_CNAK;
+    otgp->DIEPEMPMSK |= DIEPEMPMSK_INEPTXFEM(ep);
+}
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_stall_out / stall_in — stall an endpoint                           */
+/* -------------------------------------------------------------------------- */
+
+void usb_lld_stall_out(void *usbp, usbep_t ep)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+    ((stm32_otg_t *)drv->otg)->oe[ep].DOEPCTL |= DOEPCTL_STALL;
+}
+
+void usb_lld_stall_in(void *usbp, usbep_t ep)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+    ((stm32_otg_t *)drv->otg)->ie[ep].DIEPCTL |= DIEPCTL_STALL;
+}
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_clear_out / clear_in — clear stall on an endpoint                  */
+/* -------------------------------------------------------------------------- */
+
+void usb_lld_clear_out(void *usbp, usbep_t ep)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+    ((stm32_otg_t *)drv->otg)->oe[ep].DOEPCTL &= ~DOEPCTL_STALL;
+}
+
+void usb_lld_clear_in(void *usbp, usbep_t ep)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+    ((stm32_otg_t *)drv->otg)->ie[ep].DIEPCTL &= ~DIEPCTL_STALL;
+}
+
+/* ========================================================================== */
+/* ISR handlers                                                               */
+/* ========================================================================== */
+
+void OTG_FS_IRQHandler(void)
+{
+    usb_lld_serve_interrupt(&rtt_usb);
+}
+
+/* ========================================================================== */
+/* Higher-level HAL functions                                                  */
+/* ========================================================================== */
+
+void usb_object_init(void *usbp)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+
+    memset(drv, 0, sizeof(RT_USBDriver));
+    drv->state    = USB_STATE_STOP;
+    drv->ep0max   = EP0_MAX_PACKET;
+    drv->otg      = (void *)OTG_FS_BASE;
+    drv->otgparams = (void *)&fs_params;
+}
+
+void usb_setup_transfer(void *usbp, const void *buf, size_t len,
+                        void (*callback)(void *usbp))
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+
+    drv->ep0data   = (const uint8_t *)buf;
+    drv->ep0len    = len;
+    drv->ep0max    = ((RT_USBEndpointConfig *)drv->epc[0])->in_maxsize;
+    drv->ep0endcb  = callback;
+
+    if (len == 0) {
+        /* No data stage: status direction follows setup bmRequestType bit 7
+         * (ChibiOS hal_usb.c _usb_ep0setup after usbSetupTransfer). */
+        if ((drv->setup[0] & USB_DIR_MASK) == USB_DIR_DEVICE_TO_HOST) {
+            /* Device→host setup with wLength=0: host STATUS OUT ZLP. */
+            drv->ep0state = USB_EP0_STATE_WAITING_STATUS_OUT;
+            {
+                USBOutEndpointState *osp =
+                    (USBOutEndpointState *)drv->epc[0]->out_state;
+                osp->rxbuf   = NULL;
+                osp->rxsize  = 0;
+                osp->rxcnt   = 0;
+                osp->totsize = 0;
+            }
+            usb_lld_start_out(drv, 0);
+        } else {
+            /* Host→device (SET_ADDRESS, SET_CONFIGURATION, …): STATUS IN ZLP. */
+            rtt_dbg_usb_ep0_sts_in++;
+            drv->ep0state = USB_EP0_STATE_WAITING_STATUS_IN;
+            {
+                USBInEndpointState *isp =
+                    (USBInEndpointState *)drv->epc[0]->in_state;
+                isp->txbuf   = NULL;
+                isp->txsize  = 0;
+                isp->txcnt   = 0;
+                isp->totsize = 0;
+            }
+            usb_lld_start_in(drv, 0);
+        }
+    } else {
+        /* Data IN stage (device sends data to host). */
+        drv->ep0state = USB_EP0_STATE_WAITING_DATA_IN;
+        {
+            /* Match ChibiOS usbStartTransmitI: full transfer size in txsize;
+             * otg_epin_handler + usb_lld_start_in split EP0 into MPS packets. */
+            USBInEndpointState *isp = (USBInEndpointState *)drv->epc[0]->in_state;
+            isp->txbuf  = (const uint8_t *)buf;
+            isp->txsize = (uint16_t)len;
+            isp->txcnt  = 0;
+        }
+        usb_lld_start_in(drv, 0);
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_connect_bus / usb_lld_disconnect_bus                               */
+/* -------------------------------------------------------------------------- */
+
+void usb_lld_connect_bus(void *usbp)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+#if STM32_OTG_STEPPING == 1
+    ((stm32_otg_t *)drv->otg)->GCCFG |= GCCFG_VBUSBSEN;
+#else
+    ((stm32_otg_t *)drv->otg)->DCTL &= ~DCTL_SDIS;
+#endif
+}
+
+void usb_lld_disconnect_bus(void *usbp)
+{
+    RT_USBDriver *drv = (RT_USBDriver *)usbp;
+#if STM32_OTG_STEPPING == 1
+    ((stm32_otg_t *)drv->otg)->GCCFG &= ~GCCFG_VBUSBSEN;
+#else
+    ((stm32_otg_t *)drv->otg)->DCTL |= DCTL_SDIS;
+#endif
+}
+
+/* ========================================================================== */
+/* Compatibility layer (existing RTT API for UARTDriver.cpp)                  */
+/* ========================================================================== */
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_init_rtt — single-call full hardware initialization                */
+/* -------------------------------------------------------------------------- */
 
 bool usb_lld_init_rtt(void)
 {
-    /* DEBUG: magic = 1 = function entered */
-    rtt_dbg_usb_init = 1;
-    if (_usb.initialized) {
+    if (_usb_driver_inited)
         return true;
-    }
 
-    /* ---- Step 0: Ensure VTOR points to firmware vector table ---- */
-    /* The bootloader may overwrite VTOR during interrupts. Re-set to
-     * the firmware's vector table base to guarantee correct dispatch
-     * for all exception vectors (SysTick, PendSV, USB, etc.). */
-    extern uint32_t g_pfnVectors[];
-    SCB->VTOR = (uint32_t)g_pfnVectors;
-    __DSB();
-    __ISB();
+    /* Initialize the driver object. */
+    usb_object_init(&rtt_usb);
 
-    /* ---- Step 0a: PWR clock + USB PHY supply ---- */
-    /* Per RM0410 §5.2.3: PWR_CR2.USV (bit 0) enables the USB PHY internal
-     * linear regulator. This MUST be set before accessing the OTG_FS peripheral.
-     * The bootloader does this but the firmware jump does not carry it over. */
-    RCC->APB1ENR |= RCC_APB1ENR_PWREN;
-    (void)RCC->APB1ENR;
-    __DSB();
-    { volatile uint32_t _d = 100; while (_d--) { __NOP(); } }
-
-    /* Enable USB Supply Valid on PHY internal regulator */
-    PWR->CR2 |= (1UL << 0);   /* USV: USB Supply Valid (RM0410 §5.2.3) */
-    (void)PWR->CR2;
-    __DSB();
-    { volatile uint32_t _d = 1000; while (_d--) { __NOP(); } }
-
-    /* ---- Step 1: Enable OTG_FS clock and reset ---- */
+    /* Enable OTG_FS clock and reset. */
     RCC->AHB2ENR |= RCC_AHB2ENR_OTGFSEN;
-    (void)RCC->AHB2ENR;
     __DSB();
-
     RCC->AHB2RSTR |= RCC_AHB2RSTR_OTGFSRST;
     __DSB();
     RCC->AHB2RSTR &= ~RCC_AHB2RSTR_OTGFSRST;
     __DSB();
 
-    /* ---- Step 1b: GPIO AF10 configuration (bypassed HAL_PCD_MspInit) ---- */
-    /* PA11=OTG_FS_DM, PA12=OTG_FS_DP, PA9=OTG_FS_VBUS */
+    /* GPIO: PA9 (VBUS), PA11 (DM), PA12 (DP) — AF10. */
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
-    (void)RCC->AHB1ENR;
     __DSB();
 
-    /* PA11 AF10 (OTG_FS_DM) */
-    GPIOA->MODER = (GPIOA->MODER & ~(3U << 22)) | (2U << 22);
-    GPIOA->AFR[1] = (GPIOA->AFR[1] & ~(0xFU << 12)) | (10U << 12);
-    GPIOA->OSPEEDR |= (3U << 22);  /* Very High */
-    GPIOA->PUPDR &= ~(3U << 22);   /* No pull */
+    GPIOA->MODER   = (GPIOA->MODER & ~(3U << 22)) | (2U << 22);  /* PA11 AF */
+    GPIOA->AFR[1]  = (GPIOA->AFR[1] & ~(0xFU << 12)) | (10U << 12);
+    GPIOA->OSPEEDR |= (3U << 22);
+    GPIOA->PUPDR   &= ~(3U << 22);
 
-    /* PA12 AF10 (OTG_FS_DP) */
-    GPIOA->MODER = (GPIOA->MODER & ~(3U << 24)) | (2U << 24);
-    GPIOA->AFR[1] = (GPIOA->AFR[1] & ~(0xFU << 16)) | (10U << 16);
-    GPIOA->OSPEEDR |= (3U << 24);  /* Very High */
-    GPIOA->PUPDR &= ~(3U << 24);   /* No pull */
+    GPIOA->MODER   = (GPIOA->MODER & ~(3U << 24)) | (2U << 24);  /* PA12 AF */
+    GPIOA->AFR[1]  = (GPIOA->AFR[1] & ~(0xFU << 16)) | (10U << 16);
+    GPIOA->OSPEEDR |= (3U << 24);
+    GPIOA->PUPDR   &= ~(3U << 24);
 
-    /* PA9 OTG_FS_VBUS (input) */
-    GPIOA->MODER &= ~(3U << 18);  /* Input */
+    GPIOA->MODER   &= ~(3U << 18);  /* PA9 input (VBUS) */
 
-    /* ---- Step 2: GUSBCFG — forced device mode, FS 1.1 PHY ---- */
-    _OTG->GUSBCFG = GUSBCFG_FDMOD | GUSBCFG_TRDT(TRDT_VALUE_FS) |
-                    GUSBCFG_PHYSEL;
-    (void)_OTG->GUSBCFG;
+    /* PWR: enable USB supply. */
+    RCC->APB1ENR |= RCC_APB1ENR_PWREN;
     __DSB();
-
-    /* ---- Step 3: DCFG — FS 1.1 PHY, 48MHz ---- */
-    _DEV->DCFG = 0x02200000UL | DCFG_DSPD_FS11;
+    osalSysPolledDelayX(100);
+    PWR->CR2 |= (1UL << 0);  /* USV: USB Supply Valid */
     __DSB();
+    osalSysPolledDelayX(1000);
 
-    /* ---- Step 4: PCGCCTL — enable PHY ---- */
-    _PCGCCTL = 0;
-    __DSB();
+    /* GUSBCFG: forced device, FS 1.1 PHY. */
+    {
+        stm32_otg_t *otgp = (stm32_otg_t *)rtt_usb.otg;
+        otgp->GUSBCFG = GUSBCFG_FDMOD | GUSBCFG_TRDT(TRDT_VALUE_FS) |
+                        GUSBCFG_PHYSEL;
+        __DSB();
 
-    /* ---- Step 5: Core reset ---- */
-    _otg_core_reset();
+        /* DCFG: set after core reset (line after otg_core_reset). */
 
-    /* ---- Step 5b: Re-program GUSBCFG after core reset ---- */
-    /* Core soft reset (GRSTCTL_CSRST) resets GUSBCFG back to default
-     * (0x00001440), losing FDMOD and PHYSEL. These bits MUST be re-set
-     * for proper internal FS PHY operation. (2026-05-26 debug) */
-    _OTG->GUSBCFG = GUSBCFG_FDMOD | GUSBCFG_TRDT(TRDT_VALUE_FS) |
-                    GUSBCFG_PHYSEL;
-    (void)_OTG->GUSBCFG;
-    __DSB();
+        /* PCGCCTL: PHY enabled. */
+        otgp->PCGCCTL = 0;
 
-    /* ---- Step 6: GAHBCFG — no DMA, no global int yet ---- */
-    _OTG->GAHBCFG = 0;
-    __DSB();
+        otg_core_reset(&rtt_usb);
 
-    /* ---- Step 7: Disable endpoints + clear pending ---- */
-    _otg_disable_endpoints();
-    _DEV->DIEPMSK = 0;
-    _DEV->DOEPMSK = 0;
-    _DEV->DAINTMSK = 0;
+        /* Re-program GUSBCFG after core reset. */
+        otgp->GUSBCFG = GUSBCFG_FDMOD | GUSBCFG_TRDT(TRDT_VALUE_FS) |
+                        GUSBCFG_PHYSEL;
+        __DSB();
 
-    /* Set GINTMSK — include RX/EP from start so setup works before USBRST */
-    _OTG->GINTMSK = GINTMSK_ENUMDNEM | GINTMSK_USBRSTM |
-                    GINTMSK_USBSUSPM | GINTMSK_ESUSPM |
-                    GINTMSK_SRQM | GINTMSK_WKUPM |
-                    GINTMSK_IISOIXFRM | GINTMSK_IISOOXFRM |
-                    GINTMSK_RXFLVLM | GINTMSK_OEPM | GINTMSK_IEPM;
+        /* DCFG must be re-programmed AFTER core reset (core reset clears it). */
+        otgp->DCFG = 0x02200000 | DCFG_DSPD_FS11;
+        __DSB();
 
-    /* Clear all pending interrupts BEFORE enabling global int */
-    _OTG->GINTSTS = 0xFFFFFFFFU;
-    (void)_OTG->GINTSTS;
+        /* GAHBCFG: no DMA, no global int yet. */
+        otgp->GAHBCFG = 0;
 
-    /* ---- Step 8: Enable global interrupt ---- */
-    _OTG->GAHBCFG |= GAHBCFG_GINTMSK;
-    __DSB();
+        /* Disable endpoints, clear masks. */
+        otg_disable_ep(&rtt_usb);
+        otgp->DIEPMSK  = 0;
+        otgp->DOEPMSK  = 0;
+        otgp->DAINTMSK = 0;
 
-    /* ---- Step 9: VBUS sensing + transceiver (AFTER global int enabled) ---- */
-    /* GCCFG = VBDEN | VBUSBSEN (NOT PWRDWN! PWRDWN powers down the PHY). */
-    _OTG->GOTGCTL = GOTGCTL_BVALOEN | GOTGCTL_BVALOVAL;
-    _OTG->GCCFG = GCCFG_VBDEN | GCCFG_VBUSBSEN;
-    __DSB();
+        /* Initial GINTMSK (EP/RX masks added in usb_lld_reset via USBRST). */
+        otgp->GINTMSK  = GINTMSK_ENUMDNEM | GINTMSK_USBRSTM |
+                         GINTMSK_USBSUSPM | GINTMSK_ESUSPM |
+                         GINTMSK_SRQM     | GINTMSK_WKUM |
+                         GINTMSK_IISOIXFRM | GINTMSK_IISOOXFRM;
 
-    /* ---- Step 10: Soft disconnect → reconnect cycle (AFTER all config!) ---- */
-    /* CRITICAL: Must be done AFTER GINTSTS is cleared and GINTMSK is enabled,
-     * otherwise the USBRST event that follows reconnect will fire during init
-     * and get lost in the GINTSTS=0xFFFFFFFF clear at Step 8. The host detects
-     * connect → sends 10ms reset → USBRST → poll loop handles it properly. */
-    _DEV->DCTL = DCTL_SDIS;                    /* pull D+ low */
-    __DSB();
-    { volatile uint32_t _d = 50000; while (_d--) { __NOP(); } }
-    _DEV->DCTL = 0;                            /* release D+ pull-up */
-    __DSB();
-    { volatile uint32_t _d = 50000; while (_d--) { __NOP(); } }
+        /* Clear pending interrupts before enabling global int. */
+        otgp->GINTSTS = 0xFFFFFFFF;
 
-    _usb.initialized = true;
-    /* DEBUG: magic = 2 = function completed */
-    rtt_dbg_usb_init = 2;
+        /* Enable global interrupt. */
+        otgp->GAHBCFG |= GAHBCFG_GINTMSK;
+        __DSB();
 
-    /* ---- Step 12: Enable NVIC interrupt for OTG_FS ---- */
-    /* ChibiOS reference: hal_usb_lld.c:770
-     * nvicEnableVector(STM32_OTG1_NUMBER, STM32_USB_OTG1_IRQ_PRIORITY)
-     * Priority 5 = below timer(4) but above main loop(5).
-     * Group 3 = 4 bits for preempt priority (STM32F7 default). */
-    NVIC_SetPriority(OTG_FS_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(), 5, 0));
+        /* VBUS sensing + transceiver. */
+        otgp->GOTGCTL = GOTGCTL_BVALOEN | GOTGCTL_BVALOVAL;
+        otgp->GCCFG   = GCCFG_INIT_VALUE;
+        __DSB();
+    }
+
+    /* NVIC: enable OTG_FS_IRQn at priority 5. */
+    NVIC_SetPriority(OTG_FS_IRQn, NVIC_EncodePriority(
+        NVIC_GetPriorityGrouping(), 5, 0));
     NVIC_EnableIRQ(OTG_FS_IRQn);
-    _usb.enumerated = false;
-    _usb.device_addr = 0;
-    _usb.configured = false;
+    __DSB();
+
+    _usb_driver_inited = true;
+
+    (void)usb_cdc_init();
+
+    /* Soft disconnect → reconnect cycle to trigger bus reset.
+     *
+     * NOTE: Use read-modify-write (RMW) to clear SDIS, NOT direct write =0.
+     * Some STM32F767 variants have read-only status bits in DCTL (bit25).
+     * Writing 0 to ALL bits clears these read-only bits, causing hardware
+     * to auto-restore them — which also re-asserts SDIS back to 1!
+     * See test_L6_cdc/main.c:1077 for the original discovery. */
+    {
+        stm32_otg_t *otgp = (stm32_otg_t *)rtt_usb.otg;
+        otgp->DCTL = DCTL_SDIS;
+        __DSB();
+        osalSysPolledDelayX(50000);
+        otgp->DCTL &= ~DCTL_SDIS;
+        __DSB();
+        osalSysPolledDelayX(50000);
+    }
 
     return true;
 }
 
-/* ========================================================================== */
-/* Exported: usb_lld_poll_rtt                                                 */
-/* ========================================================================== */
+/* -------------------------------------------------------------------------- */
+/* usb_lld_poll_rtt — non-interrupt polling entry point                       */
+/* -------------------------------------------------------------------------- */
 
 void usb_lld_poll_rtt(void)
 {
-    if (!_usb.initialized) {
+    if (!_usb_driver_inited)
         return;
-    }
 
-    uint32_t sts = _OTG->GINTSTS;
-    sts &= _OTG->GINTMSK;
-    if (sts == 0) {
-        return;
-    }
-
-    /* Clear pending bits — defer RXFLVL until FIFO drained */
-    _OTG->GINTSTS = sts & ~GINTSTS_RXFLVL;
-    (void)_OTG->GINTSTS;
-
-    /* ---- USB Reset ---- */
-    if (sts & GINTSTS_USBRST) {
-        _usb_reset();
-        return;
-    }
-
-    /* ---- Wakeup ---- */
-    if (sts & GINTSTS_WKUPINT) {
-        if (_PCGCCTL & (PCGCCTL_STPPCLK | PCGCCTL_GATEHCLK)) {
-            _PCGCCTL &= ~(PCGCCTL_STPPCLK | PCGCCTL_GATEHCLK);
-        }
-        _DEV->DCTL &= ~DCTL_RWUSIG;
-    }
-
-    /* ---- Suspend ---- */
-    if (sts & GINTSTS_USBSUSP) {
-        _otg_disable_endpoints();
-    }
-
-    /* ---- Enumeration done ---- */
-    if (sts & GINTSTS_ENUMDNE) {
-        uint32_t spd = _DEV->DSTS & DSTS_ENUMSPD_MASK;
-        if (spd == DSTS_ENUMSPD_HS) {
-            _OTG->GUSBCFG = (_OTG->GUSBCFG & ~GUSBCFG_TRDT_MASK) |
-                            GUSBCFG_TRDT(9);
-        } else {
-            _OTG->GUSBCFG = (_OTG->GUSBCFG & ~GUSBCFG_TRDT_MASK) |
-                            GUSBCFG_TRDT(TRDT_VALUE_FS);
-        }
-        _usb.enumerated = true;
-    }
-
-    /* ---- SOF ---- */
-    if (sts & GINTSTS_SOF) {
-        /* Not used for polling mode */
-    }
-
-    /* ---- Iso IN/OUT failed ---- */
-    if (sts & GINTSTS_IISOIXFR) { /* Iso IN failed */ }
-    if (sts & GINTSTS_IISOOXFR) { /* Iso OUT failed */ }
-
-    /* ---- RX FIFO data available ---- */
-    if (sts & GINTSTS_RXFLVL) {
-        do {
-            _otg_rxfifo_handler();
-        } while (_OTG->GINTSTS & GINTSTS_RXFLVL);
-        _OTG->GINTSTS = GINTSTS_RXFLVL;
-        (void)_OTG->GINTSTS;
-    }
-
-    /* ---- IN endpoint interrupts ---- */
-    if (sts & GINTSTS_IEPINT) {
-        uint32_t daint = _DEV->DAINT;
-        /* Check EP0 IN */
-        if (daint & (1 << 0)) {
-            _otg_epin_handler(0);
-        }
-        /* Check EP1 IN (CDC data TX — normally completion handled by usb_lld_send_rtt polling,
-         * but we check here too in case of interrupt-style completion) */
-        if (daint & (1 << 1)) {
-            uint32_t epint = _IN_EP(1)->DIEPINT;
-            if (epint & DIEPINT_XFRC) {
-                _IN_EP(1)->DIEPINT = DIEPINT_XFRC;
-            } else {
-                _IN_EP(1)->DIEPINT = epint;
-            }
-        }
-        /* Check EP3 IN (CDC notification) */
-        if (daint & (1 << 3)) {
-            _otg_epin_handler(3);
-        }
-    }
-
-    /* ---- OUT endpoint interrupts ---- */
-    if (sts & GINTSTS_OEPINT) {
-        uint32_t daint = _DEV->DAINT;
-        /* OEP 0 */
-        if (daint & (1 << 16)) {
-            _otg_epout_handler(0);
-        }
-        /* OEP 2 (CDC data RX) */
-        if (daint & (1 << 18)) {
-            _otg_epout_handler(2);
-        }
-    }
+    /* Check for pending interrupts and dispatch. */
+    stm32_otg_t *otgp = (stm32_otg_t *)rtt_usb.otg;
+    if (otgp->GINTSTS & otgp->GINTMSK)
+        usb_lld_serve_interrupt(&rtt_usb);
 }
 
-/* ========================================================================== */
-/* Exported: usb_lld_send_rtt                                                 */
-/* ========================================================================== */
+/* -------------------------------------------------------------------------- */
+/* usb_lld_send_rtt — send data on CDC IN endpoint (polled + ISR compatible)  */
+/* -------------------------------------------------------------------------- */
 
 bool usb_lld_send_rtt(uint8_t ep, const uint8_t *data, uint32_t len)
 {
-    if (!_usb.initialized || ep > 3 || ep == 0) {
+    RT_USBDriver *drv = &rtt_usb;
+    stm32_otg_t *otgp;
+
+    if (!_usb_driver_inited || ep > 3 || ep == 0 || ep == 2)
         return false;
+
+    if (data == NULL || len == 0)
+        return false;
+
+    otgp = (stm32_otg_t *)drv->otg;
+
+    /* Clamp to max packet size. */
+    {
+        uint16_t mps = (ep == 1) ? EP1_MAX_PACKET : 8;
+        if (len > mps)
+            len = mps;
     }
 
-    uint32_t max_pkt;
-    switch (ep) {
-    case 1: max_pkt = EP1_MAX_PACKET; break;
-    case 3: max_pkt = 8; break;
-    default: return false;
-    }
+    /* Check if endpoint is already enabled (busy). */
+    if (otgp->ie[ep].DIEPCTL & DIEPCTL_EPENA)
+        return false;
 
-    if (len > max_pkt) {
-        len = max_pkt;
-    }
-
-    /* Check TX FIFO space */
-    uint32_t fifo_avail = _IN_EP(ep)->DTXFSTS & DTXFSTS_INEPTFSAV_MASK;
+    /* Check TX FIFO space. */
+    uint32_t fifo_avail = otgp->ie[ep].DTXFSTS & DTXFSTS_INEPTFSAV_MASK;
     uint32_t needed = (len + 3) / 4;
-    if (fifo_avail < needed) {
+    if (fifo_avail < needed)
         return false;
-    }
 
-    /* Write data to FIFO */
-    _otg_fifo_write(&_FIFO(ep), data, len);
+    /* Write data directly to TX FIFO. */
+    otg_fifo_write_from_buffer(otgp->FIFO[ep], data, len);
 
-    /* Set DIEPTSIZ */
-    uint32_t pcnt = (len > 0) ? 1 : 0;
-    _IN_EP(ep)->DIEPTSIZ = DIEPTSIZ_MCNT(1) |
-                           DIEPTSIZ_PKTCNT(pcnt) |
-                           DIEPTSIZ_XFRSIZ(len);
+    /* Set up DIEPTSIZ. */
+    uint32_t pcnt = 1;
+    otgp->ie[ep].DIEPTSIZ = DIEPTSIZ_MCNT(1) |
+                            DIEPTSIZ_PKTCNT(pcnt) |
+                            DIEPTSIZ_XFRSIZ(len);
+
+    /* Enable endpoint. */
+    otgp->ie[ep].DIEPCTL |= DIEPCTL_EPENA | DIEPCTL_CNAK;
     __DSB();
 
-    /* Enable endpoint: EPENA | CNAK */
-    _IN_EP(ep)->DIEPCTL |= DIEPCTL_EPENA | DIEPCTL_CNAK;
-    __DSB();
-
-    /* Poll DIEPINT for XFRC */
-    uint32_t timeout = SEND_TIMEOUT;
-    while (!(_IN_EP(ep)->DIEPINT & DIEPINT_XFRC)) {
+    /* Poll for XFRC completion (short timeout for polled TX). */
+    uint32_t timeout = 50000;
+    while (!(otgp->ie[ep].DIEPINT & DIEPINT_XFRC)) {
         if (--timeout == 0) {
-            _IN_EP(ep)->DIEPCTL |= DIEPCTL_EPDIS;
-            _IN_EP(ep)->DIEPINT = 0xFFFFFFFFU;
+            otgp->ie[ep].DIEPCTL |= DIEPCTL_EPDIS;
+            otgp->ie[ep].DIEPINT = 0xFFFFFFFF;
             return false;
         }
         __NOP();
     }
 
-    /* Clear XFRC */
-    _IN_EP(ep)->DIEPINT = DIEPINT_XFRC;
-
+    otgp->ie[ep].DIEPINT = DIEPINT_XFRC;
     return true;
 }
 
-/* ========================================================================== */
-/* Exported: usb_lld_send_cdc_notification                                    */
-/* ========================================================================== */
+/* -------------------------------------------------------------------------- */
+/* usb_lld_set_rx_callback — register CDC data receive callback               */
+/* -------------------------------------------------------------------------- */
+
+void usb_lld_set_rx_callback(usb_rx_callback_t cb, void *arg)
+{
+    usb_cdc_set_rx_callback(cb, arg);
+}
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_rearm_cdc_out — re-arm EP2 OUT for receiving next CDC packet       */
+/* -------------------------------------------------------------------------- */
+
+void usb_lld_rearm_cdc_out(void)
+{
+    usb_cdc_rearm_out();
+}
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_is_configured_rtt / get_connected_rtt                              */
+/* -------------------------------------------------------------------------- */
+
+bool usb_lld_is_configured_rtt(void)
+{
+    return rtt_usb.state == USB_STATE_ACTIVE;
+}
+
+bool usb_lld_get_connected_rtt(void)
+{
+    return rtt_usb.state >= USB_STATE_SELECTED;
+}
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_set_address_rtt — compatibility wrapper                            */
+/* -------------------------------------------------------------------------- */
+
+void usb_lld_set_address_rtt(uint8_t addr)
+{
+    rtt_usb.address = addr;
+    usb_lld_set_address(&rtt_usb);
+}
+
+/* -------------------------------------------------------------------------- */
+/* usb_lld_send_cdc_notification — send CDC serial state notification         */
+/* -------------------------------------------------------------------------- */
 
 bool usb_lld_send_cdc_notification(uint16_t serial_state)
 {
-    /* CDC Notification header (8 bytes) + 2 bytes serial state = 10 bytes */
     uint8_t notify[10];
+
+    /* CDC Notification header (SEND_ENCAPSULATED_REQUEST / SerialState). */
     notify[0] = 0xA1;       /* bmRequestType: Device→Host, Interface, Class */
     notify[1] = 0x20;       /* bNotification: Serial State */
     notify[2] = 0x00;       /* wValue */
@@ -1596,70 +2329,4 @@ bool usb_lld_send_cdc_notification(uint16_t serial_state)
     notify[9] = (uint8_t)((serial_state >> 8) & 0xFF);
 
     return usb_lld_send_rtt(3, notify, 10);
-}
-
-/* ========================================================================== */
-/* Exported: usb_lld_set_address_rtt                                          */
-/* ========================================================================== */
-
-void usb_lld_set_address_rtt(uint8_t addr)
-{
-    _DEV->DCFG = (_DEV->DCFG & ~DCFG_DAD_MASK) | DCFG_DAD(addr);
-    _usb.device_addr = addr;
-}
-
-/* ========================================================================== */
-/* Exported: usb_lld_get_connected_rtt                                        */
-/* ========================================================================== */
-
-bool usb_lld_get_connected_rtt(void)
-{
-    return _usb.enumerated;
-}
-
-/* ========================================================================== */
-/* Exported: usb_lld_is_configured_rtt                                       */
-/* ========================================================================== */
-
-bool usb_lld_is_configured_rtt(void)
-{
-    return _usb.configured;
-}
-
-/* ========================================================================== */
-/* Exported: usb_lld_set_rx_callback                                          */
-/* ========================================================================== */
-
-void usb_lld_set_rx_callback(usb_rx_callback_t cb, void *arg)
-{
-    _rx_cb = cb;
-    _rx_cb_arg = arg;
-}
-
-/* ========================================================================== */
-/* Exported: usb_lld_send_cdc_rx_ready                                        */
-/* ========================================================================== */
-
-void usb_lld_rearm_cdc_out(void)
-{
-    /* Re-arm EP2 OUT for next CDC data packet from host */
-    if (_usb.configured) {
-        /* Check if endpoint is already enabled and busy */
-        if ((_OUT_EP(2)->DOEPCTL & DIEPCTL_EPENA) == 0) {
-            _OUT_EP(2)->DOEPTSIZ = DOEPTSIZ_STUPCNT(3) |
-                                   DOEPTSIZ_PKTCNT(1) |
-                                   DOEPTSIZ_XFRSIZ(EP2_MAX_PACKET);
-            _OUT_EP(2)->DOEPCTL |= DIEPCTL_EPENA | DIEPCTL_CNAK;
-            __DSB();
-        }
-    }
-}
-
-/* ========================================================================== */
-/* OTG_FS_IRQHandler — ChibiOS 1:1 interrupt-driven USB event dispatching    */
-/* ChibiOS reference: hal_usb_lld.c:531-722                                   */
-/* ========================================================================== */
-void OTG_FS_IRQHandler(void)
-{
-    usb_lld_poll_rtt();
 }

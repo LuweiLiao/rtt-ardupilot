@@ -8,6 +8,7 @@
  * Flash origin:    FLASH_ORIGIN
  */
 #include <rtthread.h>
+#include <stdbool.h>
 #include "board.h"
 #include "drv_gpio.h"
 
@@ -21,6 +22,9 @@
 #ifdef SOC_SERIES_STM32F7
 #include "drv_spi_lld.h"
 #endif
+
+extern void usb_lld_poll_rtt(void);
+extern bool usb_lld_is_configured_rtt(void);
 
 extern int rt_hw_pin_init(void);
 extern int rt_hw_usart_init(void);
@@ -287,6 +291,14 @@ void rt_hw_board_init(void)
     rt_hw_pin_init();
     rt_hw_usart_init();
 
+#ifdef SOC_SERIES_STM32F7
+    /* UART7 hardware telemetry lane for closed-loop agents (independent of console). */
+    extern void rtt_ctl_uart_hw_init(void);
+    extern void rtt_ctl_hw_write(const char *s);
+    rtt_ctl_uart_hw_init();
+    rtt_ctl_hw_write("[BOARD-INIT] uart7 hw lane up\r\n");
+#endif
+
     /* GPIO power pins moved to _sensor_power_init (INIT_PREV_EXPORT) —
      * DCache interference causes MODER writes at this early stage to be
      * lost when HAL_SPI_MspInit later does read-modify-write on the same
@@ -534,6 +546,13 @@ static void _idle_hook(void)
      * is temporarily starved (SPI burst with __disable_irq, etc.).
      * Redundant with SysTick feed but zero-cost when idle. */
     *(volatile uint32_t *)0x40003000UL = 0xAAAAU;
+
+    /* USB EP0 needs frequent service during enumeration; main/setup often
+     * busy-waits without calling usb_lld_poll_rtt(). Throttle idle polls. */
+    static uint8_t usb_idle_div;
+    if ((++usb_idle_div & 0x0F) == 0 && !usb_lld_is_configured_rtt()) {
+        usb_lld_poll_rtt();
+    }
 
     uint32_t now = DWT->CYCCNT;
     if (_idle_last_cyc != 0) {

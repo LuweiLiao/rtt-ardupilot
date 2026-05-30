@@ -79,6 +79,8 @@ private:
     static void _irq_trampoline(void *args);
     IRQState* _find_or_alloc_irq(uint8_t pin);
     bool _isr_flood_detected = false;
+    /* Public dispatch for EXTI IRQ handlers (called from extern "C") */
+    friend void _rtt_gpio_exti_dispatch(uint8_t line);
 };
 
 } // namespace RTT

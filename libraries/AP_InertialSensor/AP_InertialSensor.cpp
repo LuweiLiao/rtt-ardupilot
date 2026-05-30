@@ -871,6 +871,7 @@ void AP_InertialSensor::_start_backends()
     rtt_dbg_setup_stage = 671;
     detect_backends();
     rtt_dbg_setup_stage = 672;
+    rtt_dbg_setup_stage = 673; /* [RTT] after detect_backends + 1 */
 
     for (uint8_t i = 0; i < _backend_count; i++) {
         rtt_dbg_setup_stage = 680 + i;
@@ -882,14 +883,17 @@ void AP_InertialSensor::_start_backends()
         AP_HAL::panic("INS needs at least 1 gyro and 1 accel");
     }
 #endif
+    rtt_dbg_setup_stage = 674; /* [RTT] past panic check */
 
     // clear IDs for unused sensor instances
     for (uint8_t i=get_accel_count(); i<INS_MAX_INSTANCES; i++) {
         _accel_id(i).set(0);
     }
+    rtt_dbg_setup_stage = 675; /* [RTT] after accel_id clear */
     for (uint8_t i=get_gyro_count(); i<INS_MAX_INSTANCES; i++) {
         _gyro_id(i).set(0);
     }
+    rtt_dbg_setup_stage = 676; /* [RTT] after gyro_id clear */
 }
 
 /* Find the N instance of the backend that has already been successfully detected */

@@ -20,6 +20,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stm32f7xx.h>
+#include "rtt_dbg_bkp.h"
 
 extern const AP_HAL::HAL& hal;
 
@@ -45,6 +46,7 @@ void panic(const char *errormsg, ...)
     va_end(ap);
     rt_kprintf("%s\n", buf);
 
+    rtt_dbg_bkp_fault_save(RTT_DBG_BKP_FAULT_PANIC, 0U, 0U, 0U);
     __disable_irq();
     while (1) {
         /* spin with interrupts disabled — mirrors ChibiOS */
@@ -103,9 +105,28 @@ uint16_t micros16()
  * ---------------------------------------------------------------- */
 extern "C" {
 
+static void rtt_fault_handler_bkp(uint32_t fault_type)
+{
+    uint32_t lr;
+    __asm volatile ("mov %0, lr" : "=r" (lr));
+    const uint32_t use_psp = lr & 0x4U;
+    uint32_t sp;
+    if (use_psp) {
+        __asm volatile ("mrs %0, psp" : "=r" (sp));
+    } else {
+        __asm volatile ("mrs %0, msp" : "=r" (sp));
+    }
+    /* basic exception frame: R0,R1,R2,R3,R12,LR,PC,xPSR */
+    const uint32_t pc = *(volatile uint32_t *)(sp + 24U);
+    const uint32_t stk_lr = *(volatile uint32_t *)(sp + 20U);
+    const uint32_t xpsr = *(volatile uint32_t *)(sp + 28U);
+    rtt_dbg_bkp_fault_save(fault_type, pc, stk_lr, xpsr);
+}
+
 __attribute__((weak)) void BusFault_Handler(void)
 {
     rt_kprintf("\n*** BusFault ***\n");
+    rtt_fault_handler_bkp(RTT_DBG_BKP_FAULT_BUS);
     __disable_irq();
     while (1) {}
 }
@@ -113,6 +134,7 @@ __attribute__((weak)) void BusFault_Handler(void)
 __attribute__((weak)) void UsageFault_Handler(void)
 {
     rt_kprintf("\n*** UsageFault ***\n");
+    rtt_fault_handler_bkp(RTT_DBG_BKP_FAULT_USAGE);
     __disable_irq();
     while (1) {}
 }
@@ -120,6 +142,7 @@ __attribute__((weak)) void UsageFault_Handler(void)
 __attribute__((weak)) void MemManage_Handler(void)
 {
     rt_kprintf("\n*** MemManage ***\n");
+    rtt_fault_handler_bkp(RTT_DBG_BKP_FAULT_MEM);
     __disable_irq();
     while (1) {}
 }

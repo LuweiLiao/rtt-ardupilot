@@ -1,5 +1,27 @@
 # Decision Log
 
+## 2026-05-29: CherryUSB 升为 SERIAL0 生产默认；clean set 落 milestone
+- 原因：用户明确授权切默认并提交 clean set；CherryUSB 主仓显式 backend 已通过 L0/MAVFTP/Mission，且本轮受控全量回归（双 backend 构建 IRQ 唯一、L0 gate exit 0、MAVFTP 6/6、Mission PASS、600s soak fault=0/无 IWDG、3 轮全量参数 904×3）全部成立。
+- 决定：
+  - `rtt_usb_backend.py` 全量分支默认 `BACKEND_CHERRYUSB`；`RTT_USB_BACKEND=native` 仍可显式回退（native 路径保留）
+  - 提交 milestone `85c4f83b3e`（155 文件：CherryUSB vendor + clean set + 分层测试树相关）；**仅** staged clean set，工作区其余大改未纳入
+- 放弃方案：继续以 native 为默认、Cherry 仅显式；在未提交基线前直接宣称全量通过
+- 验证边界：本决策覆盖 USB 默认化 + L0/MAVFTP/Mission/soak/重连/多轮参数；**不**覆盖 RCOut/RCIn/S_rc_chain（用户暂缓）与整机飞行链
+- 方法论记录：soak 后须「关闭→重开→drain 5s」再 `param_request_list`；同连接在高吞吐流上直接拉全量参数会不完整（测试方法问题，非固件故障）
+
+## 2026-05-28: SERIAL0 USB 栈 — CherryUSB 主线、TinyUSB 备选、默认仍 native
+
+- 原因：并行 worktree 在 **USB-L0**（1209:5741、心跳 STANDBY、912 参数、30s 短流、OpenOCD 无 HardFault）上均曾通过；Cherry 路径与既有 RT-Thread/BSP Cherry 生态一致，且 clean worktree 证据完整。TinyUSB 在 `OPT_OS_NONE` 下需 irq 屏蔽等补丁，主仓最小合入曾现参数阶段断开，保留为备选而非默认。
+- 决定：
+  - **主线候选**：CherryUSB（`RTT_USB_BACKEND=cherryusb`，`hal_usb_cherryusb_*` + `thirdparty/cherryusb` + `cherryusb_board/`）
+  - **备选**：TinyUSB（`RTT_USB_BACKEND=tinyusb`，仅显式启用）
+  - **当前生产默认**：**native**（`hal_usb_lld_rtt.c`），直至 Cherry clean patch 入主仓并完成**主仓树** L0 重验
+  - 构建互斥：`rtt_usb_backend.py` + `scons_ardupilot_sources.py` + `hwdef/common/SConscript`，保证单一 `OTG_FS_IRQHandler`
+- 放弃方案：
+  - 将 TinyUSB worktree 整包覆盖主仓（审计已否决）
+  - 在未完成半合入清理前把 Cherry/TinyUSB 设为默认并宣称 April 全量回归仍成立
+- 验证边界：本决策仅覆盖 **L0 USB/MAVLink**；MAVFTP/Mission/传感器/IOMCU 等需 Cherry 默认化后单独回归
+
 ## 2026-04-03: 硬件问题采用 ChibiOS 对比法调试
 - 原因：SD 卡在 SDMMC2 上无响应，GPIO/clock 配置已确认正确，纯软件调试无法确定是固件初始化序列问题还是硬件层问题
 - 决定：当遇到无法仅通过软件调试解决的硬件问题时，刷 ChibiOS CUAV V5 固件做对比测试。ChibiOS 是 ArduPilot 在 STM32 上的参考实现，若 ChibiOS 下同样不工作则可排除固件问题，确认为硬件缺陷

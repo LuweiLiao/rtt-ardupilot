@@ -723,16 +723,7 @@ void AP_Vehicle::scheduler_delay_callback()
         GCS_SEND_MESSAGE(MSG_HEARTBEAT);
         GCS_SEND_MESSAGE(MSG_SYS_STATUS);
     }
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-    // On RTT, call_delay_cb() is invoked at the full main-loop rate
-    // (~400 Hz) from _main_loop_entry.  The standard 50 Hz gate would
-    // waste most of those opportunities.  Use a 4 ms gate (~250 Hz)
-    // instead so stream-rate intervals are serviced promptly while still
-    // leaving CPU budget for other work in the same callback.
-    if (tnow - last_50hz > 4) {
-#else
     if (tnow - last_50hz > 20) {
-#endif
         last_50hz = tnow;
 #if HAL_GCS_ENABLED
         gcs().update_receive();

@@ -53,6 +53,7 @@ bool AP_RAMTRON::init(void)
         DEV_PRINTF("No RAMTRON device\n");
         return false;
     }
+    dev->set_speed(AP_HAL::Device::SPEED_LOW);
 
     struct cypress_rdid {
         uint8_t manufacturer[6];
@@ -160,6 +161,7 @@ bool AP_RAMTRON::read(uint32_t offset, uint8_t *buf, uint32_t size)
          */
         {
             WITH_SEMAPHORE(dev->get_semaphore());
+            dev->set_speed(AP_HAL::Device::SPEED_LOW);
             dev->set_chip_select(true);
             send_offset(RAMTRON_READ, offset);
             dev->transfer(nullptr, 0, buf, size);
@@ -170,6 +172,7 @@ bool AP_RAMTRON::read(uint32_t offset, uint8_t *buf, uint32_t size)
 
         {
             WITH_SEMAPHORE(dev->get_semaphore());
+            dev->set_speed(AP_HAL::Device::SPEED_LOW);
             dev->set_chip_select(true);
             send_offset(RAMTRON_READ, offset);
             dev->transfer(nullptr, 0, buf, size);
@@ -199,6 +202,7 @@ bool AP_RAMTRON::write(uint32_t offset, const uint8_t *buf, uint32_t size)
     }
 
     WITH_SEMAPHORE(dev->get_semaphore());
+    dev->set_speed(AP_HAL::Device::SPEED_LOW);
 
     for (uint8_t r=0; r<RAMTRON_RETRIES; r++) {
         if (r != 0) {

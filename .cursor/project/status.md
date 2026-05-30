@@ -1,7 +1,144 @@
 # AP_HAL_RTT 当前状态
 
 > 基线：`CUAV v5` / `STM32F767` / `ArduCopter V4.7.0-dev on RT-Thread 5.3.0`
-> 最后更新：2026-04-08（SPI DMA SPE bit 修复 + 栈溢出修复 + 主循环慢调查）
+> 最后更新：2026-05-29（**CherryUSB 已设生产默认，milestone `85c4f83b3e`**；受控全量回归 PASS：双 backend 构建 IRQ 唯一 + L0 gate exit 0 + MAVFTP 6/6 + Mission PASS + 600s soak fault=0/无 IWDG + 3 轮全量参数 904×3；RCOut/RCIn/S_rc_chain 暂缓）
+
+## 全量回归基线（2026-05-29，CherryUSB 默认）
+
+> **边界**：以下建立在 milestone `85c4f83b3e`（CherryUSB 全量默认）。覆盖 USB/MAVLink L0、MAVFTP、Mission、长稳 soak、软重连、多轮参数；**不**覆盖 RCOut/RCIn/S_rc_chain（暂缓）、整机飞行链、物理 USB 拔插。
+
+- **USB 默认化**：`rtt_usb_backend.py` 全量默认 `cherryusb`；`RTT_USB_BACKEND=native` 显式回退保留；两 backend 全量 ArduCopter 构建 PASS，`OTG_FS_IRQHandler` 各自唯一（cherry `080e7050` / native `080e2670`）
+- **L0 gate**（`/tmp/cherryusb_main_l0_gate.sh --skip-build --skip-bl --json`）：**exit 0**；STANDBY(3)；**904/904** 参数；30s 流 1902 msg / 23 types；VTOR=`0x08008000`、CFSR/HFSR=0、IWDGRSTF=0
+- **MAVFTP**：`tests/test_mavftp.py` **6/6 PASS**（首轮即过）
+- **Mission**：`tests/test_mission_protocol.py` **PASS**（clear→upload 2→download→clear）
+- **Soak ≥10min**：600.1s、47880 msg、~80 msg/s、HEARTBEAT 1208、全程 STANDBY、`max_silence=0`、无掉线；soak 后 VTOR/CFSR/HFSR=0、IWDGRSTF=0
+- **USB 软重连**：3 轮（含 R3 重试）均 ~0.01s 恢复心跳；CDC 名恒为 `usb-APM_CUAV_V5_CDC_1_00001`→ttyACM1；3s 冷却即可；未做物理拔插
+- **多轮参数**：独立连接 + drain 5s 流程下 **904×3 PASS**（22–28s/轮）；**方法论**：soak 后同连接未 drain 直接拉参数会不完整（测试方法问题，非固件故障）
+
+## 分层驱动测试 — HAL / External / Subsystem 构建门禁（2026-05-29）
+
+> **边界**：本节证明首批已登记的 **D\*/E\*/S\*** `scons --test=` 固件**可链接、可构建**；其中 **D_uart_hal / D_spi_hal / D_i2c_hal / D_storage / E_sdcard** 另有 **2026-05-29 上板证据**（见下节）。**不**表示整机 CDC MAVLink L0、RC 链或未恢复 SPIDEV 的 MS5611/FRAM 已上板通过。
+
+- **manifest 自检（2026-05-29）**：旧 D/E 门禁 8 名已登记；非 RC 新增 9 名（`D_scheduler`、`D_analogin`、`D_usb_serial`、`E_imu`、`E_ms5611`、`E_fram`、`S_param_storage`、`S_sensors`、`S_mavlink_usb`）已登记并解析到 canonical test tree；`S_rc_chain` 未登记
+- **串行构建（2026-05-29）**：`D_uart_hal`、`D_spi_hal`、`D_i2c_hal`、`D_storage`、`D_rcoutput`、`D_rcinput`、`E_sdcard`、`E_wspi_flash` — **8/8 PASS**（约 27s，增量/缓存）
+- **非 RC 新增项统一复跑（2026-05-29）**：`D_scheduler`、`D_analogin`、`D_usb_serial`、`E_imu`、`E_ms5611`、`E_fram`、`S_param_storage`、`S_sensors`、`S_mavlink_usb` — **9/9 PASS**（构建）；**2026-05-29** cuav_v5 hwdef 恢复 `SPIDEV ms5611`/`ramtron` 后 **`D_spi_hal`/`E_imu`/`E_ms5611`/`E_fram`/`S_sensors` 串行构建 5/5 PASS**
+- **非 RC 低风险项上板（2026-05-29）**：`D_scheduler`、`D_analogin`、`S_param_storage`、`E_imu` — **4/4 PASS**；独立 test 固件烧录 `0x08008000`，UART7 见 `RESULT: PASS`，CFSR/HFSR 均为 0。边界：`D_analogin` 为 HAL API smoke（ch6 SCALED_V3V3，`test_printf` 仅 `%lu`/mV，非全通道 ADC 校准）；`S_param_storage` 不是完整 `AP_Param`；`E_imu` 不是 `AP_InertialSensor` 全栈
+- **实现形态（相对 2026-05-28 BUILD_ONLY）**：
+  - **D_uart_hal / D_spi_hal / D_i2c_hal / D_storage / D_rcoutput / D_rcinput**：`main.cpp` 调用对应 `AP_HAL` API（serial、SPIDevice、I2CDevice、Storage、RCOutput、RCInput）；**非**单步 `test_runner` 占位
+  - **D_scheduler / D_analogin**：真实 HAL smoke 已构建并上板通过；`D_scheduler` 验证 timer callback，`D_analogin` 验证 ch6 SCALED_V3V3 读数与 ADC 诊断
+  - **E_imu / E_ms5611 / E_fram**：芯片层 smoke 已构建并上板通过；`E_imu` 是 WHO_AM_I/PWR_MGMT_1 薄测，`E_ms5611` 是 PROM/CRC，`E_fram` 是 FM25V02A RDID + scratch RW；均非完整 INS/Baro/参数持久化全栈
+  - **S_param_storage / S_sensors / S_mavlink_usb**：首批非 RC 子系统 smoke 已构建；`S_param_storage` 非完整 `AP_Param`；`S_mavlink_usb` 为 HAL CDC + MAVLink HEARTBEAT（非 GCS 全栈）
+  - **E_sdcard**：POSIX `/APM` 挂载轮询 + 文件 RW smoke（无卡 → `TEST_FAIL`）
+  - **E_wspi_flash**：cuav_v5 运行时 **N/A**（hwdef 无 QUADSPI/WSPI）；构建 PASS 仅门禁
+- **已知限制（构建 ≠ 上板；上板项亦见各条边界）**：无 RX/loopback（UART）；无 MS5611/FRAM 在部分 D/E 范围；`D_storage` 当前 **RAM stub**（非 FRAM 持久）；`D_rcoutput` **未**验证 PWM 波形；`D_rcinput` 无 SBUS/PPM → 运行失败；`E_sdcard` 已验证 SD/FS/POSIX smoke，但不等于日志长稳或整机 MAVFTP 全回归；详见 `driver-validation-matrix.md`
+- **硬件状态（上板）**：**5/8** 已上板通过（`D_uart_hal`、`D_spi_hal`、`D_i2c_hal`、`D_storage`、`E_sdcard`）；`D_rcoutput`、`D_rcinput` **未上板**；`E_wspi_flash` @ cuav_v5 **N/A**；L3_uart/L4_spi 寄存器层 **未**在本轮重跑上板；`L7_cherryusb_cdc` 分层 USB echo 已上板通过
+- **新增上板状态**：`D_scheduler`、`D_analogin`、`S_param_storage`、`E_imu`、`E_ms5611`、`E_fram`、`S_sensors`、`D_usb_serial`、`S_mavlink_usb` 已上板通过；**`D_usb_serial`**：ACM `1209:5741` @921600 beacon+echo；**`S_mavlink_usb`**：同链路 + pymavlink HEARTBEAT msgid=0（sys=1 comp=1）；二者 CFSR/HFSR=0；**非**整机 L0/参数
+
+## 分层驱动测试 — Batch A 上板验收（2026-05-29）
+
+> **验证边界**：每项独立烧录 **test 固件** 至 `0x08008000`（非全量 ArduCopter）；判据为 UART7 **115200** 日志 + OpenOCD **CFSR/HFSR=0**。**不**包含 USB CDC MAVLink、参数下载、RX/loopback、MS5611/FRAM、PWM 波形、SBUS、SD 插卡或 WSPI。
+
+| `--test=` | 烧录 | UART7 关键日志 | Fault |
+|-----------|------|----------------|-------|
+| `D_uart_hal` | app @0x08008000 **Verified OK** | `[D_UART_HAL] RESULT: PASS`；`SERIAL6/UART7: write returned 24 bytes` | CFSR/HFSR **0** |
+| `D_spi_hal` | **Verified OK** | ICM20689 `read_registers(0x75) -> ok, whoami=0x98`；`[D_SPI_HAL] RESULT: PASS` | CFSR/HFSR **0** |
+| `D_i2c_hal` | **Verified OK** | IST8310 `wai=0x10`；`[D_I2C_HAL] RESULT: PASS` | CFSR/HFSR **0** |
+
+- **串口路径**：CH343 → `/dev/serial/by-id/usb-1a86_USB_Single_Serial_*`（→ ttyACM0），**115200**；复位后 pyserial 读 14–18s（纯 `cat` 易 0 字节）
+- **OpenOCD**：`program ... verify reset` 后 **须 exit**（`pgrep openocd` 为空）；`resume` 可能 warn target not halted（exit=1），不阻断 Verified OK
+- **未覆盖**：`D_uart_hal` 无 RX/loopback；`D_spi_hal` 无 MS5611/DMA；`D_i2c_hal` 无 `AP_Compass` 全栈
+
+## 分层驱动测试 — Storage / SD / USB 上板验收（2026-05-29）
+
+> **验证边界**：以下均为独立 test 固件烧录至 `0x08008000`，不是全量 ArduCopter；OpenOCD `resume` 偶发 `target not halted` 但烧录 `Verified OK` 且检查后无残留进程。
+
+| `--test=` | 烧录/运行证据 | Fault | 边界 |
+|-----------|----------------|-------|------|
+| `D_storage` | SCons PASS；UART7 `=== RTT LAYERED TEST: D_STORAGE ===`、`readback bytes: a5 5a c3 3c 96 69 0f f0`、`[D_STORAGE] RESULT: PASS` | CFSR/HFSR **0** | HAL Storage tail-8B scratch RW+restore；cuav_v5 当前为 RAM stub，**非 FRAM 持久化**；不测 SD |
+| `E_sdcard` | 首轮失败暴露 SD 根因：SDIO timeout + `dfs_mount("sd0","/sdcard","elm") failed` + `/APM` 不存在；修复后 SCons PASS，UART7 `[sd] mounted sd on / ok`、`mount ok: stage=10 result=0`、`=== [E_SDCARD] RESULT: PASS ===`（约 615ms） | CFSR/HFSR **0** | 已验证 microSD 插卡场景下 DFS/ELM-FAT/POSIX `/APM` 文件写读删；不等于长稳 logging |
+| `L7_cherryusb_cdc` | SCons PASS；USB 枚举 `1209:5741 Generic L7 CherryUSB`；by-id `usb-PogoAPM_L7_CherryUSB_0001` → ttyACM1；pyserial 写 `HELLO_L7\r\n` 并收到同样回显，`ECHO_OK True` | CFSR/HFSR **0** | CherryUSB CDC echo 分层门禁；不等于全量 MAVLink L0、参数多轮或 USB 重连长稳 |
+
+### E_sdcard 根因修复事实
+
+- 根因链：`rt_hw_sdio_init` 在卡供电 PG7 之前运行，且 `board/ports/sdcard_port.c` 额外重复 `rt_hw_sdio_init()` 并挂载 `/sdcard`，与 `rt_board_init.c` 的根挂载 `/` + `/APM` 语义冲突。
+- 修复：`rt_board_init.c` 使用 `INIT_PREV_EXPORT` 提前 `VDD_3V3_SD_CARD_EN`，只保留后台 `sdmnt` 线程挂载 `sd`/`sd0` 到 `/` 并创建 `/APM/{LOGS,TERRAIN,STORAGE,scripts}`；`sdcard_port.c` 保留为空兼容单元，避免重复 init/mount。
+- 仍可观察：启动早期可能有短暂 `[E/drv.sdio] wait completed timeout`，只要随后 `stage=10 result=0` 并 `E_sdcard` PASS，不作为失败。
+
+## 构建与 Cherry 冒烟门禁（2026-05-28，composer-2.5 门禁跑通）
+
+> **边界**：本节只证明**历史遗留清理后**，分层测试构建、native/cherryusb 双 backend 全量编译与 CherryUSB 显式 backend 硬件冒烟**可复现**。**不**表示可进入全量验证（长稳 soak、USB 重连/多轮参数、Cherry 生产默认化、工作区大改拆分提交等仍见 `open-issues.md`）。
+
+- **分层模块测试构建/上板（`libraries/AP_HAL_RTT/test/`，`scons --target=cuav_v5 --test=`）**：
+  - `L0_system` **PASS**（ROM ~110KB）
+  - `L4_spi` **PASS**（首次与 `L7` 并行 scons 时链接失败，单独重跑 **PASS**）
+  - `L7_cherryusb_cdc` **构建 PASS + 上板 PASS**（2026-05-29；`1209:5741 Generic L7 CherryUSB` + ttyACM1 echo OK；CherryUSB 分层门禁固件）
+- **全量 ArduCopter 构建**：
+  - 默认 **native**（未设 `RTT_USB_BACKEND`）：`python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)` **PASS**（ROM ~83.5%）
+  - 显式 **cherryusb**：`RTT_USB_BACKEND=cherryusb python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)` **PASS**（ROM ~83.9%；`OTG_FS_IRQHandler` **唯一**）
+- **CherryUSB 硬件回归（本机，未改默认 backend、未烧录 gate 外新镜像）**：
+  - `/tmp/cherryusb_main_l0_gate.sh --skip-build --skip-flash --skip-bl --json` → **exit 0**（STANDBY、904/904 参数、30s 2260 msg / 22 types、post-L0 fault 清零）
+  - `tests/test_mavftp.py` → **6/6 PASS**（首轮 4/6 后 CDC 瞬断，间隔重试通过）
+  - `tests/test_mission_protocol.py` → **PASS**
+
+## USB 栈候选（2026-05-28，L0 + MAVFTP）
+
+> **验证边界**：本节已覆盖 **USB CDC 枚举 + MAVLink 心跳/参数/短流 + OpenOCD 无 HardFault**（L0）、**MAVFTP 综合回归** 与 **Mission protocol smoke**。**不**代表 USB 重连、多轮参数下载、长稳 soak 或 Cherry 默认化已完成。
+
+### 生产默认（主仓树，已长期验证）
+
+- 全量 ArduCopter 默认 **`RTT_USB_BACKEND` 未设 → `native`**：`hal_usb_lld_rtt.c` + `usb_cdc_rtt.c`，VID/PID **1209:5741**
+- 下列 April 基线（参数 941/943、MAVFTP 6/6、Mission smoke、USB 重连等）均建立在 **native 栈** 上，**不能**自动外推到 Cherry 未默认化或未跑全功能回归前的状态
+
+### CherryUSB（主线候选，主仓显式 backend L0 已通过）
+
+- 构建：须 **`RTT_USB_BACKEND=cherryusb` 显式指定**（默认仍为 native，未切换生产默认）
+- **主仓 L0 已通过（2026-05-28，本机构建+烧录+gate）**：
+  - 三类补丁合仓：CherryUSB RX **8×64B ring**（ISR enqueue / poll drain）；UARTDriver 背压**仅真断开**才 `_writebuf.clear()`；SPIDevice **每总线 `rt_mutex`**（替代长段 `__disable_irq`）
+  - 并行构建：`Tools/scripts/rtt_ar_archive.py` + `TempFileMunge`（`MAXLINELENGTH=8192`）修复 ARG_MAX；`RTT_USB_BACKEND=cherryusb python3 -m SCons --target=cuav-v5 -j8` **PASS**；ELF **唯一** `OTG_FS_IRQHandler`
+  - `lsusb` **1209:5741**；by-id **`usb-APM_CUAV_V5_CDC_1_*`**（与历史 `usb-ArduPilot_*` 别名并存，gate 脚本已兼容）
+  - MAVLink：**HEARTBEAT → STANDBY(3)**、`FORMAT_VERSION=120.0`、**904/904** 参数、30s 流 **1798 msg / 22 types / 60 HEARTBEAT**
+  - Post-L0 OpenOCD：**VTOR=0x08008000**、**CFSR/HFSR=0**、**RCC_CSR IWDGRSTF=0**
+  - Gate：`POGO_APM_ROOT=... RTT_USB_BACKEND=cherryusb /tmp/cherryusb_main_l0_gate.sh --skip-build --skip-bl --json --wait 30` → **exit 0**
+- **诊断计数（不阻断 L0）**：`rtt_uart_usb_diag_write_fails` 观测值约 **20593** — 只读评估为 **TX 背压诊断计数**，非功能失败；列入长稳/性能观察（见 `open-issues.md`）
+- **主仓 MAVFTP 已通过（2026-05-28，CherryUSB 显式 backend）**：
+  - 根因修复：RTT `stat()` ABI mismatch 曾导致 MAVFTP Create 本地文件路径栈破坏并引发 CDC 重枚举/HardFault；已通过 `ap_rtt_posix_stat()` C 兼容层修复
+  - 回归命令：`MAVFTP_PORT=/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00 python3 tests/test_mavftp.py` → **6/6 PASS**
+  - 覆盖项：`ListDirectory /`、`ListDirectory /APM`、`@PARAM/param.pck`、真实文件 `Create/Write/OpenRO/Read/Delete`、`ResetSessions`、post-FTP 稳定性
+  - Create-only 复核：唯一文件名 `/APM/statfix_213003.tmp` Create **Ack**，post HEARTBEAT **STANDBY(3)**；随后 Remove **Ack**
+  - Post-MAVFTP OpenOCD：`CFSR/HFSR=0`，HardFault 记录为 0；固定文件名 `Nack err=2 errno=254` 可由文件残留/状态解释，不再代表 Create 触发崩溃
+- **主仓 Mission protocol smoke 已通过（2026-05-28，CherryUSB 显式 backend）**：
+  - 命令：`python3 tests/test_mission_protocol.py --port /dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00 --baud 115200`
+  - 结果：`MISSION_CLEAR_ALL -> MISSION_COUNT(2) -> MISSION_REQUEST loop [0,1] -> MISSION_ACK -> REQUEST_LIST/download -> final CLEAR_ALL` 全部 PASS
+- 历史 worktree `cherryusb-85f5a6da` 证据仍有效，但**当前权威基线为主仓树上述 gate**
+
+### TinyUSB（备选栈）
+
+- worktree `tinyusb-l0-097421d9` 在 **并发补丁**（`rt_hw_interrupt_disable` 串行化 poll/send；`tud_mounted` 门控；send 内禁止 `tud_task`/`mdelay`）后，**同 gate L0 已通过**（912 参数、30s 流、无 fault）
+- **已知问题（主仓最小合入路径）**：`CFG_TUSB_OS=OPT_OS_NONE` 下 `usb_lld_send_rtt` 与 `OTG_FS_IRQHandler` 重入 → 参数阶段 `deadbeef` / USB 断开（约 12s）；补丁可缓解，长期可考虑 `OPT_OS_RTTHREAD` + osal
+- 父代理裁决：**CherryUSB 主线、TinyUSB 备选**；主仓默认仍 **native**
+
+### USB 构建制品（历史遗留清理后，2026-05-28）
+
+- **已 staged / 工作区就位**：`Tools/scripts/rtt_usb_backend.py`、`thirdparty/cherryusb/`、`cherryusb_board/`、`hal_usb_cherryusb_shim.c`、`libraries/AP_HAL_RTT/test/`（L0–L7）、`archive/stray-bsp/`
+- **已消除**：HAL 根下误拷贝 Cherry 五件套（`class/common/core/osal/port/cherryusb`）**不在磁盘**；`libraries/AP_HAL_RTT/SConscript` **不存在**（inventory 中 cherryusb group 断点已过时）
+- **生产默认仍为 native**；Cherry 须 `RTT_USB_BACKEND=cherryusb` 显式指定 — 默认化决策未做
+
+## 历史遗留清理（2026-05-28，子任务 2 已实施）
+
+> **验证边界**：以下经 **Git 索引整理 + 双 backend 全量 scons PASS**（本子任务未重跑构建；证据来自子任务 2 构建输出）。**不**包含全量验证或硬件新回归。
+
+- **旧 BSP / `.bak` 索引**：`git rm` 已清除 index 中 `rtt_bsp_fmuv2`、`rtt_bsp_pixhawk6c_mini` 与三份 `*.bak`（工作区文件此前已删）
+- **归档**：`libraries/AP_HAL_RTT/archive/stray-bsp/` 已 **staged**（pixhawk6c_mini / fmuv2 整树）；**CUAV v5 生产路径不读此目录**（仍走 `hwdef/common`）
+- **USB clean set**：`rtt_usb_backend.py`、`thirdparty/cherryusb`、`cherryusb_board`、`hal_usb_cherryusb_shim.c`、`test/` 等已 **staged**（入库边界收口，待用户要求时 commit）
+- **旧路径文档**：`board-matrix.md`、`command-catalog.md`、`Tools/ardupilotwaf/rtt.py` docstring 已改为 `hwdef/common` → `build/rtt_deploy/cuav_v5`（不再写 `rtt_bsp_cuav_v5`）
+- **SPI 双份 LLD**：`scons_ardupilot_sources.py` 已排除根级 `hal_spi_lld.c` / `hal_spi_lld_rtt.c`；生产 SPI 走 `hwdef/common` 的 `drv_spi_lld` + CMSIS
+- **双构建 PASS**（子任务 2）：默认 native 与 `RTT_USB_BACKEND=cherryusb` 的 `python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)` 均通过；ELF 无 `rtt_spi_lld` / `spi_lld_*_rtt` 符号
+
+## AP_HAL_RTT 目录布局（2026-05-28）
+
+- **CUAV v5 scons 基线**不依赖 HAL 根目录下的 `rtt_bsp_*` 整树；部署走 `hwdef/common` + `hwdef/cuav_v5`（`Tools/scripts/rtt_bsp_deploy.py` hwdef 模式）。
+- 旧整树 BSP **`rtt_bsp_pixhawk6c_mini`**、**`rtt_bsp_fmuv2`** 已移至 `libraries/AP_HAL_RTT/archive/stray-bsp/`；脚本（legacy pixhawk deploy、waf `rtt.py`）指向归档路径。
+- **归档 ≠ 已验证**：pixhawk6c_mini / fmuv2 未在当前 HAL/USB 栈上完成实机回归；迁移到 `hwdef/common` 仍为开放项。
 
 ## 当前稳定成立的事实
 
@@ -27,7 +164,7 @@
 - I2C3 软件驱动已初始化，`IST8310`（磁力计）已识别
 - 已观测到 23 种 MAVLink 消息类型（HEARTBEAT、ATTITUDE、RAW_IMU、SYS_STATUS 等）
 - **MAVLink 参数下载**：**943 全部完成**（FTP 协议，快速）
-- **MAVFTP 综合回归通过**：`tests/test_mavftp.py` 在 Ubuntu 物理机 `/dev/ttyACM1` 上 **6/6 PASS**（根目录列举、`@PARAM/param.pck`、真实文件 Create/Write/OpenRO/Read/Delete、ResetSessions、稳定性）
+- **MAVFTP 综合回归通过**：`tests/test_mavftp.py` 在 Ubuntu 物理机 `/dev/ttyACM1` / CherryUSB by-id 上 **6/6 PASS**（根目录列举、`@PARAM/param.pck`、真实文件 Create/Write/OpenRO/Read/Delete、ResetSessions、稳定性）
 - **Mission 基础协议 smoke 已通过**：`tests/test_mission_protocol.py` 已在真实硬件上完成 `MISSION_CLEAR_ALL -> MISSION_COUNT -> REQUEST/ITEM -> MISSION_ACK -> REQUEST_LIST -> 下载 -> CLEAR_ALL` 闭环
 - 主循环频率：**~400Hz 稳定运行**（DeviceBus 重构 + 10kHz SysTick + OS sleep 优化后）
 - **CPU 真实利用率 ~1%**（DWT idle hook 测量），ArduPilot `load_average()` 已改用 DWT 数据源
@@ -63,7 +200,7 @@
 - **构建链路**：支持 `git clone --recursive` 后一条命令全量编译；`.gitmodules` 中 rt-thread 已指向 pogo fork；`rtt_bsp_deploy.py` 自动下载 packages；`SConscript` 自动创建 `ap_config.h`
 - **newlib polyfill**：`rtt_libc_compat.c` 提供 `asprintf` / `vasprintf` / `memmem`；`hwdef.h` 中含对应 `extern "C"` 声明
 - **LL/寄存器级 BSP 驱动层**（`board/drivers_ll/`）：已实现 6 个驱动（clock/common/gpio/usart/spi/flash），均使用 LL 库或直接寄存器操作，不依赖 STM32 HAL
-- **分层模块测试体系**（`tests/`）：7 个独立测试固件（L0 boot, L1 gpio, L2 uart/spi/flash, L3 integration, L5 imu），通过 `scons --target=cuav_v5 --test=<name>` 构建，烧录到 0x08000000，GDB 可读全局结果变量
+- **分层模块测试体系**（`libraries/AP_HAL_RTT/test/`）：bring-up L*、USB L7、**D\*/E\*** 已登记 manifest；**2026-05-29** 8 个 D/E **构建 PASS**；`D_uart_hal`/`D_spi_hal`/`D_i2c_hal`/`D_storage`/`E_sdcard` **已上板 PASS**，`L7_cherryusb_cdc` 分层 CDC echo **已上板 PASS**（见 matrix/status 验收表）；RCOut/RCIn 仍未上板
 - **BMI055 IMU 验证**：通过 LL SPI1（6.75MHz, Mode 3）读取 BMI055 加速度计（ID=0xFA, Z≈1g）和陀螺仪（ID=0x0F），polled 采样率 ~27kHz；**关键经验**：SPI1 上 5 个传感器共线，必须将所有 CS 拉高
 
 ## 线程模型（重构后）
@@ -219,7 +356,7 @@
 
 ## 当前活跃待验证项（2026-04-04）
 
-- ~~**SD 卡 SDMMC1 已验证通过**~~：rtt_sd_mount_stage=10, rtt_sd_mount_result=0（成功挂载）
+- ~~**SD 卡 SDMMC1 已验证通过**~~：rtt_sd_mount_stage=10, rtt_sd_mount_result=0（成功挂载）；2026-05-29 `E_sdcard` 分层测试复核 `/APM` POSIX 写读删 PASS，但整机 logging 长稳仍需单独验证
 - **RGB LED（PH10/11/12）**：**已修复** 2026-04-04。三个问题：(1) `HAL_GPIO_LED_ON=1` 应为 `0`（active-low open-drain，ChibiOS 默认=0）；(2) OTYPER 未设 open-drain（ChibiOS hwdef 用 OPENDRAIN）；(3) rt_pin_write 不可靠 → 改用 BSRR 直写。修复后 ODR 在 0xFFFF↔0xF3FF 间切换，黄色闪烁（pre-arm failing）已确认。LED 是 GPIO 驱动，不是 IS31FL3195 I2C。
 - **RCInput SBUS 验证**：SBUS 串口协议路径已实现但未实机验证
 - **Servo 输出验证**：PWM TIM1(50Hz)/TIM4(100Hz) 已运行，CCR=0（未解锁状态正常），需通过 GCS 命令实际驱动电调/舵机验证
