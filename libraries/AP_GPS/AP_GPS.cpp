@@ -290,14 +290,6 @@ AP_GPS::AP_GPS()
 
     AP_Param::setup_object_defaults(this, var_info);
 
-    /* Ensure all driver pointers are zero-initialized to prevent
-     * dereferencing uninitialized (garbage) pointers in calc_state etc.
-     * On platforms like RTT where BSS may not be reliably zeroed before
-     * static constructor calls, this avoids HardFault with bogus this=0x33. */
-    for (uint8_t i = 0; i < GPS_MAX_INSTANCES; i++) {
-        drivers[i] = nullptr;
-    }
-
     if (_singleton != nullptr) {
         AP_HAL::panic("AP_GPS must be singleton");
     }
@@ -363,14 +355,7 @@ void AP_GPS::init()
 
     // create the blended instance if appropriate:
 #if AP_GPS_BLENDED_ENABLED
-    // Use static singleton to avoid heap corruption issues on RTT.
-    // Heap allocator on some RTOS ports may return corrupted pointers
-    // (e.g. 0x33) when heap metadata is overwritten by stack overflow
-    // or buffer overrun elsewhere.  A static object bypasses this.
-    static AP_GPS_Blended s_blended_gps(*this, params[GPS_BLENDED_INSTANCE],
-                                         state[GPS_BLENDED_INSTANCE],
-                                         timing[GPS_BLENDED_INSTANCE]);
-    drivers[GPS_BLENDED_INSTANCE] = &s_blended_gps;
+    drivers[GPS_BLENDED_INSTANCE] = NEW_NOTHROW AP_GPS_Blended(*this, params[GPS_BLENDED_INSTANCE], state[GPS_BLENDED_INSTANCE], timing[GPS_BLENDED_INSTANCE]);
 #endif
 }
 
@@ -1114,30 +1099,13 @@ void AP_GPS::update_primary(void)
     */
     const bool using_moving_base = is_rtk_base(0) || is_rtk_base(1);
     if ((GPSAutoSwitch)_auto_switch.get() == GPSAutoSwitch::BLEND && !using_moving_base) {
-        // Safety: check blended pointer validity before dereferencing
-        if (drivers[GPS_BLENDED_INSTANCE] != nullptr &&
-            (uint32_t)drivers[GPS_BLENDED_INSTANCE] >= 0x20000000U) {
-            _output_is_blended = ((AP_GPS_Blended*)drivers[GPS_BLENDED_INSTANCE])->calc_weights();
-        } else {
-            _output_is_blended = false;
-        }
+        _output_is_blended = ((AP_GPS_Blended*)drivers[GPS_BLENDED_INSTANCE])->calc_weights();
     } else {
         _output_is_blended = false;
-        if (drivers[GPS_BLENDED_INSTANCE] != nullptr &&
-            (uint32_t)drivers[GPS_BLENDED_INSTANCE] >= 0x20000000U) {
-            ((AP_GPS_Blended*)drivers[GPS_BLENDED_INSTANCE])->zero_health_counter();
-        }
+        ((AP_GPS_Blended*)drivers[GPS_BLENDED_INSTANCE])->zero_health_counter();
     }
 
     if (_output_is_blended) {
-        // Safety: ensure blended driver pointer is valid (in SRAM range)
-        // before dereferencing.  Heap corruption on some RTOS ports may
-        // leave drivers[GPS_BLENDED_INSTANCE] as a garbage pointer (0x33).
-        if (drivers[GPS_BLENDED_INSTANCE] == nullptr ||
-            (uint32_t)drivers[GPS_BLENDED_INSTANCE] < 0x20000000U) {
-            _output_is_blended = false;
-            return;
-        }
         // Use the weighting to calculate blended GPS states
         ((AP_GPS_Blended*)drivers[GPS_BLENDED_INSTANCE])->calc_state();
         // set primary to the virtual instance
@@ -1741,10 +1709,6 @@ bool AP_GPS::get_lag(uint8_t instance, float &lag_sec) const
 #if AP_GPS_BLENDED_ENABLED
     // return lag of blended GPS
     if (instance == GPS_BLENDED_INSTANCE) {
-        if (drivers[instance] == nullptr ||
-            (uint32_t)drivers[instance] < 0x20000000U) {
-            return false;
-        }
         return drivers[instance]->get_lag(lag_sec);
     }
 #endif
