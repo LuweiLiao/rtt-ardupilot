@@ -330,12 +330,7 @@ void AP_Baro::calibrate(bool save)
         do {
             update();
             if (AP_HAL::millis() - tstart > 500) {
-#ifdef HAL_BARO_ALLOW_INIT_NO_BARO
-                GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "Baro: unable to calibrate, skipping");
-                return;
-#else
                 AP_BoardConfig::config_error("Baro: unable to calibrate");
-#endif
             }
             hal.scheduler->delay(10);
         } while (!healthy());
@@ -352,12 +347,7 @@ void AP_Baro::calibrate(bool save)
         do {
             update();
             if (AP_HAL::millis() - tstart > 500) {
-#ifdef HAL_BARO_ALLOW_INIT_NO_BARO
-                GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "Baro: unable to calibrate, skipping");
-                return;
-#else
                 AP_BoardConfig::config_error("Baro: unable to calibrate");
-#endif
             }
         } while (!healthy());
         for (uint8_t i=0; i<_num_sensors; i++) {
@@ -392,11 +382,7 @@ void AP_Baro::calibrate(bool save)
     if (num_calibrated) {
         return;
     }
-#ifdef HAL_BARO_ALLOW_INIT_NO_BARO
-    GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "Baro: all sensors uncalibrated");
-#else
     AP_BoardConfig::config_error("Baro: all sensors uncalibrated");
-#endif
 }
 
 /*
@@ -693,9 +679,7 @@ void AP_Baro::init(void)
     }
 #endif
     if (_num_drivers == 0 || _num_sensors == 0 || drivers[0] == nullptr) {
-        // RTT bring-up: don't fatal on missing baro
-        DEV_PRINTF("no barometer driver found (num_drivers=%u num_sensors=%u)\n",
-                   (unsigned)_num_drivers, (unsigned)_num_sensors);
+        AP_BoardConfig::config_error("Baro: unable to initialise driver");
     }
 #endif
 #ifdef HAL_BUILD_AP_PERIPH
