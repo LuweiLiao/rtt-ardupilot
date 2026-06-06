@@ -101,13 +101,11 @@ static RTT::Flash flashDriver;
 static RTT::DSP dspDriver;
 #endif
 #if HAL_WITH_IO_MCU
-// IOMCU UART — maps to HAL_UART_IOMCU_IDX=7 (UART8)
-// This driver is NOT in the HAL serial array, so Scheduler must tick it
-// separately via get_rtt_iomcu_uart().
-static RTT::UARTDriver ioUartDriver(HAL_UART_IOMCU_IDX);
-AP_IOMCU iomcu(ioUartDriver);
+// IOMCU UART mirrors ChibiOS: uart_io is the regular serial8Driver (UART8),
+// not a second driver instance with the same HAL index.
+AP_IOMCU iomcu(serial8Driver);
 
-RTT::UARTDriver *get_rtt_iomcu_uart(void) { return &ioUartDriver; }
+RTT::UARTDriver *get_rtt_iomcu_uart(void) { return nullptr; }
 #endif
 #if AP_SIM_ENABLED && CONFIG_HAL_BOARD != HAL_BOARD_SITL
 static AP_HAL::SIMState xsimstate;
