@@ -18,6 +18,7 @@
 #define RTT_UART_MAX_DRIVERS 10
 #define RTT_UART_RX_BOUNCE_SIZE 512
 #define RTT_UART_TX_BOUNCE_SIZE 512
+#define RTT_UART_RX_DMA_BUF_SIZE 2048
 
 namespace RTT
 {
@@ -112,9 +113,20 @@ private:
     /* DMA state tracking */
     bool _tx_dma_active{false};
     bool _rx_dma_active{false};
+#if defined(SOC_SERIES_STM32F7)
+    DMA_Stream_TypeDef *_rx_dma_stream{nullptr};
+#endif
+    uint8_t *_rx_dma_buf{nullptr};
+    uint16_t _rx_dma_buf_size{0};
+    uint16_t _rx_dma_tail{0};
 
     void _drain_rx_to_readbuf();
     void _drain_writebuf_to_dev();
+#if defined(SOC_SERIES_STM32F7)
+    bool _start_iomcu_rx_dma();
+    void _stop_rx_dma();
+    void _drain_rx_dma_to_readbuf();
+#endif
 
     static UARTDriver *_drivers[RTT_UART_MAX_DRIVERS];
 };

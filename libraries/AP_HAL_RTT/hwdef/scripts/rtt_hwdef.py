@@ -389,17 +389,27 @@ class RTTHWDef(HWDef):
 
         # IOMCU UART appended as last serial port
         iomcu_uart_num = None
+        iomcu_idx = None
         if has_iomcu:
             iomcu_uart_name = self.config['IOMCU_UART'][0]
             m = re.search(r'(\d+)', iomcu_uart_name)
             if m:
                 iomcu_uart_num = m.group(1)
+                iomcu_idx = len(serial_order)
                 device_names.append('"uart%s"' % iomcu_uart_num)
             else:
                 self.error("IOMCU_UART '%s' has no UART number" % iomcu_uart_name)
 
         total_serial = len(device_names)
         f.write('#define SERIAL_PORT_COUNT %d\n' % total_serial)
+        for i in range(total_serial):
+            f.write('#define HAL_HAVE_SERIAL%u 1\n' % i)
+            if has_iomcu and i == iomcu_idx:
+                f.write('#define HAL_HAVE_SERIAL%u_PARAMS 0\n' % i)
+            else:
+                f.write('#define HAL_HAVE_SERIAL%u_PARAMS 1\n' % i)
+        f.write('#define HAL_NUM_SERIAL_PORTS %d\n' % len(serial_order))
+        f.write('#define HAL_UART_NUM_SERIAL_PORTS %d\n' % total_serial)
 
         if serial_order:
             for i, name in enumerate(serial_order):
@@ -417,7 +427,6 @@ class RTTHWDef(HWDef):
 
         # IOMCU defines
         if has_iomcu and iomcu_uart_num is not None:
-            iomcu_idx = len(serial_order)  # appended after regular serial ports
             f.write('#define HAL_UART_IOMCU_IDX %u\n' % iomcu_idx)
             f.write('#define HAL_WITH_IO_MCU 1\n')
             f.write('#define HAL_HAVE_SERVO_VOLTAGE 1\n')

@@ -206,7 +206,7 @@ static const uart_dma_info uart_dma_rx_info[] = {
     {0, 0, 0},                    /* 5 = UART5:  not used on CUAV V5 */
     {0x40026400UL, 1, 5},         /* 6 = USART6: DMA2 S1 Ch5 */
     {0x40026000UL, 0, 5},         /* 7 = UART7:  DMA1 S0 Ch5 */
-    {0x40026000UL, 0, 5},         /* 8 = UART8:  DMA1 S0 Ch5 (shared with UART7) */
+    {0x40026000UL, 6, 5},         /* 8 = UART8:  DMA1 S6 Ch5 (IOMCU RX, matches ChibiOS CUAV V5) */
 };
 
 /* DMA-safe bounce buffers (64 bytes each, 4-byte aligned for DMA access) */
@@ -231,6 +231,55 @@ static inline volatile uint32_t *dma_isr_reg(uint32_t dma_base, uint8_t stream)
 static inline volatile uint32_t *dma_ifcr_reg(uint32_t dma_base, uint8_t stream)
 {
     return (volatile uint32_t *)(dma_base + ((stream < 4) ? 0x08UL : 0x0CUL));
+}
+
+static inline DMA_Stream_TypeDef *dma_stream_from_info(const uart_dma_info &info)
+{
+    if (info.dma_base == 0U) {
+        return nullptr;
+    }
+    return (DMA_Stream_TypeDef *)(info.dma_base + 0x10UL + info.stream * 0x18UL);
+}
+
+static inline uint32_t dma_all_iflags_bit(uint8_t stream)
+{
+    static const uint32_t stream_flags[4] = {
+        0x0000003DUL, /* stream 0/4: FE,DME,TE,HT,TC */
+        0x00000F40UL, /* stream 1/5 */
+        0x003D0000UL, /* stream 2/6 */
+        0x0F400000UL, /* stream 3/7 */
+    };
+    return stream_flags[stream & 3U];
+}
+
+static inline uint32_t dma_error_iflags_bit(uint8_t stream)
+{
+    static const uint32_t stream_flags[4] = {
+        0x0000000DUL, /* stream 0/4: FE,DME,TE */
+        0x00000340UL, /* stream 1/5 */
+        0x000D0000UL, /* stream 2/6 */
+        0x03400000UL, /* stream 3/7 */
+    };
+    return stream_flags[stream & 3U];
+}
+
+static inline uint32_t dma_irq_status(uint32_t dma_base, uint8_t stream)
+{
+    volatile uint32_t *isr = dma_isr_reg(dma_base, stream);
+    return *isr & dma_all_iflags_bit(stream);
+}
+
+static inline void dma_clear_all_iflags(uint32_t dma_base, uint8_t stream)
+{
+    volatile uint32_t *ifcr = dma_ifcr_reg(dma_base, stream);
+    *ifcr = dma_all_iflags_bit(stream);
+}
+
+static inline void uart_clear_rx_flags(USART_TypeDef *uart)
+{
+    const uint32_t clear_flags = USART_ICR_ORECF | USART_ICR_NCF |
+        USART_ICR_FECF | USART_ICR_PECF | USART_ICR_IDLECF;
+    uart->ICR = clear_flags;
 }
 
 /* Local DMA stream control register bit defines (in case CMSIS lacks them) */
@@ -336,6 +385,11 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
                     uint32_t pclk = uart_pclk(_uart_hw);
                     _uart_hw->BRR = uart_brr_value(pclk, baud);
                 }
+#ifdef HAL_UART_IOMCU_IDX
+                if (_port_num == HAL_UART_IOMCU_IDX && _uart_hw == UART8 && !_rx_dma_active) {
+                    (void)_start_iomcu_rx_dma();
+                }
+#endif
             }
 #endif
         }
@@ -434,6 +488,12 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
         }
     }
 
+#ifdef HAL_UART_IOMCU_IDX
+    if (_port_num == HAL_UART_IOMCU_IDX && _uart_hw == UART8) {
+        (void)_start_iomcu_rx_dma();
+    }
+#endif
+
     _initialized = true;
 
     /* If this port is the RTT console device, disable console output */
@@ -475,6 +535,9 @@ void UARTDriver::_end()
     } else {
         /* UART path: disable USART via CMSIS */
 #if defined(SOC_SERIES_STM32F7)
+        if (_rx_dma_active) {
+            _stop_rx_dma();
+        }
         if (_uart_hw != nullptr) {
             _uart_hw->CR1 &= ~(USART_CR1_UE | USART_CR1_RE | USART_CR1_TE);
             _uart_hw = nullptr;
@@ -494,6 +557,16 @@ void UARTDriver::_flush()
     _drain_writebuf_to_dev();
 }
 
+extern volatile uint32_t rtt_uart_dbg_rx_dma_starts;
+extern volatile uint32_t rtt_uart_dbg_rx_dma_start_fail;
+extern volatile uint32_t rtt_uart_dbg_rx_dma_drains;
+extern volatile uint32_t rtt_uart_dbg_rx_dma_bytes;
+extern volatile uint32_t rtt_uart_dbg_rx_dma_drops;
+extern volatile uint32_t rtt_uart_dbg_rx_dma_errors;
+extern volatile uint32_t rtt_uart_dbg_rx_dma_head;
+extern volatile uint32_t rtt_uart_dbg_rx_dma_tail;
+extern volatile uint32_t rtt_uart_dbg_rx_dma_ndtr;
+
 uint32_t UARTDriver::_available()
 {
     if (!_initialized) {
@@ -505,6 +578,177 @@ uint32_t UARTDriver::_available()
     _drain_rx_to_readbuf();
     return _readbuf.available();
 }
+
+#if defined(SOC_SERIES_STM32F7)
+bool UARTDriver::_start_iomcu_rx_dma()
+{
+    if (_uart_hw != UART8) {
+        return false;
+    }
+    if (_rx_dma_active) {
+        return true;
+    }
+
+    const uart_dma_info &info = uart_dma_rx_info[8];
+    DMA_Stream_TypeDef *stream = dma_stream_from_info(info);
+    if (stream == nullptr) {
+        rtt_uart_dbg_rx_dma_start_fail++;
+        return false;
+    }
+
+    if (_rx_dma_buf == nullptr) {
+        _rx_dma_buf = (uint8_t *)rt_malloc_align(RTT_UART_RX_DMA_BUF_SIZE, 32);
+        if (_rx_dma_buf == nullptr) {
+            rtt_uart_dbg_rx_dma_start_fail++;
+            return false;
+        }
+        memset(_rx_dma_buf, 0, RTT_UART_RX_DMA_BUF_SIZE);
+        _rx_dma_buf_size = RTT_UART_RX_DMA_BUF_SIZE;
+    }
+
+    if (info.dma_base == DMA1_BASE) {
+        RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN;
+    } else if (info.dma_base == DMA2_BASE) {
+        RCC->AHB1ENR |= RCC_AHB1ENR_DMA2EN;
+    }
+    __DSB();
+
+    stream->CR &= ~DMA_SxCR_EN;
+    uint32_t wait = 100000;
+    while ((stream->CR & DMA_SxCR_EN) != 0U && --wait) {
+        asm volatile("nop");
+    }
+    if ((stream->CR & DMA_SxCR_EN) != 0U) {
+        rtt_uart_dbg_rx_dma_start_fail++;
+        return false;
+    }
+
+    dma_clear_all_iflags(info.dma_base, info.stream);
+
+    for (uint8_t i = 0; i < 16 && (_uart_hw->ISR & USART_ISR_RXNE) != 0U; i++) {
+        (void)_uart_hw->RDR;
+    }
+    uart_clear_rx_flags(_uart_hw);
+
+    stream->PAR = (uint32_t)(uintptr_t)&_uart_hw->RDR;
+    stream->M0AR = (uint32_t)(uintptr_t)_rx_dma_buf;
+    stream->M1AR = 0;
+    stream->NDTR = _rx_dma_buf_size;
+    stream->FCR = 0;
+    stream->CR = ((uint32_t)info.channel << DMA_SxCR_CHSEL_Pos) |
+                 DMA_SxCR_MINC |
+                 DMA_SxCR_CIRC |
+                 DMA_SxCR_PL_1;
+
+    _rx_dma_tail = 0;
+    _rx_dma_stream = stream;
+    _uart_hw->CR3 |= USART_CR3_DMAR;
+    __DSB();
+    stream->CR |= DMA_SxCR_EN;
+
+    _rx_dma_active = true;
+    rtt_uart_dbg_rx_dma_starts++;
+    rtt_uart_dbg_rx_dma_head = 0;
+    rtt_uart_dbg_rx_dma_tail = 0;
+    rtt_uart_dbg_rx_dma_ndtr = _rx_dma_buf_size;
+    return true;
+}
+
+void UARTDriver::_stop_rx_dma()
+{
+    if (_rx_dma_stream != nullptr) {
+        _rx_dma_stream->CR &= ~DMA_SxCR_EN;
+        uint32_t wait = 100000;
+        while ((_rx_dma_stream->CR & DMA_SxCR_EN) != 0U && --wait) {
+            asm volatile("nop");
+        }
+    }
+
+    if (_uart_hw != nullptr) {
+        _uart_hw->CR3 &= ~USART_CR3_DMAR;
+    }
+
+    const uart_dma_info &info = uart_dma_rx_info[8];
+    dma_clear_all_iflags(info.dma_base, info.stream);
+
+    _rx_dma_active = false;
+    _rx_dma_stream = nullptr;
+    _rx_dma_tail = 0;
+    _rx_dma_buf_size = 0;
+    if (_rx_dma_buf != nullptr) {
+        rt_free_align(_rx_dma_buf);
+        _rx_dma_buf = nullptr;
+    }
+}
+
+void UARTDriver::_drain_rx_dma_to_readbuf()
+{
+    if (!_rx_dma_active || _rx_dma_stream == nullptr ||
+        _rx_dma_buf == nullptr || _rx_dma_buf_size == 0) {
+        return;
+    }
+
+    const uart_dma_info &info = uart_dma_rx_info[8];
+    const uint32_t dma_status = dma_irq_status(info.dma_base, info.stream);
+    if ((dma_status & dma_error_iflags_bit(info.stream)) != 0U) {
+        rtt_uart_dbg_rx_dma_errors++;
+    }
+    if (dma_status != 0U) {
+        dma_clear_all_iflags(info.dma_base, info.stream);
+    }
+
+    const uint32_t uart_status = _uart_hw->ISR;
+    if ((uart_status & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE |
+                        USART_ISR_PE | USART_ISR_IDLE)) != 0U) {
+        if ((uart_status & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE | USART_ISR_PE)) != 0U) {
+            rtt_uart_dbg_rx_dma_errors++;
+        }
+        uart_clear_rx_flags(_uart_hw);
+    }
+
+    uint32_t ndtr = _rx_dma_stream->NDTR;
+    if (ndtr > _rx_dma_buf_size) {
+        rtt_uart_dbg_rx_dma_errors++;
+        return;
+    }
+
+    uint16_t head = (uint16_t)(_rx_dma_buf_size - ndtr);
+    if (head == _rx_dma_buf_size) {
+        head = 0;
+    }
+
+    rtt_uart_dbg_rx_dma_head = head;
+    rtt_uart_dbg_rx_dma_tail = _rx_dma_tail;
+    rtt_uart_dbg_rx_dma_ndtr = ndtr;
+
+    if (head == _rx_dma_tail) {
+        return;
+    }
+
+    auto write_segment = [this](uint16_t ofs, uint16_t len) {
+        if (len == 0) {
+            return;
+        }
+        const uint32_t written = _readbuf.write(&_rx_dma_buf[ofs], len);
+        _rx_stats_bytes += written;
+        rtt_uart_dbg_rx_dma_bytes += written;
+        if (written < len) {
+            rtt_uart_dbg_rx_dma_drops += len - written;
+        }
+    };
+
+    if (head > _rx_dma_tail) {
+        write_segment(_rx_dma_tail, head - _rx_dma_tail);
+    } else {
+        write_segment(_rx_dma_tail, _rx_dma_buf_size - _rx_dma_tail);
+        write_segment(0, head);
+    }
+
+    _rx_dma_tail = head;
+    rtt_uart_dbg_rx_dma_tail = _rx_dma_tail;
+    rtt_uart_dbg_rx_dma_drains++;
+}
+#endif
 
 void UARTDriver::_drain_rx_to_readbuf()
 {
@@ -518,9 +762,14 @@ void UARTDriver::_drain_rx_to_readbuf()
         if (_uart_hw == nullptr) {
             return;
         }
+        if (_rx_dma_active) {
+            _drain_rx_dma_to_readbuf();
+            return;
+        }
         uint32_t n = uart_poll_read(_uart_hw, _rx_bounce, sizeof(_rx_bounce));
         if (n > 0) {
-            _readbuf.write(_rx_bounce, n);
+            const uint32_t written = _readbuf.write(_rx_bounce, n);
+            _rx_stats_bytes += written;
         }
 #else
         (void)0;
@@ -533,6 +782,15 @@ volatile uint32_t rtt_uart_dbg_drain_calls = 0;
 volatile uint32_t rtt_uart_dbg_drain_writes = 0;
 volatile uint32_t rtt_uart_dbg_drain_zero = 0;
 volatile uint32_t rtt_uart_dbg_drain_bytes = 0;
+volatile uint32_t rtt_uart_dbg_rx_dma_starts = 0;
+volatile uint32_t rtt_uart_dbg_rx_dma_start_fail = 0;
+volatile uint32_t rtt_uart_dbg_rx_dma_drains = 0;
+volatile uint32_t rtt_uart_dbg_rx_dma_bytes = 0;
+volatile uint32_t rtt_uart_dbg_rx_dma_drops = 0;
+volatile uint32_t rtt_uart_dbg_rx_dma_errors = 0;
+volatile uint32_t rtt_uart_dbg_rx_dma_head = 0;
+volatile uint32_t rtt_uart_dbg_rx_dma_tail = 0;
+volatile uint32_t rtt_uart_dbg_rx_dma_ndtr = 0;
 
 void UARTDriver::_drain_writebuf_to_dev()
 {
@@ -775,6 +1033,24 @@ bool UARTDriver::_discard_input()
         return false;
     }
     _readbuf.clear();
+#if defined(SOC_SERIES_STM32F7)
+    if (_rx_dma_active && _rx_dma_stream != nullptr && _rx_dma_buf_size > 0) {
+        uint32_t ndtr = _rx_dma_stream->NDTR;
+        if (ndtr <= _rx_dma_buf_size) {
+            uint16_t head = (uint16_t)(_rx_dma_buf_size - ndtr);
+            if (head == _rx_dma_buf_size) {
+                head = 0;
+            }
+            _rx_dma_tail = head;
+            rtt_uart_dbg_rx_dma_head = head;
+            rtt_uart_dbg_rx_dma_tail = head;
+            rtt_uart_dbg_rx_dma_ndtr = ndtr;
+        }
+        if (_uart_hw != nullptr) {
+            uart_clear_rx_flags(_uart_hw);
+        }
+    }
+#endif
     return true;
 }
 
