@@ -1,0 +1,2 @@
+7b20aaf8dd131810934d0cd52c056ac80d7ee4c1b4a001541b30cfe9fd453f7e  build/rtt_deploy/cuav_v5/rt-thread.elf
+32fdec32f572fe40393b2fd460ac3656b06f0e402199651a9583dcba6e884006  build/rtt_deploy/cuav_v5/rtthread.bin

@@ -370,9 +370,7 @@ void AP_Vehicle::setup()
 #if AP_SCRIPTING_SERIALDEVICE_ENABLED
     // must be done now so ports are registered and drivers get set up properly
     // (in particular mavlink which checks during init_ardupilot())
-    if (false) {
-        scripting.init_serialdevice_ports();
-    }
+    scripting.init_serialdevice_ports();
 #endif
 #endif
 
@@ -1085,9 +1083,7 @@ void AP_Vehicle::one_Hz_update(void)
     }
 
 #if AP_SCRIPTING_ENABLED
-    if (false) {
-        scripting.update();
-    }
+    scripting.update();
 #endif
 
 #if HAL_LOGGING_ENABLED && HAL_UART_STATS_ENABLED

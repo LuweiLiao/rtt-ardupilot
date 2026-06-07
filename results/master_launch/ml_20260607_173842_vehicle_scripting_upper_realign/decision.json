@@ -1,0 +1,82 @@
+{
+  "run": "results/master_launch/ml_20260607_173842_vehicle_scripting_upper_realign",
+  "timestamp_local": "2026-06-07T17:38:42+08:00",
+  "change": {
+    "file": "libraries/AP_Vehicle/AP_Vehicle.cpp",
+    "summary": "Removed RTT-era if(false) wrappers around AP scripting serial-device init and scripting update calls.",
+    "reason": "Restore AP_Vehicle HAL-above semantics. RTT CUAV V5 still disables scripting through board/hwdef configuration, so policy remains in the board layer instead of vehicle logic.",
+    "current_rtt_board_macros": {
+      "libraries/AP_HAL/board/rtt.h": "AP_SCRIPTING_ENABLED defaults to 0",
+      "libraries/AP_HAL_RTT/hwdef/cuav_v5/hwdef.dat": "define AP_SCRIPTING_ENABLED 0",
+      "build/rtt_cuav_v5/hwdef.h": "#define AP_SCRIPTING_ENABLED 0"
+    }
+  },
+  "verification": {
+    "static": {
+      "git_diff_check": 0,
+      "scope": "Only AP_Vehicle scripting if(false) wrappers changed."
+    },
+    "build": {
+      "command": "timeout 900s python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)",
+      "build_rc": 0,
+      "verify_bin_command": "timeout 60s python3 Tools/scripts/rtt_verify_bin.py build/rtt_deploy/cuav_v5/rtthread.bin build/rtt_deploy/cuav_v5/rt-thread.elf",
+      "verify_bin_rc": 0,
+      "reset_handler_literal_pool": {
+        "sp": "0x20004000",
+        "vtor": "0x08008000",
+        "scb_vtor_register": "0xe000ed08"
+      }
+    },
+    "flash_readback": {
+      "app_address": "0x08008000",
+      "pre_flash_backup_rc": 0,
+      "app_flash_verify_rc": 0,
+      "post_flash_readback_rc": 0,
+      "post_flash_cmp_rc": 0,
+      "rtthread_bin_sha256": "32fdec32f572fe40393b2fd460ac3656b06f0e402199651a9583dcba6e884006",
+      "readback_sha256": "32fdec32f572fe40393b2fd460ac3656b06f0e402199651a9583dcba6e884006"
+    },
+    "mavlink_physical_interval_gate": {
+      "dir": "results/master_launch/ml_20260607_173842_vehicle_scripting_upper_realign/physical_interval_gate_20260607_174244",
+      "rc": 0,
+      "verdict": "GREEN",
+      "params": {
+        "AHRS_EKF_TYPE": 3.0,
+        "GPS1_TYPE": 1.0,
+        "SCHED_LOOP_RATE": 400.0
+      },
+      "set_message_interval_ack_result": 0,
+      "get_message_interval_us": 200000,
+      "counts_30s": {
+        "HEARTBEAT": 31,
+        "SYS_STATUS": 150,
+        "RAW_IMU": 150,
+        "SCALED_PRESSURE": 150,
+        "ATTITUDE": 150,
+        "EKF_STATUS_REPORT": 150
+      },
+      "max_silence_s": 0.534
+    },
+    "gdb": {
+      "command": "arm-none-eabi-gdb -q build/rtt_deploy/cuav_v5/rt-thread.elf",
+      "rc": 0,
+      "openocd_target": "STM32F7 via SWD",
+      "halt_mode": "Thread",
+      "pc": "0x080ef11a <rt_hw_atomic_load>",
+      "cfsr_words": [
+        "0x00000000",
+        "0x00000000",
+        "0x00000000",
+        "0x00000000"
+      ],
+      "hfsr": "0x00000000",
+      "result": "No HardFault evidence; target resumed and OpenOCD processes were cleaned up."
+    }
+  },
+  "notes": [
+    "SITL-on-HW gate was not used as the final verdict in this run because current parameters are physical/default style: AHRS_EKF_TYPE=3, GPS1_TYPE=1.",
+    "No bootloader or AP_IOMCU files were modified.",
+    "SWD remained available during OpenOCD flash/readback and GDB halt/resume."
+  ],
+  "verdict": "GREEN"
+}

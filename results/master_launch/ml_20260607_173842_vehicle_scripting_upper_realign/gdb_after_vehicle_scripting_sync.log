@@ -1,0 +1,22 @@
+Reading symbols from build/rtt_deploy/cuav_v5/rt-thread.elf...
+Remote debugging using :3333
+__LDREXW (addr=addr@entry=0x200433c8 <rt_interrupt_nest>)
+    at /data/firmare/pogo-apm/modules/rt-thread/libcpu/arm/common/atomic_arm.c:183
+183	    __asm volatile ("ldrex %0, %1" : "=r" (result) : "Q" (*addr) );
+pc             0x80ef11a           0x80ef11a <rt_hw_atomic_load>
+msp            0x20004000          0x20004000 <storageDriver>
+psp            0x2006568c          0x2006568c
+lr             0x8101a5f           135273055
+0xe000ed28:	0x00000000	0x00000000	0x00000000	0x00000000
+0xe000ed2c:	0x00000000
+#0  __LDREXW (addr=addr@entry=0x200433c8 <rt_interrupt_nest>)
+    at /data/firmare/pogo-apm/modules/rt-thread/libcpu/arm/common/atomic_arm.c:183
+#1  rt_hw_atomic_load (ptr=ptr@entry=0x200433c8 <rt_interrupt_nest>)
+    at /data/firmare/pogo-apm/modules/rt-thread/libcpu/arm/common/atomic_arm.c:224
+#2  0x08101a5e in rt_interrupt_get_nest ()
+    at /data/firmare/pogo-apm/modules/rt-thread/src/irq.c:142
+#3  0x081016dc in rt_mutex_release (mutex=0x20063600)
+    at /data/firmare/pogo-apm/modules/rt-thread/src/ipc.c:1604
+#4  0x00000000 in ?? ()
+Detaching from program: /data/firmare/pogo-apm/build/rtt_deploy/cuav_v5/rt-thread.elf, Remote target
+[Inferior 1 (Remote target) detached]
