@@ -1,0 +1,68 @@
+{
+  "timestamp_local": "2026-06-07T19:15:00+08:00",
+  "verdict": "GREEN",
+  "target": {
+    "vehicle": "ArduCopter",
+    "board": "cuav_v5",
+    "backend": "AP_HAL_RTT",
+    "app_address": "0x08008000"
+  },
+  "scope": "L2 parameter persistence gate over the normal ArduPilot MAVLink PARAM_SET path",
+  "inputs": {
+    "script": "Tools/scripts/rtt_param_persist_gate.py",
+    "command": "nohup timeout 300 python3 Tools/scripts/rtt_param_persist_gate.py --port auto --outdir results/master_launch/ml_20260607_191500_param_persist_gate_v4",
+    "param_candidates": [
+      "LOG_DISARMED",
+      "SR0_RAW_SENS",
+      "SR0_EXT_STAT"
+    ]
+  },
+  "param_persistence": {
+    "artifact": "results/master_launch/ml_20260607_191500_param_persist_gate_v4/param_persist.json",
+    "rc_artifact": "results/master_launch/ml_20260607_191500_param_persist_gate_v4/param_persist.rc",
+    "return_code": 0,
+    "selected_param": "LOG_DISARMED",
+    "original": 0.0,
+    "test_value": 1.0,
+    "after_reset": 1.0,
+    "restored_after_reset": 0.0,
+    "reset_after_set_rc": 0,
+    "reset_after_restore_rc": 0,
+    "openocd_logs": [
+      "results/master_launch/ml_20260607_191500_param_persist_gate_v4/reset_after_set.log",
+      "results/master_launch/ml_20260607_191500_param_persist_gate_v4/reset_after_restore.log"
+    ]
+  },
+  "post_restore_health": {
+    "artifact_dir": "results/master_launch/ml_20260607_192500_param_persist_post_health",
+    "fast_green": {
+      "rc": 0,
+      "verdict": "GREEN",
+      "sample_seconds": 30.0,
+      "counts": {
+        "HEARTBEAT": 28,
+        "RAW_IMU": 78,
+        "ATTITUDE": 77,
+        "EKF_STATUS_REPORT": 78,
+        "SCALED_PRESSURE": 78
+      },
+      "max_silence": 1.839,
+      "ekf_flags": "0xa7",
+      "zacc_mg": -1012,
+      "baro_hpa": 1003.68
+    },
+    "gdb": {
+      "rc": 0,
+      "pc": "0x080359aa",
+      "mode": "Thread",
+      "fault_status_words": [
+        "00000000",
+        "00000000",
+        "0000000b",
+        "00000000"
+      ],
+      "hardfault": false
+    }
+  },
+  "conclusion": "MAVLink PARAM_SET reaches ArduPilot/AP_Param persistence on the RTT CUAV V5 baseline, survives OpenOCD reset run, and the original value is restored and survives reset. Post-restore MAVLink streams and GDB fault snapshot remain GREEN."
+}

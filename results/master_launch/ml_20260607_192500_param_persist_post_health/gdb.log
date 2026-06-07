@@ -1,0 +1,15 @@
+std::__atomic_base<unsigned long>::load (__m=std::memory_order_seq_cst, this=this@entry=0x200106a0 <serial8Driver+72>) at /opt/gcc-arm-none-eabi-10-2020-q4-major/arm-none-eabi/include/c++/10.2.1/bits/atomic_base.h:420
+420	      load(memory_order __m = memory_order_seq_cst) const noexcept
+pc             0x80359aa           0x80359aa <std::__atomic_base<unsigned long>::operator unsigned long() const>
+lr             0x80359c1           134437313
+sp             0x2004640c          0x2004640c
+msp            0x200054f0          0x200054f0 <completed>
+psp            0x2004640c          0x2004640c
+#0  std::__atomic_base<unsigned long>::load (__m=std::memory_order_seq_cst, this=this@entry=0x200106a0 <serial8Driver+72>) at /opt/gcc-arm-none-eabi-10-2020-q4-major/arm-none-eabi/include/c++/10.2.1/bits/atomic_base.h:420
+#1  std::__atomic_base<unsigned long>::operator unsigned long (this=this@entry=0x200106a0 <serial8Driver+72>) at /opt/gcc-arm-none-eabi-10-2020-q4-major/arm-none-eabi/include/c++/10.2.1/bits/atomic_base.h:289
+#2  0x080359c0 in ByteBuffer::available (this=this@entry=0x20010694 <serial8Driver+60>) at /data/firmare/pogo-apm/libraries/AP_HAL/utility/RingBuffer.cpp:62
+#3  0x080928c2 in RTT::UARTDriver::wait_timeout (timeout_ms=10, n=4, this=0x20010658 <serial8Driver>) at /data/firmare/pogo-apm/libraries/AP_HAL_RTT/UARTDriver.cpp:971
+#4  RTT::UARTDriver::wait_timeout (this=0x20010658 <serial8Driver>, n=<optimized out>, timeout_ms=10) at /data/firmare/pogo-apm/libraries/AP_HAL_RTT/UARTDriver.cpp:937
+#5  0x00000000 in ?? ()
+0xe000ed28: 00000000 00000000 0000000b 00000000 
+[Inferior 1 (Remote target) detached]
