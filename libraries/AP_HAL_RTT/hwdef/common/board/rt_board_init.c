@@ -119,7 +119,7 @@ static void _mpu_config(void)
 
     /*
      * Region 2: .sram1_bss DMA buffers (e.g. SDIO cache_buf) — non-cacheable.
-     * Linker places .sram1_bss at 0x20020000; cover full 64KB SRAM1 tail.
+     * Linker places .sram1_bss at 0x20020000; cover the first 64KB of SRAM1.
      * Higher region number overrides Region 0 for this range.
      */
     MPU->RNR  = 2;

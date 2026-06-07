@@ -104,8 +104,10 @@ STM32F7_AF_MAP = {
 
 
 class RTTHWDef(HWDef):
-    def __init__(self, quiet=False, outdir=None, hwdef=[]):
+    def __init__(self, quiet=False, outdir=None, hwdef=[], default_params_filepath=None):
         super().__init__(quiet=quiet, outdir=outdir, hwdef=hwdef)
+        self.default_params_filepath = default_params_filepath
+        self.have_defaults_file = False
         self.spidev = []
         self.pin_labels = {}
         self.user_defines = []
@@ -330,6 +332,7 @@ class RTTHWDef(HWDef):
         f.write('extern "C" void *memmem(const void *, std::size_t, const void *, std::size_t);\n')
         f.write('extern "C" std::size_t strnlen(const char *s, std::size_t maxlen);\n')
         f.write('extern "C" char *strdup(const char *s);\n')
+        f.write('extern "C" void swab(const void *from, void *to, long n);\n')
         f.write('#endif\n\n')
 
         # Sensor probe macros
@@ -595,6 +598,13 @@ class RTTHWDef(HWDef):
                 f.write('#define %s %s\n' % (name, value))
             else:
                 f.write('#define %s\n' % name)
+        if self.have_defaults_file:
+            f.write('#ifndef AP_PARAM_DEFAULTS_FILE_PARSING_ENABLED\n')
+            f.write('#define AP_PARAM_DEFAULTS_FILE_PARSING_ENABLED 1\n')
+            f.write('#endif\n')
+            f.write('#ifndef HAL_PARAM_DEFAULTS_PATH\n')
+            f.write('#define HAL_PARAM_DEFAULTS_PATH "@ROMFS/defaults.parm"\n')
+            f.write('#endif\n')
 
     # ===================== rt_pin_config.c generation =====================
 
@@ -920,12 +930,22 @@ class RTTHWDef(HWDef):
 
             f.write('MEMORY\n{\n')
             f.write('    ROM (RX) : ORIGIN = 0x%08x, LENGTH = %dK\n' % (flash_origin, flash_length // 1024))
-            # STM32F7: split DTCM (128K, no DMA) + SRAM1 (remainder, DMA-safe)
-            if ram_base == 0x20000000 and ram_kb >= 512:
-                f.write('    DTCM (RW) : ORIGIN = 0x20000000, LENGTH = 128K\n')
-                f.write('    SRAM1 (RW) : ORIGIN = 0x20020000, LENGTH = %dK\n' % (ram_kb - 128))
+            # STM32F7: keep stack in DTCM, reserve the first 64KB of SRAM1 for
+            # the MPU non-cacheable DMA window, and place normal data/bss/heap
+            # after that window.
+            if self.mcu_family.startswith('STM32F7') and ram_base == 0x20000000 and ram_kb >= 512:
+                f.write('    RAM_STACK (RW) : ORIGIN = 0x20000000, LENGTH = 128K\n')
+                f.write('    RAM_DMA (RW) : ORIGIN = 0x20020000, LENGTH = 64K\n')
+                f.write('    RAM_APP (RW) : ORIGIN = 0x20030000, LENGTH = %dK\n' % (ram_kb - 192))
             else:
-                f.write('    RAM (RW) : ORIGIN = 0x%08x, LENGTH = %dK\n' % (ram_base, ram_kb))
+                stack_kb = 16 if ram_kb > 96 else max(4, ram_kb // 8)
+                dma_kb = 64 if ram_kb > 160 else max(4, ram_kb // 8)
+                app_kb = max(1, ram_kb - stack_kb - dma_kb)
+                dma_origin = ram_base + stack_kb * 1024
+                app_origin = dma_origin + dma_kb * 1024
+                f.write('    RAM_STACK (RW) : ORIGIN = 0x%08x, LENGTH = %dK\n' % (ram_base, stack_kb))
+                f.write('    RAM_DMA (RW) : ORIGIN = 0x%08x, LENGTH = %dK\n' % (dma_origin, dma_kb))
+                f.write('    RAM_APP (RW) : ORIGIN = 0x%08x, LENGTH = %dK\n' % (app_origin, app_kb))
             f.write('}\n\n')
 
             # Read existing linker script for section layout template
@@ -1041,6 +1061,64 @@ class RTTHWDef(HWDef):
 
     # ===================== ROMFS =====================
 
+    def romfs_add(self, romfs_filename, filename):
+        """Add a file to ROMFS."""
+        self.romfs[romfs_filename] = filename
+
+    def get_processed_defaults_file(self, defaults_filepath, depth=0):
+        """Read defaults_filepath, expanding ArduPilot-style @include lines."""
+        if depth > 10:
+            raise Exception("include loop while processing %s" % defaults_filepath)
+        ret = ""
+        with open(defaults_filepath, 'r') as defaults_fh:
+            for line in defaults_fh:
+                m = re.match(r"^@include\s*([^\s]+)", line)
+                if m is None:
+                    ret += line
+                    continue
+                include_filepath = os.path.join(os.path.dirname(defaults_filepath), m.group(1))
+                if not os.path.isfile(include_filepath):
+                    raise FileNotFoundError("%s includes %s but that filepath was not found" %
+                                            (defaults_filepath, include_filepath))
+                ret += self.get_processed_defaults_file(include_filepath, depth=depth+1)
+        return ret
+
+    def processed_defaults_filepath(self):
+        return os.path.join(self.outdir, "processed_defaults.parm")
+
+    def write_processed_defaults_file(self, filepath):
+        """Process board defaults.parm or command-line --params into one file."""
+        defaults_abspath = None
+        if self.default_params_filepath:
+            candidate = self.default_params_filepath
+            if not os.path.isabs(candidate):
+                candidate = os.path.join(os.getcwd(), candidate)
+            if os.path.exists(candidate):
+                defaults_abspath = os.path.abspath(candidate)
+                self.progress("Default parameters path from command line: %s" % defaults_abspath)
+        if defaults_abspath is None and self.hwdef:
+            defaults_filename = os.path.join(os.path.dirname(self.hwdef[0]), 'defaults.parm')
+            if os.path.exists(defaults_filename):
+                defaults_abspath = os.path.abspath(defaults_filename)
+                self.progress("Default parameters path from hwdef: %s" % defaults_abspath)
+
+        if defaults_abspath is None:
+            self.progress("No default parameter file found")
+            return False
+
+        content = self.get_processed_defaults_file(defaults_abspath)
+        with open(filepath, "w") as processed_defaults_fh:
+            processed_defaults_fh.write(content)
+        return True
+
+    def write_default_parameters(self):
+        """Embed default parameters in ROMFS like ChibiOS normal firmware builds."""
+        filepath = self.processed_defaults_filepath()
+        if not self.write_processed_defaults_file(filepath):
+            return
+        self.romfs_add('defaults.parm', filepath)
+        self.have_defaults_file = True
+
     def write_ROMFS(self, outdir):
         """Write ROMFS file list and generate ap_romfs_embedded.h via embed.py."""
         if not self.romfs:
@@ -1065,6 +1143,7 @@ class RTTHWDef(HWDef):
         pickle_path = os.path.join(outdir, 'romfs.pickle')
         with open(pickle_path, 'wb') as pf:
             pickle.dump(romfs_list, pf)
+        self.env_vars['ROMFS_FILES'] = romfs_list
         print("ROMFS: %d file(s) registered in %s" % (len(romfs_list), pickle_path))
         for name, path in romfs_list:
             print("  %s <- %s" % (name, path))
@@ -1116,14 +1195,20 @@ def main():
         print('rtt_hwdef: cannot create outdir %s: %s' % (outdir, e), file=sys.stderr)
         return 1
 
-    h = RTTHWDef(outdir=outdir, hwdef=hwdef_paths)
+    h = RTTHWDef(outdir=outdir, hwdef=hwdef_paths, default_params_filepath=args.params)
     h.run()
+    h.write_default_parameters()
+
+    # Regenerate hwdef.h after default-parameter discovery so config macros
+    # such as HAL_PARAM_DEFAULTS_PATH are present in the force-included header.
+    h.write_hwdef_header(os.path.join(outdir, "hwdef.h"))
 
     # Generate additional files
     h.write_pin_config_c(outdir)
     h.write_linker_script(outdir)
     h.write_rtconfig_h(outdir)
     h.write_ROMFS(outdir)
+    h.write_env_py(os.path.join(outdir, "env.py"))
 
     # Placeholder ldscript.ld for waf compatibility
     ldscript_path = os.path.join(outdir, 'ldscript.ld')

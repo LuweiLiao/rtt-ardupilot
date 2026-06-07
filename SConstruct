@@ -28,6 +28,16 @@ AddOption('--test',
           type='string',
           default='',
           help='Build a standalone module test instead of ArduPilot (e.g. l0_boot, l2_spi)')
+AddOption('--extra-hwdef',
+          dest='extra_hwdef',
+          type='string',
+          default='',
+          help='Extra hwdef.dat fragment to append after the board hwdef')
+AddOption('--default-param',
+          dest='default_param',
+          type='string',
+          default='',
+          help='Default parameter file to embed via hwdef ROMFS/defaults support')
 AddOption('--upload',
           dest='upload',
           action='store_true',
@@ -89,6 +99,23 @@ def _rtt_detect_exec_path():
     return None
 
 
+def _abspath_from_root(ap_root, path):
+    if not path:
+        return ''
+    if os.path.isabs(path):
+        return path
+    return os.path.abspath(os.path.join(ap_root, path))
+
+
+def _apply_hwdef_option_env(ap_root, env):
+    extra_hwdef = GetOption('extra_hwdef') or ''
+    if extra_hwdef:
+        env['RTT_EXTRA_HWDEF'] = _abspath_from_root(ap_root, extra_hwdef)
+    default_param = GetOption('default_param') or ''
+    if default_param:
+        env['RTT_DEFAULT_PARAM'] = _abspath_from_root(ap_root, default_param)
+
+
 def _run_rtt_build(ap_root, target, bsp_deploy_abspath, scons_args, test_name=''):
     """Run scons (or scons -c) in bsp_deploy_abspath with ARDUPILOT_FULL=1, RTT_ROOT, RTT_EXEC_PATH."""
     rtt_root = os.environ.get('RTT_ROOT') or os.path.join(ap_root, 'modules', 'rt-thread')
@@ -98,6 +125,7 @@ def _run_rtt_build(ap_root, target, bsp_deploy_abspath, scons_args, test_name=''
         env['TEST_NAME'] = test_name
     else:
         env['ARDUPILOT_FULL'] = '1'
+    _apply_hwdef_option_env(ap_root, env)
     env['RTT_ROOT'] = rtt_root
     rtt_exec = _rtt_detect_exec_path()
     if rtt_exec:
@@ -161,12 +189,12 @@ if canonical_target:
     i = 1
     while i < len(sys.argv):
         a = sys.argv[i]
-        if a in ('--target', '--upload', '--port', '--v', '--test'):
+        if a in ('--target', '--upload', '--port', '--v', '--test', '--extra-hwdef', '--default-param'):
             i += 1
             if i < len(sys.argv) and not sys.argv[i].startswith('-'):
                 i += 1
             continue
-        if a.startswith('--target=') or a.startswith('--upload=') or a.startswith('--port=') or a.startswith('--v=') or a.startswith('--test='):
+        if a.startswith('--target=') or a.startswith('--upload=') or a.startswith('--port=') or a.startswith('--v=') or a.startswith('--test=') or a.startswith('--extra-hwdef=') or a.startswith('--default-param='):
             i += 1
             continue
         scons_args.append(a)
@@ -175,10 +203,13 @@ if canonical_target:
     is_clean = '-c' in scons_args or '--clean' in scons_args
     # 1) Deploy BSP only for build; clean should not recreate staging area.
     if not is_clean:
+        deploy_env = os.environ.copy()
+        _apply_hwdef_option_env(ap_root, deploy_env)
         try:
             bsp_deploy_abspath = subprocess.check_output(
                 [sys.executable, deploy_script, ap_root, canonical_target],
                 cwd=ap_root,
+                env=deploy_env,
                 text=True
             ).strip()
         except subprocess.CalledProcessError as e:

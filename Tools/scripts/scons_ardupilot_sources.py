@@ -12,6 +12,7 @@ import argparse
 import glob
 import json
 import os
+import pickle
 import sys
 
 # Match Tools/ardupilotwaf/ardupilotwaf.py
@@ -83,6 +84,23 @@ def _glob_library_sources(ap_root, lib_name):
                 if os.path.isfile(p):
                     collected.append(os.path.relpath(p, ap_root))
     return collected
+
+
+def _load_hwdef_env(bsp_dir):
+    env_py = os.path.join(os.path.abspath(bsp_dir), 'env.py')
+    if not os.path.isfile(env_py):
+        return {}
+    try:
+        with open(env_py, 'rb') as f:
+            data = pickle.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        sys.stderr.write('warning: failed to load hwdef env.py %s: %s\n' % (env_py, e))
+        return {}
+
+
+def _env_truthy(env, name):
+    return str(env.get(name, '0')).strip().lower() in ('1', 'true', 'yes', 'on')
 
 
 def _glob_subdir_sources(ap_root, rel_dir):
@@ -180,6 +198,10 @@ def _collect_sources(ap_root, bsp_dir, rtt_root):
             if rel not in sources:
                 sources.append(rel)
 
+    hwdef_env = _load_hwdef_env(bsp_dir)
+    if _env_truthy(hwdef_env, 'SIM_ENABLED'):
+        sources.extend(_glob_library_sources(ap_root, 'SITL'))
+
     return sources
 
 
@@ -256,9 +278,9 @@ def _collect_cpppath(ap_root, bsp_dir, rtt_root, build_root, board="rtt_pixhawk6
     return paths
 
 
-def _collect_defines_h7():
+def _collect_defines_h7(sim_enabled=False):
     # Match boards.py is_h7 branch and RTT DEFINES for rtt_pixhawk6c_mini.
-    return [
+    defines = [
         'CONFIG_HAL_BOARD=HAL_BOARD_RTT',
         'USE_HAL_DRIVER=1',
         'STM32H743xx=1',
@@ -279,11 +301,13 @@ def _collect_defines_h7():
         'FRAME_CONFIG=MULTICOPTER_FRAME',
         'AP_DDS_ENABLED=0',
     ]
+    defines.append('AP_SIM_ENABLED=%d' % (1 if sim_enabled else 0))
+    return defines
 
 
-def _collect_defines_f7():
+def _collect_defines_f7(sim_enabled=False):
     # STM32F765/CUAV V5 RTT BSP (STM32F767xx HAL used by BSP)
-    return [
+    defines = [
         'CONFIG_HAL_BOARD=HAL_BOARD_RTT',
         'USE_HAL_DRIVER=1',
         'STM32F767xx=1',
@@ -298,12 +322,14 @@ def _collect_defines_f7():
         'HAL_NUM_CAN_IFACES=0',
         'DRONECAN_CXX_WRAPPERS=1',
     ]
+    defines.append('AP_SIM_ENABLED=%d' % (1 if sim_enabled else 0))
+    return defines
 
 
-def _collect_defines(board="rtt_pixhawk6c_mini"):
+def _collect_defines(board="rtt_pixhawk6c_mini", sim_enabled=False):
     if board == 'rtt_cuav_v5':
-        return _collect_defines_f7()
-    return _collect_defines_h7()
+        return _collect_defines_f7(sim_enabled=sim_enabled)
+    return _collect_defines_h7(sim_enabled=sim_enabled)
 
 
 def main():
@@ -335,9 +361,12 @@ def main():
         sys.stderr.write('warning: BSP dir not found: %s\n' % bsp_dir)
     build_root = ap_root
 
+    hwdef_env = _load_hwdef_env(bsp_dir)
+    sim_enabled = _env_truthy(hwdef_env, 'SIM_ENABLED')
+
     ap_sources = _collect_sources(ap_root, bsp_dir, rtt_root)
     ap_cpppath = _collect_cpppath(ap_root, bsp_dir, rtt_root, build_root, args.board)
-    ap_defines = _collect_defines(args.board)
+    ap_defines = _collect_defines(args.board, sim_enabled=sim_enabled)
 
     if args.json:
         out = json.dumps({'ap_sources': ap_sources, 'ap_cpppath': ap_cpppath, 'ap_defines': ap_defines}, indent=2)

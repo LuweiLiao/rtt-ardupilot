@@ -7,7 +7,9 @@
 MEMORY
 {
     ROM (rx) : ORIGIN = 0x08008000, LENGTH = 2016k /* 2MB — TEST mode (app at 0x08008000, bootloader reserved) */
-    RAM (rw) : ORIGIN = 0x20000000, LENGTH =  512k /* 512K sram */
+    RAM_STACK (rw) : ORIGIN = 0x20000000, LENGTH = 128K /* STM32F7 DTCM: CPU-only stack */
+    RAM_DMA (rw) : ORIGIN = 0x20020000, LENGTH = 64K /* SRAM1 non-cacheable DMA window */
+    RAM_APP (rw) : ORIGIN = 0x20030000, LENGTH = 320K /* SRAM1 cacheable app data/bss/heap */
 }
 ENTRY(Reset_Handler)
 _system_stack_size = 0x4000;
@@ -107,37 +109,33 @@ SECTIONS
         . = ALIGN(4);
         /* This is used by the startup in order to initialize the .data secion */
         _edata = . ;
-    } >RAM
+    } > RAM_APP
 
-    .stack :
+    .stack (NOLOAD) :
     {
         . = ALIGN(4);
         _sstack = .;
         . = . + _system_stack_size;
         . = ALIGN(4);
         _estack = .;
-    } >RAM
+    } > RAM_STACK
 
-    __bss_start = .;
-    .bss :
+    /*
+     * CPU-only static BSS.  These large objects are not used by DMA and do
+     * not need to live in SRAM1_APP; keeping them in DTCM preserves SRAM1_APP
+     * for RT-Thread dynamic thread stacks and ArduPilot runtime heap.
+     */
+    .dtcm_bss (NOLOAD) :
     {
-        . = ALIGN(4);
-        /* This is used by the startup in order to initialize the .bss secion */
-        _sbss = .;
+        . = ALIGN(8);
+        _sdtcm_bss = .;
+        *(.bss._ZL13storageDriver)
+        *(.bss._ZL16supported_frames)
+        . = ALIGN(8);
+        _edtcm_bss = .;
+    } > RAM_STACK
 
-        *(.bss)
-        *(.bss.*)
-        *(COMMON)
-
-        . = ALIGN(4);
-        /* This is used by the startup in order to initialize the .bss secion */
-        _ebss = . ;
-
-        *(.bss.init)
-    } > RAM
-    __bss_end = .;
-
-    /* DMA-safe BSS: force into SRAM1 (>= 0x20020000) even if .bss is in DTCM */
+    /* DMA-safe BSS: first 64KB of SRAM1 is made non-cacheable by the MPU. */
     .sram1_bss (NOLOAD) :
     {
         . = ALIGN(32);
@@ -146,9 +144,31 @@ SECTIONS
         *(.sram1_bss.*)
         . = ALIGN(32);
         _sram1_bss_end = .;
-    } > RAM
+    } > RAM_DMA
+
+    .bss (NOLOAD) :
+    {
+        . = ALIGN(4);
+        /* This is used by the startup in order to initialize the .bss secion */
+        __bss_start = .;
+        _sbss = .;
+
+        *(.bss)
+        *(.bss.*)
+        *(COMMON)
+        *(.bss.init)
+
+        . = ALIGN(4);
+        /* This is used by the startup in order to initialize the .bss secion */
+        _ebss = . ;
+        __bss_end = .;
+    } > RAM_APP
 
     _end = .;
+
+    ASSERT(SIZEOF(.stack) <= LENGTH(RAM_STACK), "RTT stack exceeds RAM_STACK")
+    ASSERT((SIZEOF(.stack) + SIZEOF(.dtcm_bss)) <= LENGTH(RAM_STACK), "RTT DTCM stack+.dtcm_bss exceeds RAM_STACK")
+    ASSERT(SIZEOF(.sram1_bss) <= LENGTH(RAM_DMA), "RTT .sram1_bss exceeds non-cacheable RAM_DMA window")
 
     /* Stabs debugging sections.  */
     .stab          0 : { *(.stab) }

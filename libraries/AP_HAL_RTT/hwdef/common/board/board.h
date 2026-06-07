@@ -27,18 +27,22 @@
 /*
  * STM32F767 memory map:
  *   0x20000000 – 0x2001FFFF  DTCM  128 KB  (CPU-only, DMA cannot access)
- *   0x20020000 – 0x2007FFFF  SRAM1 384 KB  (DMA-accessible)
+ *   0x20020000 – 0x2002FFFF  SRAM1  64 KB  (DMA non-cacheable window)
+ *   0x20030000 – 0x2007FFFF  SRAM1 320 KB  (app data/bss/heap)
  *
- * link.lds places .bss in DTCM and .sram1_bss in SRAM1; _end follows both.
- * Heap lives in the remaining SRAM1 after _end (DMA-accessible).
+ * link.lds keeps the runtime stack and selected CPU-only statics in DTCM,
+ * places .sram1_bss in the non-cacheable DMA window, and places .data/.bss
+ * plus heap in SRAM1_APP.
  */
 #define STM32F7_SRAM1_START  0x20020000UL
+#define STM32F7_SRAM1_DMA_START  0x20020000UL
+#define STM32F7_SRAM1_APP_START  0x20030000UL
 #define STM32F7_SRAM1_END    0x20080000UL
 
-/* Place large DMA-accessible BSS in SRAM1 (link.lds .sram1_bss section). */
+/* Place DMA-accessible BSS in the MPU non-cacheable SRAM1 window. */
 #define RTT_SECTION_SRAM1_BSS __attribute__((section(".sram1_bss")))
 
-extern int _end;  /* after .bss and .sram1_bss in linker script */
+extern int _end;  /* after .data/.bss in SRAM1_APP */
 #define HEAP_BEGIN       ((void *)&_end)
 #define HEAP_END         ((void *)STM32F7_SRAM1_END)
 

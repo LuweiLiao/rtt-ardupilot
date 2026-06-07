@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 
 #ifndef _GNU_SOURCE
 
@@ -51,3 +52,14 @@ void *memmem(const void *haystack, size_t haystacklen,
 }
 
 #endif /* _GNU_SOURCE */
+
+void swab(const void *from, void *to, ssize_t n)
+{
+    const unsigned char *src = (const unsigned char *)from;
+    unsigned char *dst = (unsigned char *)to;
+
+    for (ssize_t i = 0; i + 1 < n; i += 2) {
+        dst[i] = src[i + 1];
+        dst[i + 1] = src[i];
+    }
+}

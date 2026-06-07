@@ -81,6 +81,18 @@ Reset_Handler:
     cmp   r2, r4
     bcc   .L_FillBss
 
+    /* Zero-fill .dtcm_bss (CPU-only statics placed outside general .bss). */
+    ldr   r2, =_sdtcm_bss
+    ldr   r4, =_edtcm_bss
+    movs  r3, #0
+    b     .L_LoopFillDtcmBss
+.L_FillDtcmBss:
+    str   r3, [r2]
+    adds  r2, r2, #4
+.L_LoopFillDtcmBss:
+    cmp   r2, r4
+    bcc   .L_FillDtcmBss
+
     /* __libc_init_array is deferred to rt_board_init.c via INIT_COMPONENT_EXPORT,
        so C++ ctors run AFTER RTT heap is initialized. */
 

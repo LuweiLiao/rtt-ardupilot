@@ -129,7 +129,7 @@ uint64_t Util::get_hw_rtc() const
  *  Memory allocation — DMA-safe vs. normal
  *  On STM32F7: DTCM is NOT DMA-accessible, so DMA_SAFE allocations
  *  must come from SRAM1/SRAM2. Standard malloc() from RT-Thread heap
- *  already uses SRAM1 (HEAP_BEGIN set past _ebss in SRAM1).
+ *  already uses SRAM1_APP (HEAP_BEGIN set past linker _end in SRAM1).
  * --------------------------------------------------------------- */
 void *Util::malloc_type(size_t size, AP_HAL::Util::Memory_Type mem_type)
 {
