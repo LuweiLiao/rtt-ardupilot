@@ -1,0 +1,73 @@
+{
+  "expected": 0.0,
+  "failures": {},
+  "heartbeat": {
+    "autopilot": 3,
+    "base_mode": 81,
+    "custom_mode": 0,
+    "mavlink_version": 3,
+    "mavpackettype": "HEARTBEAT",
+    "system_status": 3,
+    "type": 2
+  },
+  "params": [
+    "MAV2_ADSB",
+    "MAV2_PARAMS",
+    "MAV3_EXTRA1",
+    "MAV3_EXTRA2",
+    "MAV3_EXTRA3",
+    "MAV3_EXT_STAT",
+    "MAV3_POSITION",
+    "MAV3_RAW_CTRL",
+    "MAV3_RAW_SENS",
+    "MAV3_RC_CHAN"
+  ],
+  "port": "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00",
+  "reason": "dirty_params_restored",
+  "seen": {
+    "MAV2_ADSB": [
+      "MAV2_ADSB"
+    ],
+    "MAV2_PARAMS": [
+      "MAV2_PARAMS"
+    ],
+    "MAV3_EXTRA1": [
+      "MAV3_EXTRA1"
+    ],
+    "MAV3_EXTRA2": [
+      "MAV3_EXTRA2"
+    ],
+    "MAV3_EXTRA3": [
+      "MAV3_EXTRA3"
+    ],
+    "MAV3_EXT_STAT": [
+      "MAV3_EXT_STAT"
+    ],
+    "MAV3_POSITION": [
+      "MAV3_POSITION"
+    ],
+    "MAV3_RAW_CTRL": [
+      "MAV3_RAW_CTRL"
+    ],
+    "MAV3_RAW_SENS": [
+      "MAV3_RAW_SENS"
+    ],
+    "MAV3_RC_CHAN": [
+      "MAV3_RC_CHAN"
+    ]
+  },
+  "source_restore_audit": "results/master_launch/ml_20260607_175444_param_queue_upper_realign/param_burst_restore_audit_20260607_181914",
+  "values": {
+    "MAV2_ADSB": 0.0,
+    "MAV2_PARAMS": 0.0,
+    "MAV3_EXTRA1": 0.0,
+    "MAV3_EXTRA2": 0.0,
+    "MAV3_EXTRA3": 0.0,
+    "MAV3_EXT_STAT": 0.0,
+    "MAV3_POSITION": 0.0,
+    "MAV3_RAW_CTRL": 0.0,
+    "MAV3_RAW_SENS": 0.0,
+    "MAV3_RC_CHAN": 0.0
+  },
+  "verdict": "GREEN"
+}

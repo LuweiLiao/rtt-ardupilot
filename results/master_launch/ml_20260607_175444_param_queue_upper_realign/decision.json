@@ -1,0 +1,109 @@
+{
+  "run": "results/master_launch/ml_20260607_175444_param_queue_upper_realign",
+  "timestamp_local": "2026-06-07T18:32:44+08:00",
+  "change": {
+    "file": "libraries/AP_Param/AP_Param.cpp",
+    "summary": "Restore AP_Param::save_queue capacity from the RTT upper-layer workaround value 300 to the upstream master value 30.",
+    "reason": "The 300-entry parameter save queue was introduced by an upper-layer compatibility commit. Parameter persistence should be proven through the normal ArduPilot AP_Param/HAL storage path instead of hiding RTT storage or scheduling behavior by expanding a shared AP_Param queue.",
+    "upstream_reference": "upstream/master uses ObjectBuffer_TS<AP_Param::param_save> AP_Param::save_queue{30};"
+  },
+  "verification": {
+    "static": {
+      "git_diff_check": 0,
+      "scope": "Only AP_Param::save_queue capacity changed in product code."
+    },
+    "build": {
+      "command": "timeout 900s python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)",
+      "build_rc": 0,
+      "verify_bin_command": "timeout 60s python3 Tools/scripts/rtt_verify_bin.py build/rtt_deploy/cuav_v5/rtthread.bin build/rtt_deploy/cuav_v5/rt-thread.elf",
+      "verify_bin_rc": 0,
+      "rt_thread_elf_sha256": "46d32bb20eea24709481b93686b4642e9f8bdfec5c599b8bf810fa329446176e",
+      "rtthread_bin_sha256": "8d789d8bc24eb5d93820fe670e5cc43e75d5fef6e77f524dbc52436c5be66619"
+    },
+    "flash_readback": {
+      "app_address": "0x08008000",
+      "pre_flash_backup_rc": 0,
+      "app_flash_verify_rc": 0,
+      "post_flash_readback_rc": 0,
+      "post_flash_cmp_rc": 0,
+      "readback_sha256": "8d789d8bc24eb5d93820fe670e5cc43e75d5fef6e77f524dbc52436c5be66619"
+    },
+    "single_param_persistence": {
+      "dir": "results/master_launch/ml_20260607_175444_param_queue_upper_realign/param_persist_gate_20260607_175915",
+      "rc": 0,
+      "verdict": "GREEN",
+      "param": "LOG_DISARMED",
+      "original": 0.0,
+      "test_value": 1.0,
+      "after_reset": 1.0,
+      "restored_after_reset": 0.0,
+      "reset_after_set_rc": 0,
+      "reset_after_restore_rc": 0
+    },
+    "sequential_30_param_persistence": {
+      "dir": "results/master_launch/ml_20260607_175444_param_queue_upper_realign/param_sequence_persist_gate_20260607_182716",
+      "script": "results/master_launch/ml_20260607_175444_param_queue_upper_realign/param_sequence_persist_gate.py",
+      "rc": 0,
+      "verdict": "GREEN",
+      "selected_count": 30,
+      "selected_family": "MAV1/MAV2/MAV3 stream-rate parameters",
+      "method": "Sequential PARAM_SET with matching PARAM_VALUE acknowledgement, reset-run, readback, sequential restore, second reset-run, final readback.",
+      "reset_after_sequence_set_rc": 0,
+      "reset_after_sequence_restore_rc": 0
+    },
+    "exploratory_burst_param_test": {
+      "dir": "results/master_launch/ml_20260607_175444_param_queue_upper_realign/param_burst_persist_gate_20260607_181552_mav_rc",
+      "script": "results/master_launch/ml_20260607_175444_param_queue_upper_realign/param_burst_persist_gate.py",
+      "rc": 2,
+      "verdict": "RED",
+      "reason": "test_burst_missing_ack",
+      "interpretation": "A no-wait burst of 36 PARAM_SET messages did not collect all PARAM_VALUE acknowledgements. This is tracked as a GCS/CDC/backpressure stress finding, not as the normal AP_Param persistence verdict for this upper-layer queue restoration.",
+      "restore_audit_dir": "results/master_launch/ml_20260607_175444_param_queue_upper_realign/param_dirty_restore_confirm_20260607_182117",
+      "restore_audit_rc": 0,
+      "restore_audit_verdict": "GREEN",
+      "dirty_params_restored": 10
+    },
+    "final_mavlink_physical_interval_gate": {
+      "dir": "results/master_launch/ml_20260607_175444_param_queue_upper_realign/final_physical_interval_gate_20260607_182948",
+      "rc": 0,
+      "verdict": "GREEN",
+      "params": {
+        "AHRS_EKF_TYPE": 3.0,
+        "GPS1_TYPE": 1.0,
+        "SCHED_LOOP_RATE": 400.0
+      },
+      "set_message_interval_ack_result": 0,
+      "get_message_interval_us": 200000,
+      "counts_30s": {
+        "HEARTBEAT": 30,
+        "SYS_STATUS": 110,
+        "RAW_IMU": 110,
+        "SCALED_PRESSURE": 110,
+        "ATTITUDE": 111,
+        "EKF_STATUS_REPORT": 111
+      },
+      "max_silence_s": 0.518
+    },
+    "final_gdb": {
+      "rc": 0,
+      "openocd_target": "STM32F7 via SWD",
+      "halt_mode": "Thread",
+      "pc": "0x08102b2a <rt_sched_remove_thread+30>",
+      "cfsr_words": [
+        "0x00000000",
+        "0x00000000",
+        "0x00000000",
+        "0x00000000"
+      ],
+      "hfsr": "0x00000000",
+      "result": "No HardFault evidence; target resumed and OpenOCD processes were cleaned up."
+    }
+  },
+  "notes": [
+    "SITL-on-HW was not used as the final verdict in this run because the current board parameters are physical/default style: AHRS_EKF_TYPE=3, GPS1_TYPE=1.",
+    "No bootloader or AP_IOMCU files were modified.",
+    "SWD remained available through flash/readback and both GDB snapshots.",
+    "The exploratory no-wait 36 PARAM_SET burst produced a useful follow-up finding for MAVLink/CDC backpressure, but the board parameter state was restored and verified before final health gates."
+  ],
+  "verdict": "GREEN"
+}

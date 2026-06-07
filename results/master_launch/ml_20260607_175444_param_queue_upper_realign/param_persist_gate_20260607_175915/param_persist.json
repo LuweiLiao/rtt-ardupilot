@@ -1,0 +1,33 @@
+{
+  "after_reset": 1.0,
+  "candidates": [
+    "LOG_DISARMED",
+    "SR0_RAW_SENS",
+    "SR0_EXT_STAT"
+  ],
+  "json_path": "results/master_launch/ml_20260607_175444_param_queue_upper_realign/param_persist_gate_20260607_175915/param_persist.json",
+  "original": 0.0,
+  "param": "LOG_DISARMED",
+  "port": "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00",
+  "reason": "param_persist_restore_ok",
+  "restored_after_reset": 0.0,
+  "steps": [
+    {
+      "set_test": 1.0
+    },
+    {
+      "log": "results/master_launch/ml_20260607_175444_param_queue_upper_realign/param_persist_gate_20260607_175915/reset_after_set.log",
+      "reset_after_set_rc": 0
+    },
+    {
+      "set_restore": 0.0
+    },
+    {
+      "log": "results/master_launch/ml_20260607_175444_param_queue_upper_realign/param_persist_gate_20260607_175915/reset_after_restore.log",
+      "reset_after_restore_rc": 0
+    }
+  ],
+  "test_value": 1.0,
+  "timestamp_utc": "2026-06-07T09:59:15.299611+00:00",
+  "verdict": "GREEN"
+}
