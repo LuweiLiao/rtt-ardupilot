@@ -1,0 +1,4 @@
+Reset_Handler literal pool (VMA 0x080DE4C4, bin offset 0xD64C4):
+  Expected: [0x20004000, 0x40003000, 0x08008000, 0xe000ed08]
+  Actual:   [0x20004000, 0x40003000, 0x08008000, 0xe000ed08]
+✅ Binary integrity check PASSED — Reset_Handler literal pool correct

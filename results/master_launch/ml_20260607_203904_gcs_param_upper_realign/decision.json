@@ -1,0 +1,291 @@
+{
+  "run": "results/master_launch/ml_20260607_203904_gcs_param_upper_realign",
+  "timestamp_local": "2026-06-07T21:10:00+08:00",
+  "topic": "gcs_param_upper_realign",
+  "lyapunov_metric": {
+    "V": "HAL-above parameter-send RTT workaround count in GCS_Param.cpp",
+    "delta": "-1",
+    "change": "Restored HAVE_PAYLOAD_SPACE(chan, PARAM_VALUE) before GCS_MAVLINK::send_parameter_value() emits PARAM_VALUE."
+  },
+  "change": {
+    "file": "libraries/GCS_MAVLink/GCS_Param.cpp",
+    "function": "GCS_MAVLINK::send_parameter_value",
+    "summary": "Remove the RTT upper-layer payload-space bypass and restore the normal ArduPilot/master PARAM_VALUE send-space guard.",
+    "reason": "PARAM_VALUE sending should obey the GCS_MAVLink payload-space contract. Skipping HAVE_PAYLOAD_SPACE in GCS_Param.cpp masks lower-layer USB CDC/DWC2/Serial backpressure behavior instead of preserving upstream semantics.",
+    "upstream_reference": "ArduPilot master checks HAVE_PAYLOAD_SPACE(chan, PARAM_VALUE) in GCS_MAVLINK::send_parameter_value before mavlink_msg_param_value_send()."
+  },
+  "scope_control": {
+    "product_code_changed": [
+      "libraries/GCS_MAVLink/GCS_Param.cpp"
+    ],
+    "not_modified": [
+      "AP_IOMCU",
+      "Tools/bootloaders",
+      "SWD/debug pin configuration",
+      "HAL_RTT USB/DWC2/Serial driver code"
+    ],
+    "deferred": [
+      "GCS_Param.cpp still contains additional upper-layer RTT parameter protocol differences: direct PARAM_REQUEST_READ send path, async reply txspace bypass, PARAM_ERROR semantic differences, and thread-safe queue type differences. They remain for later single-variable slices.",
+      "Burst PARAM_SET ACK/backpressure remains RED and is the next lower-layer USB CDC/DWC2/Serial investigation input."
+    ]
+  },
+  "verification": {
+    "static": {
+      "git_diff_check_rc": 0,
+      "product_diff": "Only libraries/GCS_MAVLink/GCS_Param.cpp changed."
+    },
+    "physical_initial_build": {
+      "command": "timeout 900s python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)",
+      "build_rc": 0,
+      "verify_bin_rc": 0,
+      "rtthread_bin_sha256": "cbc63045e102d7c4fd96abc7b6fbe8e0f6f74219b9debb1adae3684995a78888",
+      "rt_thread_elf_sha256": "b93b42d42329174f6a942302a8ce56e5a8c4c6a91822353020972c398ec3cc23"
+    },
+    "physical_initial_flash_readback": {
+      "app_address": "0x08008000",
+      "openocd_flash_readback_rc": 0,
+      "post_flash_cmp_rc": 0,
+      "readback_sha256": "cbc63045e102d7c4fd96abc7b6fbe8e0f6f74219b9debb1adae3684995a78888"
+    },
+    "fast_green": {
+      "dir": "results/master_launch/ml_20260607_203904_gcs_param_upper_realign/fast_green_20260607_205128",
+      "rc": 0,
+      "verdict": "GREEN",
+      "counts_30s": {
+        "HEARTBEAT": 30,
+        "RAW_IMU": 85,
+        "ATTITUDE": 84,
+        "EKF_STATUS_REPORT": 85,
+        "SCALED_PRESSURE": 85
+      },
+      "max_silence_s": 1.135
+    },
+    "param_read_list": {
+      "dir": "results/master_launch/ml_20260607_203904_gcs_param_upper_realign/param_list_read_gate_20260607_205213",
+      "rc": 0,
+      "verdict": "GREEN",
+      "reads": {
+        "LOG_DISARMED": 0.0,
+        "MAV_SYSID": 1.0,
+        "AHRS_EKF_TYPE": 3.0
+      },
+      "param_list": {
+        "expected_count": 912,
+        "total_param_value_messages": 912,
+        "unique_indexes": 912,
+        "unique_names": 911,
+        "coverage": 1.0,
+        "duplicate_indexes": 0,
+        "missing_count": 1,
+        "missing_sample": [
+          911
+        ]
+      },
+      "note": "unique_indexes equals expected_count and coverage is 1.0; missing_count reflects index 911 with one out-of-range/sentinel accounting artifact while all expected indexes were covered by the script verdict."
+    },
+    "single_param_persistence": {
+      "dir": "results/master_launch/ml_20260607_203904_gcs_param_upper_realign/param_persist_gate_20260607_205252",
+      "rc": 0,
+      "verdict": "GREEN",
+      "param": "LOG_DISARMED",
+      "original": 0.0,
+      "test_value": 1.0,
+      "after_reset": 1.0,
+      "restored_after_reset": 0.0
+    },
+    "sequential_30_param_persistence": {
+      "dir": "results/master_launch/ml_20260607_203904_gcs_param_upper_realign/param_sequence_persist_gate_20260607_205324",
+      "rc": 0,
+      "verdict": "GREEN",
+      "selected_count": 30,
+      "selected_family": "MAV1/MAV2/MAV3 stream-rate parameters",
+      "after_reset_values": [
+        1.0
+      ],
+      "restored_after_reset_values": [
+        0.0
+      ]
+    },
+    "burst_param_set": {
+      "dir": "results/master_launch/ml_20260607_203904_gcs_param_upper_realign/param_burst_persist_gate_20260607_205503",
+      "rc": 2,
+      "verdict": "RED",
+      "reason": "test_burst_missing_ack",
+      "set_test_burst": {
+        "sent": 36,
+        "observed": 33,
+        "missing": [
+          "MAV3_EXTRA1",
+          "MAV3_EXTRA2",
+          "MAV3_POSITION"
+        ],
+        "elapsed_s": 28.969
+      },
+      "best_effort_restore": {
+        "sent": 36,
+        "observed": 33,
+        "missing": [
+          "MAV2_EXTRA3",
+          "RC14_DZ",
+          "RC15_DZ"
+        ],
+        "reset_rc": 0
+      },
+      "classification": "ACK/backpressure window RED. This is retained as evidence and is not hidden or reinterpreted as GREEN."
+    },
+    "burst_restore_confirm": {
+      "dir": "results/master_launch/ml_20260607_203904_gcs_param_upper_realign/param_restore_confirm_20260607_205836",
+      "rc": 0,
+      "verdict": "GREEN",
+      "first_failures": {
+        "MAV2_EXTRA3": "1.0!=0.0",
+        "RC14_DZ": "1.0!=0.0",
+        "RC15_DZ": "1.0!=0.0"
+      },
+      "final_failures": {},
+      "interpretation": "The burst RED left three parameters dirty after best-effort burst restore; sequential restore plus reset-run returned all 36 selected parameters to original values."
+    },
+    "physical_interval_gate": {
+      "dir": "results/master_launch/ml_20260607_203904_gcs_param_upper_realign/physical_interval_gate_20260607_210026",
+      "rc": 0,
+      "verdict": "GREEN",
+      "params": {
+        "AHRS_EKF_TYPE": 3.0,
+        "GPS1_TYPE": 1.0,
+        "SCHED_LOOP_RATE": 400.0
+      },
+      "counts_30s": {
+        "HEARTBEAT": 31,
+        "SYS_STATUS": 150,
+        "RAW_IMU": 150,
+        "SCALED_PRESSURE": 150,
+        "ATTITUDE": 150,
+        "EKF_STATUS_REPORT": 150
+      },
+      "max_silence_s": 0.534
+    },
+    "log_download": {
+      "dir": "results/master_launch/ml_20260607_203904_gcs_param_upper_realign/log_download_gate_20260607_210116",
+      "rc": 0,
+      "verdict": "GREEN",
+      "selected_log": {
+        "id": 1,
+        "size": 249856,
+        "num_logs": 1
+      },
+      "download": {
+        "bytes": 249856,
+        "sha256": "94e8d243ede7638236bd0f8a8dc1eaca3ebc9f2bbba3adbc565090b5d320552d"
+      },
+      "LOG_DISARMED_after_reset": 0.0
+    },
+    "post_log_fast_green": {
+      "dir": "results/master_launch/ml_20260607_203904_gcs_param_upper_realign/post_log_fast_green_20260607_210144",
+      "rc": 0,
+      "verdict": "GREEN",
+      "counts_30s": {
+        "HEARTBEAT": 30,
+        "RAW_IMU": 116,
+        "ATTITUDE": 116,
+        "EKF_STATUS_REPORT": 115,
+        "SCALED_PRESSURE": 116
+      },
+      "max_silence_s": 1.214
+    },
+    "gdb_fault_snapshot_before_sitl": {
+      "dir": "results/master_launch/ml_20260607_203904_gcs_param_upper_realign/gdb_fault_snapshot_retry_20260607_210344",
+      "rc": 0,
+      "pc": "0x08102d32 <rt_enter_critical+10>",
+      "cfsr_words": [
+        "0x00000000",
+        "0x00000000",
+        "0x00000000",
+        "0x00000000"
+      ],
+      "hfsr": "0x00000000",
+      "backtrace_top": "rt_enter_critical -> rt_spin_lock_irqsave -> rt_thread_defunct_dequeue -> rt_defunct_execute -> idle_thread_entry",
+      "note": "An earlier GDB script attempt returned rc=1 because this GDB did not accept xpsr as a register name; retry without xpsr succeeded and showed no HardFault evidence."
+    },
+    "sitl_on_hw": {
+      "build_dir": "results/master_launch/ml_20260607_203904_gcs_param_upper_realign/sitl_on_hw_build_20260607_210429",
+      "build_rc": 0,
+      "verify_bin_rc": 0,
+      "openocd_flash_readback_rc": 0,
+      "post_flash_cmp_rc": 0,
+      "rtthread_bin_sha256": "be13c90e950301cb1c7c629b1e1c7c1b3912cba0e4d21ef05b3e6e7362fabb48",
+      "gate_dir": "results/master_launch/ml_20260607_203904_gcs_param_upper_realign/sitl_on_hw_build_20260607_210429/sitl_on_hw_gate_20260607_210624",
+      "gate_rc": 0,
+      "gate_verdict": "GREEN",
+      "params": {
+        "AHRS_EKF_TYPE": 10.0,
+        "GPS1_TYPE": 100.0,
+        "SIM_RATE_HZ": 400.0,
+        "SCHED_LOOP_RATE": 400.0
+      },
+      "counts_20s": {
+        "HEARTBEAT": 20,
+        "RAW_IMU": 100,
+        "SCALED_PRESSURE": 100,
+        "ATTITUDE": 101,
+        "GPS_RAW_INT": 100,
+        "GLOBAL_POSITION_INT": 101,
+        "SIMSTATE": 100,
+        "SYS_STATUS": 101
+      },
+      "max_silence_s": 0.0
+    },
+    "physical_restore_after_sitl": {
+      "dir": "results/master_launch/ml_20260607_203904_gcs_param_upper_realign/physical_restore_build_20260607_210712",
+      "build_rc": 0,
+      "verify_bin_rc": 0,
+      "openocd_flash_readback_rc": 0,
+      "post_flash_cmp_rc": 0,
+      "rtthread_bin_sha256": "8631b2d3e69e561513e2639cc663cd3c9dcdb9d487757045aedf9c67f239ec87"
+    },
+    "final_physical_interval_gate": {
+      "dir": "results/master_launch/ml_20260607_203904_gcs_param_upper_realign/physical_restore_build_20260607_210712/final_physical_interval_gate_20260607_210904",
+      "rc": 0,
+      "verdict": "GREEN",
+      "params": {
+        "AHRS_EKF_TYPE": 3.0,
+        "GPS1_TYPE": 1.0,
+        "SCHED_LOOP_RATE": 400.0
+      },
+      "counts_30s": {
+        "HEARTBEAT": 30,
+        "SYS_STATUS": 149,
+        "RAW_IMU": 149,
+        "SCALED_PRESSURE": 149,
+        "ATTITUDE": 150,
+        "EKF_STATUS_REPORT": 149
+      },
+      "max_silence_s": 0.46
+    },
+    "final_gdb_fault_snapshot": {
+      "dir": "results/master_launch/ml_20260607_203904_gcs_param_upper_realign/physical_restore_build_20260607_210712/final_gdb_fault_snapshot_20260607_210959",
+      "rc": 0,
+      "pc": "0x0800825c <rt_hw_interrupt_disable>",
+      "cfsr_words": [
+        "0x00000000",
+        "0x00000000",
+        "0x00000000",
+        "0x00000000"
+      ],
+      "hfsr": "0x00000000",
+      "backtrace_top": "rt_hw_interrupt_disable -> rt_exit_critical",
+      "cleanup": "openocd/openoccd not running after snapshot."
+    }
+  },
+  "verdict": "PARTIAL_GREEN_WITH_RETAINED_RED",
+  "commit_policy": {
+    "commit_this_change": true,
+    "reason": "The single upper-layer payload-space bypass recovery is validated by build, flash/readback, PARAM_REQUEST_READ, PARAM_REQUEST_LIST, single/30 sequential persistence, message stream, log download, SITL-on-HW, physical restore, and GDB fault snapshots. The burst PARAM_SET RED is retained as evidence for the next lower-layer backpressure slice rather than hidden by reintroducing an upper-layer workaround.",
+    "next_unique_variable": "AP_HAL_RTT USB CDC / DWC2 / Serial PARAM_SET burst ACK/backpressure"
+  },
+  "notes": [
+    "No bootloader or AP_IOMCU files were modified.",
+    "SWD stayed available through OpenOCD flash/readback, SITL-on-HW, physical restore, and GDB snapshots.",
+    "Large local evidence files such as flash dumps, downloaded log binaries, pid files, and build stdout/stderr are intentionally not meant for commit.",
+    "The board was restored from SITL-on-HW firmware back to normal physical ArduCopter firmware before final physical MAVLink and GDB gates."
+  ]
+}
