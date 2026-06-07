@@ -1,0 +1,43 @@
+{
+  "experiment": "D51_rejected_clean_D47_restore_attempt",
+  "timestamp_local": "2026-06-07T12:57:05+08:00",
+  "purpose": "After rejecting D51, rebuild and flash the clean committed D47/a4da47f60d source from /tmp/pogo-apm-d51-clean to test whether the committed tree alone restores the board.",
+  "source": {
+    "head": "a4da47f60d 记录D48D49 USB实验拒绝并恢复D47基线",
+    "worktree": "/tmp/pogo-apm-d51-clean",
+    "d51_patch_removed": true,
+    "source_diff": "clean"
+  },
+  "build": {
+    "command": "python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)",
+    "result": "pass",
+    "rom_bytes": 1313228,
+    "dtcm_bytes": 129196,
+    "sram1_bytes": 4576,
+    "reset_handler_literal_pool": "pass",
+    "rtthread_bin_sha256": "5358725a1a43d43d07731e1db9b686bf06fd42a8a4d02929835edad348ae2033",
+    "elf_sha256": "84c2e11d436fa04ce326d0408e31a65381d062d29c4579bc1dca728de0daee93"
+  },
+  "flash": {
+    "result": "pass",
+    "address": "0x08008000",
+    "verify": "ok"
+  },
+  "mavlink": {
+    "result": "fail_no_cdc_port",
+    "note": "The clean committed-tree rebuild did not restore APM CDC enumeration."
+  },
+  "gdb": {
+    "result": "fail_hardfault",
+    "pc": "0x080083ee hardfault_hang",
+    "lr": "0xfffffff1",
+    "cfsr": "0x00008200",
+    "hfsr": "0x40000000",
+    "dfsr": "0x0000000b"
+  },
+  "decision": {
+    "verdict": "clean_commit_tree_not_a_valid_restore_point",
+    "reason": "Although a4da47f60d has no source diff from a1092831c0 except evidence files, a clean rebuild from that committed tree still HardFaults and does not enumerate CDC. The previously verified D50 runtime therefore depended on main-worktree changes that were not captured in the commit.",
+    "risk": "The repository lacks a fully committed, reproducible runnable baseline. This must be fixed before treating later experiments as clean deltas."
+  }
+}

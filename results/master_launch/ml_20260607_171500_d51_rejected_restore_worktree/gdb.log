@@ -1,0 +1,14 @@
+0x080e5274 in _spi_dma_xfer (bus_dev=<optimized out>, spi=0x40013000, bus=<optimized out>, send=send@entry=0x200553d0 "\001g", recv=recv@entry=0x200553d0 "\001g", len=<optimized out>, len@entry=112, br=<optimized out>) at /data/firmare/pogo-apm/libraries/AP_HAL_RTT/SPIDevice.cpp:677
+677	        if (!(dma->rx_stream->CR & DMA_SxCR_EN) &&
+pc             0x80e5274           0x80e5274 <_spi_dma_xfer(RTT::DeviceBus*, SPI_TypeDef*, uint8_t, uint8_t const*, uint8_t*, uint32_t, uint32_t)+420>
+lr             0x80e51d3           135156179
+sp             0x2004cf04          0x2004cf04
+msp            0x200054f0          0x200054f0 <completed>
+psp            0x2004cf04          0x2004cf04
+#0  0x080e5274 in _spi_dma_xfer (bus_dev=<optimized out>, spi=0x40013000, bus=<optimized out>, send=send@entry=0x200553d0 "", recv=0x200553d0 "", recv@entry=0x0, len=<optimized out>, len@entry=112, br=<optimized out>) at /data/firmare/pogo-apm/libraries/AP_HAL_RTT/SPIDevice.cpp:677
+#1  0x080e5664 in RTT::SPIDevice::transfer (this=0x20055230, send=0x200553d0 "", send_len=112, recv=0x0, recv_len=112) at /data/firmare/pogo-apm/libraries/AP_HAL_RTT/SPIDevice.cpp:1121
+#2  0x080e4c60 in AP_HAL::SPIDevice::transfer_fullduplex (this=<optimized out>, send_recv=<optimized out>, len=<optimized out>) at /data/firmare/pogo-apm/libraries/AP_HAL/SPIDevice.h:53
+#3  0x080a77a6 in AP_InertialSensor_Invensense::_read_fifo (this=0x20055280) at /data/firmare/pogo-apm/libraries/AP_InertialSensor/AP_InertialSensor_Invensense.cpp:774
+#4  0x00000000 in ?? ()
+0xe000ed28: 00000000 00000000 0000000b 00000000 
+[Inferior 1 (Remote target) detached]

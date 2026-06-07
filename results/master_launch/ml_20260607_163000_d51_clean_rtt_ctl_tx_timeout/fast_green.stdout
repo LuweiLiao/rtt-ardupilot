@@ -1,0 +1,7 @@
+{
+  "json_path": "/home/llw/firmare/pogo-apm/results/validation/fast_green/20260607T042939Z.json",
+  "port": "auto",
+  "reason": "no_port",
+  "timestamp_utc": "2026-06-07T04:29:39.181863+00:00",
+  "verdict": "RED"
+}

@@ -1,0 +1,13 @@
+FIXTURE_DIRTY reason=dirty_ttyACM
+{
+  "details": {
+    "holders": [
+      "1808215:python3"
+    ]
+  },
+  "json_path": "/home/llw/firmare/pogo-apm/results/validation/fast_green/20260607T045253Z.json",
+  "port": null,
+  "reason": "dirty_ttyACM",
+  "timestamp_utc": "2026-06-07T04:52:53.176840+00:00",
+  "verdict": "FIXTURE_DIRTY"
+}

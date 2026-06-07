@@ -1,0 +1,26 @@
+0x080083ee in hardfault_hang ()
+Unable to match requested speed 2000 kHz, using 1800 kHz
+Unable to match requested speed 2000 kHz, using 1800 kHz
+[stm32f7x.cpu] halted due to debug-request, current mode: Thread 
+xPSR: 0x01000000 pc: 0x08000200 msp: 0x20020400
+pc             0x80083ee           0x80083ee <hardfault_hang+2>
+lr             0xfffffff1          -15
+sp             0x200054b0          0x200054b0
+msp            0x20020400          0x20020400 <cache_buf+1024>
+psp            0x0                 0x0
+[stm32f7x.cpu] halted due to debug-request, current mode: Handler HardFault
+xPSR: 0x01000003 pc: 0x080083ee msp: 0x200054b0
+pc             0x80083ee           0x80083ee <hardfault_hang+2>
+lr             0xfffffff1          -15
+sp             0x200054b0          0x200054b0
+msp            0x20020400          0x20020400 <cache_buf+1024>
+psp            0x0                 0x0
+#0  0x080083ee in hardfault_hang ()
+#1  <signal handler called>
+#2  0x00000000 in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+0xe000ed28: 00008200 40000000 0000000b 71366a8f 71366a8f 00000000 
+$1 = 0x0
+$2 = 0x0
+$3 = 0
+[Inferior 1 (Remote target) detached]

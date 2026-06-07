@@ -1,0 +1,23 @@
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/serial/serialposix.py", line 322, in open
+    self.fd = os.open(self.portstr, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "/home/llw/venv-ardupilot/lib/python3.12/site-packages/pymavlink/mavutil.py", line 2048, in mavlink_connection
+    return mavserial(device,
+           ^^^^^^^^^^^^^^^^^
+  File "/home/llw/venv-ardupilot/lib/python3.12/site-packages/pymavlink/mavutil.py", line 969, in __init__
+    raise e
+  File "/home/llw/venv-ardupilot/lib/python3.12/site-packages/pymavlink/mavutil.py", line 965, in __init__
+    self.port = serial.Serial(self.device, 1200, timeout=0,
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/serial/serialutil.py", line 244, in __init__
+    self.open()
+  File "/usr/lib/python3/dist-packages/serial/serialposix.py", line 325, in open
+    raise SerialException(msg.errno, "could not open port {}: {}".format(self._port, msg))
+serial.serialutil.SerialException: [Errno 2] could not open port /dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00: [Errno 2] No such file or directory: '/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00'

@@ -1,0 +1,62 @@
+{
+  "experiment": "D51_rejected_restore_main_worktree_runtime",
+  "timestamp_local": "2026-06-07T12:57:05+08:00",
+  "purpose": "After clean committed-tree restore failed, rebuild and flash the main workspace with the D51 three-file patch removed to recover the actual verified runtime state.",
+  "source": {
+    "head": "a4da47f60d 记录D48D49 USB实验拒绝并恢复D47基线",
+    "worktree": "/home/llw/firmare/pogo-apm",
+    "d51_patch_removed": true,
+    "d51_source_diff_after_revert": "clean",
+    "other_worktree_changes_present": true,
+    "note": "The D51 files have no diff after revert. Other pre-existing dirty worktree changes were left untouched and were part of this recovery build."
+  },
+  "build": {
+    "command": "python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)",
+    "result": "pass",
+    "rom_bytes": 1313060,
+    "dtcm_bytes": 129204,
+    "sram1_bytes": 4576,
+    "reset_handler_literal_pool": "pass",
+    "rtthread_bin_sha256": "0ed1e10a9888493d461db3ff47b3124f8ddbad406c979892a15cd918b7b303f5",
+    "elf_sha256": "6fee5caddafcf5a1a83b502e65219a6a19efd6df978b145514b79b58f3877aea"
+  },
+  "flash": {
+    "result": "pass",
+    "address": "0x08008000",
+    "verify": "ok",
+    "cdc_after_flash": "usb-APM_CUAV_V5_CDC_1_00001-if00 -> ttyACM1"
+  },
+  "mavlink": {
+    "heartbeat": "HEARTBEAT 2 3 81 0 3",
+    "fast_green_initial": {
+      "verdict": "FIXTURE_DIRTY",
+      "reason": "dirty_ttyACM"
+    },
+    "fast_green_retry": {
+      "verdict": "GREEN",
+      "reason": "ok",
+      "sample_seconds": 30.0,
+      "settle_seconds": 0.63,
+      "max_silence_seconds": 1.356,
+      "counts": {
+        "HEARTBEAT": 30,
+        "RAW_IMU": 150,
+        "ATTITUDE": 150,
+        "EKF_STATUS_REPORT": 150,
+        "SCALED_PRESSURE": 150
+      },
+      "firmware_hint": "flight_sw_version=0x04070000"
+    }
+  },
+  "gdb": {
+    "result": "pass_no_hardfault",
+    "pc": "0x080e5274 _spi_dma_xfer",
+    "fault_status_mdw": "00000000 00000000 0000000b 00000000",
+    "note": "CFSR and HFSR were zero; DFSR debug bits are expected after halt. PC halted in normal SPI/IMU thread code, not HardFault_Handler."
+  },
+  "decision": {
+    "verdict": "restore_runtime_and_continue",
+    "reason": "Removing D51 and rebuilding the main worktree restores CDC enumeration, MAVLink STANDBY/GREEN, and GDB no-HardFault. D51 remains rejected.",
+    "followup": "Before the next USB perturbation, consolidate the existing runnable worktree changes into a committed reproducible baseline or create an explicit clean baseline branch. Otherwise clean-worktree experiments will not reproduce the verified runtime."
+  }
+}

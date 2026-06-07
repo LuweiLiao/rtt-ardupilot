@@ -1,0 +1,19 @@
+0x080083ee in hardfault_hang ()
+pc             0x80083ee           0x80083ee <hardfault_hang+2>
+lr             0xfffffff1          -15
+sp             0x200054b0          0x200054b0
+msp            0x200054b0          0x200054b0
+psp            0x2001f5f8          0x2001f5f8 <idle_thread_stack+168>
+#0  0x080083ee in hardfault_hang ()
+#1  <signal handler called>
+#2  0x00000000 in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+0xe000ed28: 00008200 40000000 0000000b 71366a8f 71366a8f 00000000 
+$1 = 0x0
+$2 = 0x0
+$3 = 0x0
+$4 = 0x0
+$5 = 0x0
+$6 = 0x0
+$7 = 0x0
+[Inferior 1 (Remote target) detached]

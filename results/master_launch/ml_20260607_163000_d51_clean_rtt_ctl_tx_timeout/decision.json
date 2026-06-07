@@ -1,0 +1,61 @@
+{
+  "experiment": "D51_clean_rtt_ctl_tx_timeout",
+  "timestamp_local": "2026-06-07T12:57:05+08:00",
+  "purpose": "Test whether bounding RTT_CTL UART7 polling prevents the D47 long-tail MAVLink heartbeat gap without changing ArduPilot layers above HAL_RTT/BSP.",
+  "source": {
+    "base_head": "a4da47f60d 记录D48D49 USB实验拒绝并恢复D47基线",
+    "worktree": "/tmp/pogo-apm-d51-clean",
+    "patch_scope": [
+      "libraries/AP_HAL_RTT/hwdef/common/board/drivers_ll/drv_usart_ll.c",
+      "libraries/AP_HAL_RTT/hwdef/common/board/drivers_ll/drv_usart_ll.h",
+      "libraries/AP_HAL_RTT/rtt_ctl_telemetry.c"
+    ],
+    "change": "Added usart_ll_tx_poll_timeout() and used it only for RTT_CTL UART7 telemetry.",
+    "upper_layer_change": false
+  },
+  "build": {
+    "command": "python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)",
+    "result": "pass",
+    "rom_bytes": 1313332,
+    "dtcm_bytes": 129212,
+    "sram1_bytes": 4576,
+    "reset_handler_literal_pool": "pass",
+    "rtthread_bin_sha256": "505506c97682f3b76798d6ad26a2216e177fe27cad82eff7b362eb362636be34",
+    "elf_sha256": "110756b87d7d44cd3d605afb1014d12e83a6c11897ad77620016a1bb59c5a691"
+  },
+  "flash": {
+    "command": "openocd -f interface/stlink.cfg -f target/stm32f7x.cfg -c init -c 'program build/rtt_cuav_v5/rtthread.bin 0x08008000 verify' -c 'reset run' -c shutdown",
+    "result": "pass",
+    "address": "0x08008000",
+    "verify": "ok"
+  },
+  "mavlink": {
+    "heartbeat": "fail_no_cdc_port",
+    "fast_green": "RED",
+    "reason": "no_port",
+    "note": "After flash and OpenOCD reset run, only ST-Link and the CH340 debug serial device were present; the APM CUAV V5 CDC interface did not enumerate."
+  },
+  "gdb": {
+    "result": "fail_hardfault",
+    "pc": "0x080083ee hardfault_hang",
+    "lr": "0xfffffff1",
+    "cfsr": "0x00008200",
+    "hfsr": "0x40000000",
+    "dfsr": "0x0000000b",
+    "fault_addr_words": [
+      "0x71366a8f",
+      "0x71366a8f"
+    ],
+    "reset_timeline": "reset halt started at bootloader PC 0x08000200, resume for 12s then halt found Handler HardFault at hardfault_hang.",
+    "rtt_ctl_counters": {
+      "rtt_ctl_tx_timeout_count": 0,
+      "rtt_ctl_tx_dropped_bytes": 0,
+      "rtt_ctl_tx_last_result": 0
+    }
+  },
+  "decision": {
+    "verdict": "reject_and_revert",
+    "reason": "D51 does not satisfy L0. The clean D51 build flashes successfully but the app CDC does not enumerate and OpenOCD/GDB repeatedly catches HardFault after reset.",
+    "next_step": "Remove the D51 source patch and restore a known runnable firmware before continuing USB long-tail work."
+  }
+}

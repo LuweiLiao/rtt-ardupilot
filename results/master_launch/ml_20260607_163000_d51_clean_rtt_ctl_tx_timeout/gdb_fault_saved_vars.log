@@ -1,0 +1,25 @@
+0x080083ee in hardfault_hang ()
+pc             0x80083ee           0x80083ee <hardfault_hang+2>
+lr             0xfffffff1          -15
+sp             0x200054b0          0x200054b0
+msp            0x200054b0          0x200054b0
+psp            0x2001f610          0x2001f610 <idle_thread_stack+176>
+0xe000ed28: 00008200 40000000 0000000b 71366a8f 71366a8f 00000000 
+$1 = 0x0
+$2 = 0x0
+$3 = 0x0
+$4 = 0x0
+$5 = 0x0
+$6 = 0x0
+$7 = 0x0
+$8 = 0x0
+0x0:	0x00000000	0x00000000	0x00000000	0x00000000
+0x10:	0x00000000	0x00000000	0x00000000	0x00000000
+0x20:	0x00000000	0x00000000	0x00000000	0x00000000
+0x30:	0x00000000	0x00000000	0x00000000	0x00000000
+No symbol matches rtt_dbg_hardfault_stack_pc.
+No symbol matches rtt_dbg_hardfault_stack_lr.
+$9 = 0x0
+$10 = 0x0
+$11 = 0
+[Inferior 1 (Remote target) detached]
