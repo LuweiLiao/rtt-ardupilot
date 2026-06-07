@@ -1,0 +1,77 @@
+{
+  "experiment": "D48_xfrsiz_aware_recovery",
+  "timestamp_local": "2026-06-07T11:02:00+08:00",
+  "change": {
+    "file": "libraries/AP_HAL_RTT/hal_usb_cherryusb_shim.c",
+    "detail": "When EP1 DIEPTSIZ.XFRSIZ reached zero, extend CherryUSB busy recovery wait from 100 ms to 500 ms."
+  },
+  "build": {
+    "result": "pass",
+    "rom_bytes": 1313084,
+    "dtcm_bytes": 129204,
+    "reset_handler_literal_pool": "pass",
+    "rtthread_bin_sha256": "617c3059cbbae9065ec2e98c88790c8a5bbc43f5792f17d1d65edf5cdcc388ce",
+    "elf_sha256": "46ba1b02c708dc51be58ddb8b7180b0c00ac53eaba16d8012e54d3cca2255ef3"
+  },
+  "flash": {
+    "result": "pass",
+    "address": "0x08008000",
+    "verify": "ok"
+  },
+  "short_gate": {
+    "heartbeat": "HEARTBEAT 2 3 81 0 3",
+    "fast_green": "GREEN",
+    "reason": "ok",
+    "counts": {
+      "HEARTBEAT": 30,
+      "RAW_IMU": 132,
+      "ATTITUDE": 132,
+      "EKF_STATUS_REPORT": 132,
+      "SCALED_PRESSURE": 132
+    },
+    "max_silence_seconds": 1.307
+  },
+  "long_soak": {
+    "sample_seconds": 180,
+    "fast_green": "RED",
+    "reason": "hb_gap",
+    "counts": {
+      "HEARTBEAT": 141,
+      "RAW_IMU": 406,
+      "ATTITUDE": 406,
+      "EKF_STATUS_REPORT": 406,
+      "SCALED_PRESSURE": 406
+    },
+    "max_silence_seconds": 13.511
+  },
+  "gdb": {
+    "result": "pass_no_hardfault",
+    "fault_status_mdw": "00000000 00000000 0000000b 00000000",
+    "pc": "0x080e528e",
+    "cherry_bulk_in_calls_hex": "0x0000106b",
+    "cherry_busy_timeout_recovery_count_hex": "0x0000008e",
+    "cherry_recovery_last_reason": "BUSY_TIMEOUT",
+    "dwc2_ep1_start_write_calls_hex": "0x000010fa",
+    "dwc2_ep1_xfrc_hex": "0x0000106b"
+  },
+  "comparison": {
+    "d47_180s_max_silence_seconds": 9.007,
+    "d47_180s_fast_green": "RED",
+    "d47_180s_reason": "hb_gap",
+    "note": "D48 reduced recovery count but increased heartbeat gap, so waiting longer after XFRSIZ=0 is the wrong direction."
+  },
+  "revert": {
+    "result": "done",
+    "restored_source_to": "a1092831c0 D47",
+    "restore_build": "pass",
+    "restore_flash_verify": "ok",
+    "restore_30s_fast_green": "GREEN",
+    "restore_gdb": "pass_no_hardfault",
+    "restore_evidence_dir": "results/master_launch/ml_20260607_110255_d48_reverted_d47_baseline"
+  },
+  "decision": {
+    "verdict": "reject_and_revert",
+    "reason": "180 s soak failed with worse hb_gap than D47, despite no HardFault and fewer recoveries.",
+    "followup": "Do not extend busy timeout further; test a D49 perturbation that breaks ISR completion callback to next-start reentrancy."
+  }
+}

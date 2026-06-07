@@ -1,0 +1,23 @@
+fast_green_gate run 1/1 port=/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00
+RED reason=hb_gap counts={'HEARTBEAT': 141, 'RAW_IMU': 406, 'ATTITUDE': 406, 'EKF_STATUS_REPORT': 406, 'SCALED_PRESSURE': 406}
+{
+  "baro_hpa": 1004.34,
+  "counts": {
+    "ATTITUDE": 406,
+    "EKF_STATUS_REPORT": 406,
+    "HEARTBEAT": 141,
+    "RAW_IMU": 406,
+    "SCALED_PRESSURE": 406
+  },
+  "ekf_flags": "0xa7",
+  "firmware_hint": "flight_sw_version=0x04070000",
+  "json_path": "/data/firmare/pogo-apm/results/validation/fast_green/20260607T030110Z.json",
+  "max_silence": 13.511,
+  "port": "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00",
+  "reason": "hb_gap",
+  "sample_seconds": 180.0,
+  "settle_seconds": 0.01,
+  "timestamp_utc": "2026-06-07T03:01:10.344052+00:00",
+  "verdict": "RED",
+  "zacc_mg": -1015
+}

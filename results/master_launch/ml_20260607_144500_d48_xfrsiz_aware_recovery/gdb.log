@@ -1,0 +1,41 @@
+0x080e528e in _spi_dma_xfer (bus_dev=<optimized out>, spi=0x40013000, bus=<optimized out>, send=send@entry=0x200553d0 "\001f", recv=recv@entry=0x200553d0 "\001f", len=<optimized out>, len@entry=112, br=<optimized out>) at /data/firmare/pogo-apm/libraries/AP_HAL_RTT/SPIDevice.cpp:677
+677	        if (!(dma->rx_stream->CR & DMA_SxCR_EN) &&
+pc             0x80e528e           0x80e528e <_spi_dma_xfer(RTT::DeviceBus*, SPI_TypeDef*, uint8_t, uint8_t const*, uint8_t*, uint32_t, uint32_t)+422>
+lr             0x80e51eb           135156203
+sp             0x2004cf04          0x2004cf04
+#0  0x080e528e in _spi_dma_xfer (bus_dev=<optimized out>, spi=0x40013000, bus=<optimized out>, send=send@entry=0x200553d0 "", recv=0x200553d0 "", recv@entry=0x0, len=<optimized out>, len@entry=112, br=<optimized out>) at /data/firmare/pogo-apm/libraries/AP_HAL_RTT/SPIDevice.cpp:677
+#1  0x080e567c in RTT::SPIDevice::transfer (this=0x20055230, send=0x200553d0 "", send_len=112, recv=0x0, recv_len=112) at /data/firmare/pogo-apm/libraries/AP_HAL_RTT/SPIDevice.cpp:1121
+#2  0x080e4c78 in AP_HAL::SPIDevice::transfer_fullduplex (this=<optimized out>, send_recv=<optimized out>, len=<optimized out>) at /data/firmare/pogo-apm/libraries/AP_HAL/SPIDevice.h:53
+#3  0x080a77a6 in AP_InertialSensor_Invensense::_read_fifo (this=0x20055280) at /data/firmare/pogo-apm/libraries/AP_InertialSensor/AP_InertialSensor_Invensense.cpp:774
+#4  0x00000000 in ?? ()
+
+-- fault status --
+0xe000ed28: 00000000 00000000 0000000b 00000000
+
+-- core markers --
+0x200002fc: 11111111 00000007 12345678 00000009
+0x20019c18: 0002c759 00003422 000001f8 00000020
+
+-- uart drain counters --
+0x20019c60: 0003e10a 000056a6 00001428 00004a1d 0001ab80 0001ab80 0001ab80 0001ab80
+
+-- cherryusb counters D40 --
+0x2001aba0: c41e0001 0000106b 00000001 0000008e 00000000 00000001 00000000 00000001
+0x2001abc0: 0000008e 00000000 0000106b 0000106b 80498040 00000080 00080000 00000010
+0x2001abe0: 000001f5 00000000 00000002 00000020 000001f7 00000000 00000010 00000000
+0x2001ac00: 00000010 000001f7 00000001 00002218 00004a8d 0000111f 00000000 000010fa
+0x2001ac20: 00000002
+
+-- dwc2 ep1 counters extended D40 --
+0x2001bbd0: 00000029 0000106b 0005000b 80498040 00000001 00080040 00000002 00000000
+0x2001bbf0: 800c3810 00000080 00000081 00000080 00002165 00000040 000010fa 000010fa
+0x2001bc10: 00000000 80498040 00000080 00080040 00000020 00000040 00000010 00000040
+0x2001bc30: 000010fa 00000000 00000040 80498040 00000080 00080000 00000010 000010fa
+0x2001bc50: 000010fa 00031a7f 00000000 0000106b 00002188 00040000 00000002 0000223b
+0x2001bc70: 3a2ecb1a b8e65f30
+
+-- otg fs global/device regs --
+0x50000014: 44808428 800c3810
+0x50000810: 00000001 00000009 00000000 0005000b
+0x50000920: 80498040 00000000 00000080 00000000 00080000
+[Inferior 1 (Remote target) detached]

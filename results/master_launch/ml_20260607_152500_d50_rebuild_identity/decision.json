@@ -1,0 +1,59 @@
+{
+  "experiment": "D50_rebuild_identity_restore_D47",
+  "timestamp_local": "2026-06-07T11:55:30+08:00",
+  "purpose": "Close the feedback loop after D49 revert by rebuilding and reflashing the exact D47 source/ELF identity, then verifying MAVLink and GDB health before any new USB experiment.",
+  "source": {
+    "head": "a1092831c0 验证D47 USB TXFE写入临界区",
+    "usb_source_diff": "clean",
+    "no_source_change": true
+  },
+  "build": {
+    "command": "python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)",
+    "result": "pass",
+    "rom_bytes": 1313060,
+    "dtcm_bytes": 129204,
+    "sram1_bytes": 4576,
+    "reset_handler_literal_pool": "pass",
+    "rtthread_bin_sha256": "df41b1c2e5d1c10c241d0c6a1fa389c659572d3e1a0449bbfb70c45a84959a8a",
+    "elf_sha256": "4d0dcfbdedbbb20340521db73da7adbe7b6a41c036447de20ea66039e186ffc4"
+  },
+  "flash": {
+    "command": "openocd -f interface/stlink.cfg -f target/stm32f7x.cfg -c init -c 'program build/rtt_cuav_v5/rtthread.bin 0x08008000 verify' -c 'reset run' -c shutdown",
+    "result": "pass",
+    "address": "0x08008000",
+    "verify": "ok"
+  },
+  "mavlink": {
+    "heartbeat": "HEARTBEAT 2 3 81 0 3",
+    "fast_green": "GREEN",
+    "reason": "ok",
+    "sample_seconds": 30.0,
+    "settle_seconds": 0.39,
+    "counts": {
+      "HEARTBEAT": 30,
+      "RAW_IMU": 149,
+      "ATTITUDE": 149,
+      "EKF_STATUS_REPORT": 149,
+      "SCALED_PRESSURE": 149
+    },
+    "max_silence_seconds": 1.146,
+    "firmware_hint": "flight_sw_version=0x04070000"
+  },
+  "gdb": {
+    "result": "pass_no_hardfault",
+    "fault_status_mdw": "00000000 00000000 0000000b 00000000",
+    "note": "CFSR and HFSR were zero; DFSR debug bits are expected after halt. PC halted in normal AP_DAL_GPS code, not HardFault_Handler.",
+    "pc": "0x080aefac"
+  },
+  "stack_overflow_followup": {
+    "prior_symptom": "After the first D49 revert run, active MAVLink probe reported STATUSTEXT 'Internal errors 0x800000 l:31 stack_ovrflw' and HEARTBEAT system_status=5.",
+    "current_result": "After rebuilding and reflashing D47 identity, heartbeat returned to system_status=3 and fast-green returned GREEN.",
+    "thread_scan_status": "inconclusive",
+    "thread_scan_note": "The experimental GDB object-container scan read _object_container as zero at runtime, so it is not accepted as stack evidence. No HAL/BSP stack-size change was made from that diagnostic."
+  },
+  "decision": {
+    "verdict": "restore_baseline_and_continue",
+    "reason": "The D47 source and board firmware identity are now closed-loop verified again: SCons build, OpenOCD flash verify, MAVLink STANDBY/GREEN, and GDB no HardFault.",
+    "followup": "Use this fresh D47 identity as the baseline for the next USB long-tail perturbation. Do not proceed from stale runtime state."
+  }
+}

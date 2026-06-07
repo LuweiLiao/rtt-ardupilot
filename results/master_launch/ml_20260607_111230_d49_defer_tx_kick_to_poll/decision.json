@@ -1,0 +1,62 @@
+{
+  "experiment": "D49_defer_tx_kick_to_poll",
+  "timestamp_local": "2026-06-07T11:17:30+08:00",
+  "change": {
+    "file": "libraries/AP_HAL_RTT/hal_usb_cherryusb_shim.c",
+    "detail": "Removed cherry_tx_kick() from the CDC ACM bulk-in completion callback so that the next IN transfer would be started only by usb_lld_poll_rtt()."
+  },
+  "hypothesis": "Breaking completion-callback-to-next-transfer chaining might reduce CherryUSB/DWC2 TX reentrancy and improve long-tail CDC stability.",
+  "build": {
+    "result": "pass",
+    "rtthread_bin_sha256": "dd48d3767aed27d6d6a7a596c1e7f4e900a5a6b0a1dd99473d72f5300c5b7e13",
+    "elf_sha256": "2c1747826acfa98edadd015213a4a731ca0f07156954fe19ac4e1a782c72cbaf"
+  },
+  "flash": {
+    "result": "pass",
+    "address": "0x08008000",
+    "verify": "ok"
+  },
+  "mavlink": {
+    "heartbeat": "HEARTBEAT 2 3 81 0 3",
+    "fast_green": "RED",
+    "reason": "imu_bad",
+    "sample_seconds": 30.0,
+    "counts": {
+      "HEARTBEAT": 23,
+      "RAW_IMU": 8,
+      "ATTITUDE": 9,
+      "EKF_STATUS_REPORT": 8,
+      "SCALED_PRESSURE": 8
+    },
+    "max_silence_seconds": 3.996,
+    "firmware_hint": "unknown"
+  },
+  "gdb": {
+    "result": "pass_no_hardfault",
+    "fault_status_mdw": "00000000 00000000 0000000b 00000000",
+    "pc": "0x0800ea30",
+    "cherry_bulk_in_calls_hex": "0x0000004c",
+    "cherry_busy_timeout_recovery_count_hex": "0x000000be",
+    "dwc2_ep1_start_write_calls_hex": "0x0000010b",
+    "dwc2_ep1_xfrc_hex": "0x0000004c"
+  },
+  "comparison": {
+    "d47_short_gate": "GREEN",
+    "d49_effect": "Deferring all next-transfer kicks to poll starved high-rate MAVLink streams even though heartbeat and GDB remained alive.",
+    "risk": "The change moves CDC transmit progress from completion-driven to poll-driven scheduling and loses throughput under ArduPilot stream load."
+  },
+  "revert": {
+    "result": "done",
+    "restored_source_to": "a1092831c0 D47",
+    "restore_evidence_dirs": [
+      "results/master_launch/ml_20260607_112000_d49_reverted_d47_baseline",
+      "results/master_launch/ml_20260607_152500_d50_rebuild_identity"
+    ],
+    "restore_note": "The first restore run later showed MAV_STATE_CRITICAL with stack_ovrflw text; rebuilding and reflashing the same D47 source restored STANDBY and GREEN, so D49 source was not retained."
+  },
+  "decision": {
+    "verdict": "reject_and_revert",
+    "reason": "30 s fast-green failed with very low RAW_IMU/ATTITUDE/EKF/SCALED_PRESSURE counts, while no HardFault was present. This is a throughput regression, not a stability fix.",
+    "followup": "Do not remove completion callback chaining. Continue USB long-tail work from D47 only after a fresh build-flash-MAVLink-GDB baseline is GREEN."
+  }
+}
