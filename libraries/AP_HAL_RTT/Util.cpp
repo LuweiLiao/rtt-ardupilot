@@ -255,6 +255,16 @@ void Util::set_soft_armed(const bool b)
 
 void Util::thread_info(ExpandingString& str)
 {
+    struct thread_snapshot {
+        char name[RT_NAME_MAX];
+        uint32_t stack_size;
+        uint32_t stack_used;
+        uint8_t prio;
+        uint8_t stat;
+    };
+    thread_snapshot snapshots[32];
+    uint8_t snapshot_count = 0;
+
     str.printf("ThreadsV2\n");
     str.printf("%-16s %4s %8s %8s %5s\n", "Name", "Prio", "StackSz", "StackUse", "Stat");
 
@@ -285,11 +295,25 @@ void Util::thread_info(ExpandingString& str)
         stack_used = stack_size - ((rt_ubase_t)sp - (rt_ubase_t)thread->stack_addr);
 #endif
 
-        uint8_t stat = RT_SCHED_CTX(thread).stat;
-        uint8_t prio = RT_SCHED_PRIV(thread).current_priority;
+        if (snapshot_count >= ARRAY_SIZE(snapshots)) {
+            break;
+        }
+
+        thread_snapshot &snapshot = snapshots[snapshot_count++];
+        rt_strncpy(snapshot.name, thread->parent.name, sizeof(snapshot.name));
+        snapshot.name[sizeof(snapshot.name) - 1] = '\0';
+        snapshot.stack_size = stack_size;
+        snapshot.stack_used = stack_used;
+        snapshot.stat = RT_SCHED_CTX(thread).stat;
+        snapshot.prio = RT_SCHED_PRIV(thread).current_priority;
+    }
+    rt_exit_critical();
+
+    for (uint8_t i = 0; i < snapshot_count; i++) {
+        const thread_snapshot &snapshot = snapshots[i];
 
         const char *stat_str;
-        switch (stat & RT_THREAD_STAT_MASK) {
+        switch (snapshot.stat & RT_THREAD_STAT_MASK) {
         case RT_THREAD_READY:   stat_str = "RDY"; break;
         case RT_THREAD_SUSPEND: stat_str = "SUS"; break;
         case RT_THREAD_RUNNING: stat_str = "RUN"; break;
@@ -298,13 +322,12 @@ void Util::thread_info(ExpandingString& str)
         }
 
         str.printf("%-16s %4d %8lu %8lu %5s\n",
-                   thread->parent.name,
-                   (int)prio,
-                   (unsigned long)stack_size,
-                   (unsigned long)stack_used,
+                   snapshot.name,
+                   (int)snapshot.prio,
+                   (unsigned long)snapshot.stack_size,
+                   (unsigned long)snapshot.stack_used,
                    stat_str);
     }
-    rt_exit_critical();
 }
 
 void Util::mem_info(ExpandingString& str)

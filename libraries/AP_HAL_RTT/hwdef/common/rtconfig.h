@@ -91,6 +91,7 @@
 #define RT_USING_I2C
 #define RT_USING_PWM
 #define RT_USING_SDIO
+#define RT_MMCSD_STACK_SIZE 2048
 #define RT_USING_BLK
 #define RT_USING_SPI
 #define BSP_USING_SPI

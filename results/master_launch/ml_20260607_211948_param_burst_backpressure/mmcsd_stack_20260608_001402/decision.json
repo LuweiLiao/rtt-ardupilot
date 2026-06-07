@@ -1,0 +1,133 @@
+{
+  "decision": "accept",
+  "scope": "RTT USB CDC/MAVLink/FTP backpressure slice: make thread_info FTP-safe and remove MMCSD low-stack source of stack_ovrflw noise",
+  "not_full_goal_completion": true,
+  "product_changes": [
+    {
+      "file": "libraries/AP_HAL_RTT/Util.cpp",
+      "change": "Copy RT-Thread thread snapshots inside critical section, then format ExpandingString output outside the critical section."
+    },
+    {
+      "file": "libraries/AP_HAL_RTT/hwdef/common/.config",
+      "change": "Set CONFIG_RT_MMCSD_STACK_SIZE=2048 for the SD/MMC detect thread."
+    },
+    {
+      "file": "libraries/AP_HAL_RTT/hwdef/common/rtconfig.h",
+      "change": "Set RT_MMCSD_STACK_SIZE 2048 in the generated header template used by SCons."
+    },
+    {
+      "file": "libraries/AP_HAL_RTT/hal_usb_cherryusb_shim.c",
+      "change": "Keep accepted prior CDC_RX_QUEUE_DEPTH 32 backpressure fix."
+    }
+  ],
+  "root_cause_evidence": [
+    {
+      "before": "MAVFTP @SYS/threads.txt could trigger CDC disconnect during thread_info, and thread_info formatted ExpandingString while holding rt_enter_critical().",
+      "after": "MAVFTP @SYS/threads.txt, @SYS/memory.txt, and @PARAM/param.pck read successfully after moving formatting outside the critical section."
+    },
+    {
+      "before": "threads.txt showed mmcsd_detec stack 932/1024 used, only 92 bytes free, close to Scheduler::_check_stack_free() 64-byte stack_overflow threshold.",
+      "after": "threads.txt showed mmcsd_detec stack 932/2048 used, 1116 bytes free."
+    }
+  ],
+  "verification": {
+    "git_diff_check": "rc=0",
+    "scons_build": {
+      "command": "timeout 900s python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)",
+      "rc_file": "build.rc",
+      "rc": 0,
+      "notes": "dev_mmcsd_core.o was rebuilt, so RT_MMCSD_STACK_SIZE reached the SDIO/MMCSD component."
+    },
+    "rtt_verify_bin": {
+      "rc_file": "verify_bin.rc",
+      "rc": 0
+    },
+    "openocd_flash_readback": {
+      "address": "0x08008000",
+      "rc_file": "openocd_flash_readback.rc",
+      "rc": 0,
+      "cmp_rc_file": "readback_cmp.rc",
+      "cmp_rc": 0,
+      "sha256_file": "readback.sha256"
+    },
+    "heartbeat_after_flash": {
+      "rc_file": "heartbeat_after_flash.rc",
+      "rc": 0,
+      "system_status": "STANDBY"
+    },
+    "mavftp_sys_param": {
+      "rc_file": "sys_ftp_read.rc",
+      "rc": 0,
+      "files": [
+        "@SYS/threads.txt",
+        "@SYS/memory.txt",
+        "@PARAM/param.pck"
+      ]
+    },
+    "message_window": {
+      "json_file": "all_message_window.json",
+      "result": "W06-W10 stayed stable at about 26Hz total, with requested 5Hz target messages around 49-51 per 10s."
+    },
+    "mavftp_comprehensive": {
+      "rc_file": "test_mavftp_safe.rc",
+      "rc": 0,
+      "result": "6/6 PASS with --require-sd, including /APM write/read/delete and post-FTP stability.",
+      "host_side_note": "tests/test_mavftp.py without pymavlink add_message monkeypatch hit a host-side TypeError before firmware interaction; see test_mavftp.rc=1 and test_mavftp.stderr."
+    },
+    "log_download": {
+      "rc_file": "test_log_download.rc",
+      "rc": 0,
+      "bytes_downloaded": 249856
+    },
+    "post_log_regression": {
+      "sys_ftp_rc_file": "sys_ftp_read_after_log.rc",
+      "sys_ftp_rc": 0,
+      "message_window_file": "all_message_after_log.json",
+      "result": "W03-W06 target messages held 50-51 per 10s."
+    },
+    "param_burst_persist_restore": {
+      "json_file": "param_burst_persist/param_burst_persist.json",
+      "verdict": "GREEN",
+      "sent": 36,
+      "observed": 36,
+      "missing": 0,
+      "reset_after_set_rc": 0,
+      "reset_after_restore_rc": 0
+    },
+    "post_param_regression": {
+      "heartbeat_rc_file": "post_param_heartbeat.rc",
+      "heartbeat_rc": 0,
+      "sys_ftp_rc_file": "sys_ftp_read_after_param.rc",
+      "sys_ftp_rc": 0,
+      "message_window_file": "all_message_after_param.json",
+      "result": "W02-W04 target messages held about 49-52 per 10s."
+    },
+    "gdb_openocd": {
+      "rc_file": "gdb_post_param_final.rc",
+      "rc": 0,
+      "fault_registers": "CFSR/HFSR/DFSR/AFSR all 0",
+      "internal_errors": "0, count 0, last_line 0",
+      "swd": "OpenOCD connected and resumed target."
+    }
+  },
+  "workspace_cleanup": {
+    "recycle_dir": "results/recycle_bin/20260608_mmcsd_stack_process_artifacts",
+    "manifest": "results/recycle_bin/20260608_mmcsd_stack_process_artifacts/manifest.sha256_size.txt",
+    "moved": [
+      "*.pid process files",
+      "post_flash_app.bin flash readback dump",
+      "log_download/log_00000001.bin downloaded binary log"
+    ],
+    "global_pid_cleanup": {
+      "recycle_dir": "results/recycle_bin/20260608_global_pid_cleanup",
+      "manifest": "results/recycle_bin/20260608_global_pid_cleanup/manifest.sha256_size.txt",
+      "moved_count": 122,
+      "source": "results/master_launch/**/*.pid"
+    }
+  },
+  "remaining_risk": [
+    "This accepts only the current USB CDC/MAVFTP/MMCSD stack slice, not the full ChibiOS replacement goal.",
+    "Broader workspace cleanup still needs a separate audit of unrelated old results, disabled workflow files, .cursor/.agents content, and other dirty/untracked items.",
+    "IOMCU/RC/PWM/safety and full external sensor parity still require their own gates."
+  ]
+}
