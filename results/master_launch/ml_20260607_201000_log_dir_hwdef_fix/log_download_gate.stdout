@@ -1,0 +1,93 @@
+{
+  "download": {
+    "bytes": 249856,
+    "path": "results/master_launch/ml_20260607_201000_log_dir_hwdef_fix/log_download_gate/downloads/log_00000001.bin",
+    "sha256": "94e8d243ede7638236bd0f8a8dc1eaca3ebc9f2bbba3adbc565090b5d320552d"
+  },
+  "initial_log_list": {
+    "entries": [
+      {
+        "id": 1,
+        "last_log_num": 1,
+        "num_logs": 1,
+        "size": 249856,
+        "time_utc": 134435481
+      }
+    ],
+    "nonzero_entries": [
+      {
+        "id": 1,
+        "last_log_num": 1,
+        "num_logs": 1,
+        "size": 249856,
+        "time_utc": 134435481
+      }
+    ],
+    "requests": [
+      {
+        "component": 0,
+        "entries": [
+          {
+            "id": 1,
+            "last_log_num": 1,
+            "num_logs": 1,
+            "size": 249856,
+            "time_utc": 134435481
+          }
+        ],
+        "statustext": []
+      },
+      {
+        "component": 1,
+        "entries": [
+          {
+            "id": 1,
+            "last_log_num": 1,
+            "num_logs": 1,
+            "size": 249856,
+            "time_utc": 134435481
+          }
+        ],
+        "statustext": []
+      },
+      {
+        "component": 191,
+        "entries": [
+          {
+            "id": 1,
+            "last_log_num": 1,
+            "num_logs": 1,
+            "size": 249856,
+            "time_utc": 134435481
+          }
+        ],
+        "statustext": []
+      }
+    ]
+  },
+  "json_path": "results/master_launch/ml_20260607_201000_log_dir_hwdef_fix/log_download_gate/log_download_gate.json",
+  "params": {
+    "LOG_BACKEND_TYPE": 1.0,
+    "LOG_DISARMED_after_reset": 0.0,
+    "LOG_DISARMED_original": 0.0
+  },
+  "port": "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00",
+  "reason": "log_list_download_restore_ok",
+  "selected_log": {
+    "id": 1,
+    "last_log_num": 1,
+    "num_logs": 1,
+    "size": 249856,
+    "time_utc": 134435481
+  },
+  "steps": [
+    {
+      "log": "results/master_launch/ml_20260607_201000_log_dir_hwdef_fix/log_download_gate/reset_after_restore.log",
+      "reset_after_restore_rc": 0
+    }
+  ],
+  "target_component": 0,
+  "target_system": 1,
+  "timestamp_utc": "2026-06-07T06:32:51.704265+00:00",
+  "verdict": "GREEN"
+}

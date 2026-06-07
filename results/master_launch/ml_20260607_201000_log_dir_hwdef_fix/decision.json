@@ -1,0 +1,100 @@
+{
+  "timestamp_local": "2026-06-07T20:10:00+08:00",
+  "verdict": "GREEN",
+  "target": {
+    "vehicle": "ArduCopter",
+    "board": "cuav_v5",
+    "backend": "AP_HAL_RTT",
+    "app_address": "0x08008000"
+  },
+  "problem": {
+    "symptom": "MAVLink LOG_REQUEST_LIST returned LOG_ENTRY id=0 num_logs=0 size=0, and no downloadable DataFlash log existed.",
+    "red_evidence": [
+      "results/master_launch/ml_20260607_193500_log_download_gate/log_download.stdout",
+      "results/master_launch/ml_20260607_194000_log_protocol_diag/log_probe.stdout",
+      "results/master_launch/ml_20260607_195500_log_create_diag/log_create_reconnect_probe.stdout"
+    ],
+    "root_cause": "CUAV V5 RTT hwdef pointed HAL_BOARD_LOG_DIRECTORY at /logs while the RTT SD mount creates and validates /APM/LOGS. The hwdef also advertised AP_FILESYSTEM_POSIX_HAVE_STATFS=1 even though the RTT statfs shim is a fixed -1 stub."
+  },
+  "fix": {
+    "files": [
+      "libraries/AP_HAL_RTT/hwdef/cuav_v5/hwdef.dat",
+      "Tools/scripts/rtt_log_download_gate.py"
+    ],
+    "boundary": "RTT board/HAL verification boundary only; no AP_Logger, GCS_MAVLink, AP_IOMCU, bootloader, or HAL-above behavior was patched.",
+    "changes": [
+      "Set HAL_BOARD_LOG_DIRECTORY to /APM/LOGS.",
+      "Set AP_FILESYSTEM_POSIX_HAVE_STATFS to 0 for the current RTT POSIX shim capability.",
+      "Added a repeatable MAVLink LOG_REQUEST_LIST/LOG_REQUEST_DATA verification gate."
+    ]
+  },
+  "build": {
+    "command": "python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)",
+    "rc": 0,
+    "artifact_dir": "results/master_launch/ml_20260607_201000_log_dir_hwdef_fix",
+    "verify_bin_rc": 0,
+    "elf_sha256": "b673a57200b9eb757ed3f9ce9f007969bad8a5184bca8eac2d444c984594d361",
+    "bin_sha256": "6cadad4683537f8bd5b44f72013fcaa54b9b1244bdeb4ee7843389deda029131",
+    "generated_hwdef": {
+      "HAL_BOARD_LOG_DIRECTORY": "/APM/LOGS",
+      "AP_FILESYSTEM_POSIX_HAVE_STATFS": 0
+    }
+  },
+  "flash": {
+    "pre_flash_backup_rc": 0,
+    "app_flash_verify_rc": 0,
+    "post_flash_readback_rc": 0,
+    "post_flash_cmp_rc": 0,
+    "post_flash_sha256": "6cadad4683537f8bd5b44f72013fcaa54b9b1244bdeb4ee7843389deda029131"
+  },
+  "mavlink_log_gate": {
+    "command": "nohup timeout 300 python3 Tools/scripts/rtt_log_download_gate.py --port auto --outdir results/master_launch/ml_20260607_201000_log_dir_hwdef_fix/log_download_gate --reset-after-restore",
+    "rc": 0,
+    "verdict": "GREEN",
+    "json": "results/master_launch/ml_20260607_201000_log_dir_hwdef_fix/log_download_gate/log_download_gate.json",
+    "log_entry": {
+      "id": 1,
+      "num_logs": 1,
+      "last_log_num": 1,
+      "size": 249856,
+      "time_utc": 134435481
+    },
+    "download": {
+      "path": "results/master_launch/ml_20260607_201000_log_dir_hwdef_fix/log_download_gate/downloads/log_00000001.bin",
+      "bytes": 249856,
+      "sha256": "94e8d243ede7638236bd0f8a8dc1eaca3ebc9f2bbba3adbc565090b5d320552d"
+    },
+    "LOG_DISARMED_original": 0.0,
+    "LOG_DISARMED_after_reset": 0.0
+  },
+  "post_download_health": {
+    "fast_green": {
+      "rc": 0,
+      "verdict": "GREEN",
+      "counts": {
+        "HEARTBEAT": 30,
+        "RAW_IMU": 151,
+        "ATTITUDE": 151,
+        "EKF_STATUS_REPORT": 151,
+        "SCALED_PRESSURE": 151
+      },
+      "max_silence": 1.395,
+      "ekf_flags": "0xa7",
+      "zacc_mg": -1017,
+      "baro_hpa": 1003.7
+    },
+    "gdb": {
+      "rc": 0,
+      "pc": "0x0803c73e",
+      "mode": "Thread",
+      "fault_status_words": [
+        "00000000",
+        "00000000",
+        "0000000b",
+        "00000000"
+      ],
+      "hardfault": false
+    }
+  },
+  "conclusion": "The RTT CUAV V5 DataFlash file backend now uses the mounted SD card log directory, LOG_REQUEST_LIST returns a non-empty LOG_ENTRY, LOG_REQUEST_DATA downloads the log over MAVLink, LOG_DISARMED remains restored after reset, and the post-download MAVLink/GDB health gates are GREEN."
+}

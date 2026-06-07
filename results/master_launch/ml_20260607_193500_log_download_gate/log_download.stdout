@@ -1,0 +1,4 @@
+=== MAVLink Log Download Test ===
+Port: /dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00
+Connected: sys=1 comp=0
+FAIL: no LOG_ENTRY response

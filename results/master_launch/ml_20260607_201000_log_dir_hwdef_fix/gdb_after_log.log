@@ -1,0 +1,13 @@
+0x0803c73e in input_expo (input=-1, expo=0) at /data/firmare/pogo-apm/libraries/AP_Math/control.cpp:620
+620	    input = constrain_float(input, -1.0, 1.0);
+pc             0x803c73e           0x803c73e <input_expo(float, float)+22>
+lr             0x801a627           134325799
+sp             0x200311d4          0x200311d4
+msp            0x200054f0          0x200054f0 <completed>
+psp            0x200311d4          0x200311d4
+#0  0x0803c73e in input_expo (input=-1, expo=0) at /data/firmare/pogo-apm/libraries/AP_Math/control.cpp:620
+#1  0x0801a626 in Mode::get_pilot_desired_yaw_rate_rads (this=this@entry=0x2000c7e4 <copter+29396>) at /data/firmare/pogo-apm/libraries/AC_AttitudeControl/AC_CommandModel.h:19
+#2  0x080225b2 in ModeStabilize::run (this=0x2000c7e4 <copter+29396>) at /data/firmare/pogo-apm/ArduCopter/mode_stabilize.cpp:19
+#3  0x00000000 in ?? ()
+0xe000ed28: 00000000 00000000 0000000b 00000000 
+[Inferior 1 (Remote target) detached]

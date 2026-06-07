@@ -1,0 +1,118 @@
+{
+  "heartbeat": {
+    "autopilot": 3,
+    "base_mode": 81,
+    "custom_mode": 0,
+    "mavlink_version": 3,
+    "mavpackettype": "HEARTBEAT",
+    "system_status": 3,
+    "type": 2
+  },
+  "params": {
+    "LOG_BACKEND_TYPE": {
+      "name": "LOG_BACKEND_TYPE",
+      "ok": true,
+      "type": 2,
+      "value": 1.0
+    },
+    "LOG_DISARMED": {
+      "name": "LOG_DISARMED",
+      "ok": true,
+      "type": 2,
+      "value": 0.0
+    },
+    "LOG_FILE_BUFSIZE": {
+      "name": "LOG_FILE_BUFSIZE",
+      "ok": true,
+      "type": 4,
+      "value": 16.0
+    },
+    "LOG_FILE_DSRMROT": {
+      "name": "LOG_FILE_DSRMROT",
+      "ok": true,
+      "type": 2,
+      "value": 0.0
+    },
+    "LOG_FILE_MB_FREE": {
+      "name": "LOG_FILE_MB_FREE",
+      "ok": true,
+      "type": 4,
+      "value": 500.0
+    },
+    "LOG_FILE_RATEMAX": {
+      "name": "LOG_FILE_RATEMAX",
+      "ok": true,
+      "type": 9,
+      "value": 0.0
+    },
+    "LOG_FILE_TIMEOUT": {
+      "name": "LOG_FILE_TIMEOUT",
+      "ok": true,
+      "type": 4,
+      "value": 5.0
+    }
+  },
+  "reason": "log_entry_seen",
+  "requests": [
+    {
+      "component": 0,
+      "entries": [
+        {
+          "id": 0,
+          "last_log_num": 0,
+          "num_logs": 0,
+          "size": 0,
+          "time_utc": 0
+        }
+      ],
+      "statustext": []
+    },
+    {
+      "component": 1,
+      "entries": [
+        {
+          "id": 0,
+          "last_log_num": 0,
+          "num_logs": 0,
+          "size": 0,
+          "time_utc": 0
+        }
+      ],
+      "statustext": []
+    },
+    {
+      "component": 0,
+      "entries": [
+        {
+          "id": 0,
+          "last_log_num": 0,
+          "num_logs": 0,
+          "size": 0,
+          "time_utc": 0
+        }
+      ],
+      "statustext": [
+        "PreArm: RC not found",
+        "PreArm: Hardware safety switch",
+        "PreArm: 3D Accel calibration needed",
+        "PreArm: Compass not calibrated"
+      ]
+    },
+    {
+      "component": 191,
+      "entries": [
+        {
+          "id": 0,
+          "last_log_num": 0,
+          "num_logs": 0,
+          "size": 0,
+          "time_utc": 0
+        }
+      ],
+      "statustext": []
+    }
+  ],
+  "target_component": 0,
+  "target_system": 1,
+  "verdict": "GREEN"
+}
