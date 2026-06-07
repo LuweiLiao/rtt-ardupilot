@@ -29,6 +29,8 @@
 
 #define CHERRY_DIEPCTL(ep)      CHERRY_OTG_REG32(0x900U + (uint32_t)(ep) * 0x20U)
 #define CHERRY_DIEPINT(ep)      CHERRY_OTG_REG32(0x908U + (uint32_t)(ep) * 0x20U)
+#define CHERRY_DIEPTSIZ(ep)     CHERRY_OTG_REG32(0x910U + (uint32_t)(ep) * 0x20U)
+#define CHERRY_DTXFSTS(ep)      CHERRY_OTG_REG32(0x918U + (uint32_t)(ep) * 0x20U)
 #define CHERRY_DIEPEMPMSK       CHERRY_OTG_REG32(0x834U)
 #define CHERRY_GRSTCTL          CHERRY_OTG_REG32(0x010U)
 
@@ -114,6 +116,20 @@ volatile uint32_t rtt_dbg_cherry_tx_kick_calls     = 0;
 volatile uint32_t rtt_dbg_cherry_epena_guard_hits    = 0;
 volatile uint32_t rtt_dbg_cherry_epdis_recovery_count = 0;
 volatile uint32_t rtt_dbg_cherry_tx_busy_max_ms      = 0;
+volatile uint32_t rtt_dbg_cherry_recovery_busy_timeout_count = 0;
+volatile uint32_t rtt_dbg_cherry_recovery_epena_stuck_count  = 0;
+volatile uint32_t rtt_dbg_cherry_recovery_last_reason        = 0;
+volatile uint32_t rtt_dbg_cherry_recovery_last_elapsed_ms    = 0;
+volatile uint32_t rtt_dbg_cherry_recovery_max_busy_ms        = 0;
+volatile uint32_t rtt_dbg_cherry_recovery_max_epena_ms       = 0;
+volatile uint32_t rtt_dbg_cherry_recovery_last_diepctl       = 0;
+volatile uint32_t rtt_dbg_cherry_recovery_last_diepint       = 0;
+volatile uint32_t rtt_dbg_cherry_recovery_last_dieptsiz      = 0;
+volatile uint32_t rtt_dbg_cherry_recovery_last_dtxfsts       = 0;
+volatile uint32_t rtt_dbg_cherry_recovery_last_empmsk        = 0;
+volatile uint32_t rtt_dbg_cherry_recovery_last_ring_count    = 0;
+volatile uint32_t rtt_dbg_cherry_recovery_last_bulk_arm      = 0;
+volatile uint32_t rtt_dbg_cherry_recovery_last_bulk_now      = 0;
 
 static uint32_t cherry_tx_busy_since_ms;
 static uint32_t cherry_tx_bulk_in_arm_gen;
@@ -124,6 +140,12 @@ enum {
     RTT_DBG_CHERRY_EVT_CONFIGURED = 1,
     RTT_DBG_CHERRY_EVT_RESET      = 2,
     RTT_DBG_CHERRY_EVT_DEINIT     = 3,
+};
+
+enum {
+    RTT_DBG_CHERRY_RECOVERY_NONE         = 0,
+    RTT_DBG_CHERRY_RECOVERY_EPENA_STUCK  = 1,
+    RTT_DBG_CHERRY_RECOVERY_BUSY_TIMEOUT = 2,
 };
 
 static bool cherry_usb_initialized;
@@ -154,7 +176,7 @@ static inline void cherry_tx_track_busy_max(uint32_t now_ms)
     }
 }
 
-static void cherry_tx_epdis_recovery(void);
+static void cherry_tx_epdis_recovery(uint32_t reason, uint32_t elapsed_ms);
 
 static usb_rx_callback_t cherry_rx_cb;
 static void *cherry_rx_arg;
@@ -352,8 +374,31 @@ static bool cherry_tx_start_write(uint32_t len)
     return true;
 }
 
-static void cherry_tx_epdis_recovery(void)
+static void cherry_tx_epdis_recovery(uint32_t reason, uint32_t elapsed_ms)
 {
+    rtt_dbg_cherry_recovery_last_reason = reason;
+    rtt_dbg_cherry_recovery_last_elapsed_ms = elapsed_ms;
+    rtt_dbg_cherry_recovery_last_diepctl = CHERRY_DIEPCTL(CHERRY_CDC_IN_EP_IDX);
+    rtt_dbg_cherry_recovery_last_diepint = CHERRY_DIEPINT(CHERRY_CDC_IN_EP_IDX);
+    rtt_dbg_cherry_recovery_last_dieptsiz = CHERRY_DIEPTSIZ(CHERRY_CDC_IN_EP_IDX);
+    rtt_dbg_cherry_recovery_last_dtxfsts = CHERRY_DTXFSTS(CHERRY_CDC_IN_EP_IDX);
+    rtt_dbg_cherry_recovery_last_empmsk = CHERRY_DIEPEMPMSK;
+    rtt_dbg_cherry_recovery_last_ring_count = cherry_tx_ring_count;
+    rtt_dbg_cherry_recovery_last_bulk_arm = cherry_tx_bulk_in_arm_gen;
+    rtt_dbg_cherry_recovery_last_bulk_now = rtt_dbg_cherry_bulk_in_calls;
+
+    if (reason == RTT_DBG_CHERRY_RECOVERY_EPENA_STUCK) {
+        rtt_dbg_cherry_recovery_epena_stuck_count++;
+        if (elapsed_ms > rtt_dbg_cherry_recovery_max_epena_ms) {
+            rtt_dbg_cherry_recovery_max_epena_ms = elapsed_ms;
+        }
+    } else if (reason == RTT_DBG_CHERRY_RECOVERY_BUSY_TIMEOUT) {
+        rtt_dbg_cherry_recovery_busy_timeout_count++;
+        if (elapsed_ms > rtt_dbg_cherry_recovery_max_busy_ms) {
+            rtt_dbg_cherry_recovery_max_busy_ms = elapsed_ms;
+        }
+    }
+
     CHERRY_DIEPEMPMSK &= ~(1UL << CHERRY_CDC_IN_EP_IDX);
     CHERRY_DIEPCTL(CHERRY_CDC_IN_EP_IDX) |= (CHERRY_DIEPCTL_SNAK | CHERRY_DIEPCTL_EPDIS);
 
@@ -554,8 +599,9 @@ void usb_lld_poll_rtt(void)
         if (cherry_epena_stuck_since_ms == 0U) {
             cherry_epena_stuck_since_ms = now_ms;
         } else if ((now_ms - cherry_epena_stuck_since_ms) > CHERRY_TX_BUSY_TIMEOUT_MS) {
+            const uint32_t elapsed = now_ms - cherry_epena_stuck_since_ms;
             cherry_epena_stuck_since_ms = 0U;
-            cherry_tx_epdis_recovery();
+            cherry_tx_epdis_recovery(RTT_DBG_CHERRY_RECOVERY_EPENA_STUCK, elapsed);
         }
     } else {
         cherry_epena_stuck_since_ms = 0U;
@@ -566,7 +612,7 @@ void usb_lld_poll_rtt(void)
         const uint32_t elapsed = now_ms - cherry_tx_busy_since_ms;
         if (elapsed > CHERRY_TX_BUSY_TIMEOUT_MS &&
             rtt_dbg_cherry_bulk_in_calls == cherry_tx_bulk_in_arm_gen) {
-            cherry_tx_epdis_recovery();
+            cherry_tx_epdis_recovery(RTT_DBG_CHERRY_RECOVERY_BUSY_TIMEOUT, elapsed);
         }
     }
 

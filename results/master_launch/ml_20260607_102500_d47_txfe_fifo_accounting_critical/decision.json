@@ -1,0 +1,74 @@
+{
+  "experiment": "D47_txfe_fifo_accounting_critical",
+  "timestamp_local": "2026-06-07T10:32:00+08:00",
+  "change": {
+    "file": "libraries/AP_HAL_RTT/thirdparty/cherryusb/port/dwc2/usb_dc_dwc2.c",
+    "detail": "In dwc2_tx_fifo_empty_procecss(), make the TX FIFO write, xfer_buf advance, and actual_xfer_len accounting a short critical section."
+  },
+  "build": {
+    "result": "pass",
+    "rom_bytes": 1313060,
+    "dtcm_bytes": 129204,
+    "reset_handler_literal_pool": "pass",
+    "rtthread_bin_sha256": "34441122b519e77a1476111b2d9cd59f240095370d7bcbbbeca86f9801888dd1",
+    "elf_sha256": "c64c1f5942ab2ddabc539ed2483a9d3c5f00a940ed0766aa552634e82b140f46"
+  },
+  "flash": {
+    "result": "pass",
+    "address": "0x08008000",
+    "verify": "ok"
+  },
+  "first_run": {
+    "heartbeat": "HEARTBEAT 2 3 81 0 3",
+    "fast_green": "GREEN",
+    "reason": "ok",
+    "counts": {
+      "HEARTBEAT": 30,
+      "RAW_IMU": 147,
+      "ATTITUDE": 147,
+      "EKF_STATUS_REPORT": 147,
+      "SCALED_PRESSURE": 147
+    },
+    "max_silence_seconds": 1.138,
+    "gdb": {
+      "result": "pass_no_hardfault",
+      "fault_status_mdw": "00000000 00000000 0000000b 00000000",
+      "pc": "0x08050e3e",
+      "cherry_busy_timeout_recovery_count_hex": "0x00000143",
+      "cherry_start_write_count_hex": "0x000003e8",
+      "busy_timeout_ratio": 0.323
+    }
+  },
+  "reset_retest": {
+    "heartbeat": "HEARTBEAT 2 3 81 0 3",
+    "fast_green": "GREEN",
+    "reason": "ok",
+    "counts": {
+      "HEARTBEAT": 30,
+      "RAW_IMU": 126,
+      "ATTITUDE": 127,
+      "EKF_STATUS_REPORT": 126,
+      "SCALED_PRESSURE": 126
+    },
+    "max_silence_seconds": 1.339,
+    "gdb": {
+      "result": "pass_no_hardfault",
+      "fault_status_mdw": "00000000 00000000 0000000b 00000000",
+      "pc": "0x08091e72",
+      "cherry_busy_timeout_recovery_count_hex": "0x000000e7",
+      "cherry_start_write_count_hex": "0x00000364",
+      "busy_timeout_ratio": 0.266
+    }
+  },
+  "comparison": {
+    "reverted_d40_reset_retest_busy_timeout_hex": "0x000001d7",
+    "reverted_d40_reset_retest_start_write_hex": "0x000004de",
+    "reverted_d40_reset_retest_busy_timeout_ratio": 0.378,
+    "note": "D47 preserved GREEN/no-HardFault behavior and reduced the observed busy-timeout recovery ratio in both first-run and reset-retest snapshots."
+  },
+  "decision": {
+    "verdict": "candidate_keep",
+    "reason": "Two hardware loops passed build, flash verify, heartbeat, fast-green, and GDB no-HardFault while improving the USB recovery ratio versus the reverted baseline.",
+    "remaining_risk": "This is still an L0 USB CDC stability improvement, not final project completion. Longer MAVLink soak and later SITL/HIL gates are still required before calling the port complete."
+  }
+}

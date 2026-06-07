@@ -1,0 +1,45 @@
+{
+  "experiment": "D46_recovery_clear_all_diepint",
+  "timestamp_local": "2026-06-07T10:22:00+08:00",
+  "change": {
+    "file": "libraries/AP_HAL_RTT/hal_usb_cherryusb_shim.c",
+    "detail": "In cherry_tx_epdis_recovery(), clear all pending EP1 DIEPINT bits after forced EP disable instead of clearing only EPDISD|XFRC."
+  },
+  "build": {
+    "result": "pass",
+    "rtthread_bin_sha256": "70033667f2e050409f49ae3b253568ea8dfc9691cdb985ff0cf0db1530b65fd8",
+    "elf_sha256": "0700a90657daa202149b650e153f36392dbb2d5c3e8f04d72e6ad3a27ffec19d"
+  },
+  "flash": {
+    "result": "pass",
+    "address": "0x08008000",
+    "verify": "ok"
+  },
+  "mavlink": {
+    "heartbeat": "HEARTBEAT 2 3 81 0 3",
+    "fast_green": "RED",
+    "reason": "imu_bad",
+    "counts": {
+      "HEARTBEAT": 30,
+      "RAW_IMU": 59,
+      "ATTITUDE": 59,
+      "EKF_STATUS_REPORT": 59,
+      "SCALED_PRESSURE": 59
+    },
+    "max_silence_seconds": 1.73
+  },
+  "gdb": {
+    "result": "pass_no_hardfault",
+    "fault_status_mdw": "00000000 00000000 0000000b 00000000",
+    "pc": "0x080a8b28",
+    "cherry_busy_timeout_recovery_count_hex": "0x0000007f",
+    "dwc2_ep1_start_write_calls_hex": "0x000001b5",
+    "dwc2_ep1_xfrc_hex": "0x000001b5"
+  },
+  "decision": {
+    "verdict": "reject_and_revert",
+    "reason": "System-level fast-green failed even though no HardFault occurred and USB recovery count was lower.",
+    "reverted_to": "D40_recovery_baseline",
+    "followup": "Use a smaller DWC2-only perturbation; do not clear all DIEPINT bits in recovery."
+  }
+}
