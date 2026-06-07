@@ -1,0 +1,73 @@
+{
+  "timestamp_local": "2026-06-08T01:25:00+08:00",
+  "operation": "修复/验证",
+  "change": {
+    "files": [
+      "libraries/AP_HAL_RTT/hwdef/common/.config",
+      "libraries/AP_HAL_RTT/hwdef/common/rtconfig.h"
+    ],
+    "summary": "Increase RT-Thread idle thread stack from 256 to 512 bytes."
+  },
+  "root_cause": {
+    "symptom": "After enabling the IST8310 compass as the primary compass, SYS_STATUS reported internal error 0x800000 stack_ovrflw.",
+    "evidence_before": {
+      "file": "results/validation/rtt_compass_probe_20260608_010947/sys_ftp_threads_stack_repro.json",
+      "thread": "tidle0",
+      "stack_used": 204,
+      "stack_size": 256,
+      "stack_free": 52,
+      "threshold": 64
+    },
+    "analysis": "RTT Scheduler::_check_stack_free reports stack_overflow when a thread has less than 64 bytes free. The only thread below threshold was tidle0, not the new compass/I2C bus thread."
+  },
+  "verification": {
+    "diff_check_rc": 0,
+    "build_rc": 0,
+    "verify_bin_rc": 0,
+    "openocd_flash_readback_rc": 0,
+    "readback_cmp_rc": 0,
+    "readback_sha256": "2eae276e7b59ce27f1a0385064a06876d80649b08a3afcbba8448ca8f51d426f",
+    "compass_runtime": {
+      "file": "results/validation/rtt_idle_stack_20260608_012500/compass_runtime_after_flash.stdout",
+      "heartbeat_system_status": 3,
+      "mag_present": true,
+      "mag_enabled": true,
+      "mag_health": true,
+      "raw_imu_mag_nonzero": true,
+      "sys_status_errors": [0, 0, 0, 0],
+      "remaining_prearm": [
+        "RC not found",
+        "3D Accel calibration needed",
+        "Compass not calibrated"
+      ]
+    },
+    "thread_runtime": {
+      "file": "results/validation/rtt_idle_stack_20260608_012500/sys_ftp_threads_after_flash.json",
+      "tidle0_stack_used": 124,
+      "tidle0_stack_size": 512,
+      "tidle0_stack_free": 388,
+      "sys_ftp_threads": true,
+      "sys_ftp_memory": true,
+      "param_pck": true
+    },
+    "mavftp_sd": {
+      "file": "results/validation/rtt_idle_stack_20260608_012500/test_mavftp_safe_retry.stdout",
+      "pass": "6/6",
+      "sd_write_read_delete": true
+    },
+    "gdb": {
+      "file": "results/validation/rtt_idle_stack_20260608_012500/gdb_final_snapshot.stdout",
+      "internal_errors": 0,
+      "internal_error_count": 0,
+      "cfsr": "0x0",
+      "hfsr": "0x0",
+      "mmfar": "0x0",
+      "bfar": "0x0"
+    }
+  },
+  "status": "accepted_for_this_slice",
+  "next": [
+    "Compass is detected and healthy, but vehicle still requires compass calibration before arming.",
+    "Continue broader L1/L2 validation: accel calibration state, RC/IOMCU/safety/PWM, longer reset/soak, and parameter download parity."
+  ]
+}
