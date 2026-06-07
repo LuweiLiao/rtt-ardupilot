@@ -1,0 +1,24 @@
+Open On-Chip Debugger 0.12.0-dirty (2026-05-25-11:19)
+Licensed under GNU GPL v2
+For bug reports, read
+	http://openocd.org/doc/doxygen/bugs.html
+Info : auto-selecting first available session transport "hla_swd". To override use 'transport select <transport>'.
+Info : The selected transport took over low-level target control. The results might differ compared to plain JTAG/SWD
+Info : clock speed 2000 kHz
+Info : STLINK V2J41S7 (API v2) VID:PID 0483:3748
+Info : Target voltage: 3.244149
+Info : STLINK: DP CTRL/STAT = 0xe00fdfec
+Info : STLINK: DAP sticky error cleared!
+Info : [stm32f7x.cpu] Cortex-M7 r1p0 processor detected
+Info : [stm32f7x.cpu] target has 8 breakpoints, 4 watchpoints
+Info : starting gdb server for stm32f7x.cpu on 3333
+Info : Listening on port 3333 for gdb connections
+Info : Unable to match requested speed 2000 kHz, using 1800 kHz
+Info : Unable to match requested speed 2000 kHz, using 1800 kHz
+[stm32f7x.cpu] halted due to debug-request, current mode: Thread
+xPSR: 0x01000000 pc: 0x08000200 msp: 0x20020400
+dumped 1319388 bytes in 12.399351s (103.914 KiB/s)
+
+Info : Unable to match requested speed 2000 kHz, using 1800 kHz
+Info : Unable to match requested speed 2000 kHz, using 1800 kHz
+shutdown command invoked

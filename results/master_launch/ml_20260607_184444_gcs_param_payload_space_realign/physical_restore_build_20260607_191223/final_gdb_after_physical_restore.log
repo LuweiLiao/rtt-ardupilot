@@ -1,0 +1,15 @@
+Reading symbols from build/rtt_deploy/cuav_v5/rt-thread.elf...
+Remote debugging using :3333
+0x0800829c in PendSV_Handler ()
+pc             0x800829c           0x800829c <PendSV_Handler+18>
+msp            0x20004000          0x20004000 <storageDriver>
+psp            0x20054808          0x20054808
+lr             0xffffffed          -19
+0xe000ed28:	0x00000000	0x00000000	0x00000000	0x00000000
+0xe000ed2c:	0x00000000
+#0  0x0800829c in PendSV_Handler ()
+#1  <signal handler called>
+#2  0x00000000 in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+Detaching from program: /data/firmare/pogo-apm/build/rtt_deploy/cuav_v5/rt-thread.elf, Remote target
+[Inferior 1 (Remote target) detached]

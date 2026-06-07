@@ -1,0 +1,18 @@
+Reading symbols from build/rtt_deploy/cuav_v5/rt-thread.elf...
+Remote debugging using :3333
+idle_thread_entry (parameter=<optimized out>)
+    at /data/firmare/pogo-apm/modules/rt-thread/src/idle.c:141
+141	            idle_hook = idle_hook_list[i];
+pc             0x810052e           0x810052e <idle_thread_entry+6>
+msp            0x20004000          0x20004000 <storageDriver>
+psp            0x200433ac          0x200433ac <idle_thread_stack+236>
+lr             0x8100537           135267639
+0xe000ed28:	0x00000000	0x00000000	0x00000000	0x00000000
+0xe000ed2c:	0x00000000
+#0  idle_thread_entry (parameter=<optimized out>)
+    at /data/firmare/pogo-apm/modules/rt-thread/src/idle.c:141
+#1  0x08102fe0 in rt_thread_close (thread=<optimized out>)
+    at /data/firmare/pogo-apm/modules/rt-thread/src/thread.c:469
+#2  0x00000000 in ?? ()
+Detaching from program: /data/firmare/pogo-apm/build/rtt_deploy/cuav_v5/rt-thread.elf, Remote target
+[Inferior 1 (Remote target) detached]

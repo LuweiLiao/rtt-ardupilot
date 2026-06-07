@@ -1,0 +1,313 @@
+{
+  "counts": {
+    "ATTITUDE": 90,
+    "EKF_STATUS_REPORT": 90,
+    "HEARTBEAT": 29,
+    "RAW_IMU": 90,
+    "SCALED_PRESSURE": 90,
+    "SYS_STATUS": 90
+  },
+  "failures": {},
+  "heartbeat": {
+    "autopilot": 3,
+    "base_mode": 81,
+    "custom_mode": 0,
+    "mavlink_version": 3,
+    "mavpackettype": "HEARTBEAT",
+    "system_status": 3,
+    "type": 2
+  },
+  "heartbeat_ready": {
+    "last": {
+      "autopilot": 3,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "mavlink_version": 3,
+      "mavpackettype": "HEARTBEAT",
+      "system_status": 3,
+      "type": 2
+    },
+    "ready_s": 1.602,
+    "status_histogram": {
+      "3": 1
+    }
+  },
+  "interval_config": [
+    {
+      "ack": {
+        "command": 511,
+        "mavpackettype": "COMMAND_ACK",
+        "progress": 0,
+        "result": 0,
+        "result_param2": 0,
+        "target_component": 0,
+        "target_system": 245
+      },
+      "ack_seen": [
+        {
+          "command": 511,
+          "mavpackettype": "COMMAND_ACK",
+          "progress": 0,
+          "result": 0,
+          "result_param2": 0,
+          "target_component": 0,
+          "target_system": 245
+        }
+      ],
+      "interval": {
+        "interval_us": 200000,
+        "mavpackettype": "MESSAGE_INTERVAL",
+        "message_id": 1
+      },
+      "interval_seen": [
+        {
+          "interval_us": 200000,
+          "mavpackettype": "MESSAGE_INTERVAL",
+          "message_id": 1
+        }
+      ],
+      "msg_id": 1,
+      "name": "SYS_STATUS"
+    },
+    {
+      "ack": {
+        "command": 511,
+        "mavpackettype": "COMMAND_ACK",
+        "progress": 0,
+        "result": 0,
+        "result_param2": 0,
+        "target_component": 0,
+        "target_system": 245
+      },
+      "ack_seen": [
+        {
+          "command": 511,
+          "mavpackettype": "COMMAND_ACK",
+          "progress": 0,
+          "result": 0,
+          "result_param2": 0,
+          "target_component": 0,
+          "target_system": 245
+        }
+      ],
+      "interval": {
+        "interval_us": 200000,
+        "mavpackettype": "MESSAGE_INTERVAL",
+        "message_id": 27
+      },
+      "interval_seen": [
+        {
+          "interval_us": 200000,
+          "mavpackettype": "MESSAGE_INTERVAL",
+          "message_id": 27
+        }
+      ],
+      "msg_id": 27,
+      "name": "RAW_IMU"
+    },
+    {
+      "ack": {
+        "command": 511,
+        "mavpackettype": "COMMAND_ACK",
+        "progress": 0,
+        "result": 0,
+        "result_param2": 0,
+        "target_component": 0,
+        "target_system": 245
+      },
+      "ack_seen": [
+        {
+          "command": 511,
+          "mavpackettype": "COMMAND_ACK",
+          "progress": 0,
+          "result": 0,
+          "result_param2": 0,
+          "target_component": 0,
+          "target_system": 245
+        }
+      ],
+      "interval": {
+        "interval_us": 200000,
+        "mavpackettype": "MESSAGE_INTERVAL",
+        "message_id": 29
+      },
+      "interval_seen": [
+        {
+          "interval_us": 200000,
+          "mavpackettype": "MESSAGE_INTERVAL",
+          "message_id": 29
+        }
+      ],
+      "msg_id": 29,
+      "name": "SCALED_PRESSURE"
+    },
+    {
+      "ack": {
+        "command": 511,
+        "mavpackettype": "COMMAND_ACK",
+        "progress": 0,
+        "result": 0,
+        "result_param2": 0,
+        "target_component": 0,
+        "target_system": 245
+      },
+      "ack_seen": [
+        {
+          "command": 511,
+          "mavpackettype": "COMMAND_ACK",
+          "progress": 0,
+          "result": 0,
+          "result_param2": 0,
+          "target_component": 0,
+          "target_system": 245
+        }
+      ],
+      "interval": {
+        "interval_us": 200000,
+        "mavpackettype": "MESSAGE_INTERVAL",
+        "message_id": 30
+      },
+      "interval_seen": [
+        {
+          "interval_us": 200000,
+          "mavpackettype": "MESSAGE_INTERVAL",
+          "message_id": 30
+        }
+      ],
+      "msg_id": 30,
+      "name": "ATTITUDE"
+    },
+    {
+      "ack": {
+        "command": 511,
+        "mavpackettype": "COMMAND_ACK",
+        "progress": 0,
+        "result": 0,
+        "result_param2": 0,
+        "target_component": 0,
+        "target_system": 245
+      },
+      "ack_seen": [
+        {
+          "command": 511,
+          "mavpackettype": "COMMAND_ACK",
+          "progress": 0,
+          "result": 0,
+          "result_param2": 0,
+          "target_component": 0,
+          "target_system": 245
+        }
+      ],
+      "interval": {
+        "interval_us": 200000,
+        "mavpackettype": "MESSAGE_INTERVAL",
+        "message_id": 193
+      },
+      "interval_seen": [
+        {
+          "interval_us": 200000,
+          "mavpackettype": "MESSAGE_INTERVAL",
+          "message_id": 193
+        }
+      ],
+      "msg_id": 193,
+      "name": "EKF_STATUS_REPORT"
+    }
+  ],
+  "last_values": {
+    "ATTITUDE": {
+      "mavpackettype": "ATTITUDE",
+      "pitch": 0.08193179219961166,
+      "pitchspeed": -0.00018160221225116402,
+      "roll": -0.1560613512992859,
+      "rollspeed": -0.0017231511883437634,
+      "time_boot_ms": 113622,
+      "yaw": 0.0013252028729766607,
+      "yawspeed": -0.00012714159674942493
+    },
+    "EKF_STATUS_REPORT": {
+      "airspeed_variance": 0.0,
+      "compass_variance": 0.0,
+      "flags": 167,
+      "mavpackettype": "EKF_STATUS_REPORT",
+      "pos_horiz_variance": 0.0022948647383600473,
+      "pos_vert_variance": 0.00023831569706089795,
+      "terrain_alt_variance": 0.0,
+      "velocity_variance": 0.0
+    },
+    "HEARTBEAT": {
+      "autopilot": 3,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "mavlink_version": 3,
+      "mavpackettype": "HEARTBEAT",
+      "system_status": 3,
+      "type": 2
+    },
+    "RAW_IMU": {
+      "id": 0,
+      "mavpackettype": "RAW_IMU",
+      "temperature": 3744,
+      "time_usec": 113632948,
+      "xacc": 80,
+      "xgyro": 0,
+      "xmag": 0,
+      "yacc": 151,
+      "ygyro": 0,
+      "ymag": 0,
+      "zacc": -1016,
+      "zgyro": 0,
+      "zmag": 0
+    },
+    "SCALED_PRESSURE": {
+      "mavpackettype": "SCALED_PRESSURE",
+      "press_abs": 1005.4254760742188,
+      "press_diff": 0.0,
+      "temperature": 3222,
+      "temperature_press_diff": 0,
+      "time_boot_ms": 113632
+    },
+    "SYS_STATUS": {
+      "battery_remaining": -1,
+      "current_battery": -1,
+      "drop_rate_comm": 0,
+      "errors_comm": 0,
+      "errors_count1": 0,
+      "errors_count2": 0,
+      "errors_count3": 0,
+      "errors_count4": 0,
+      "load": 1000,
+      "mavpackettype": "SYS_STATUS",
+      "onboard_control_sensors_enabled": 1348508687,
+      "onboard_control_sensors_health": 1196465163,
+      "onboard_control_sensors_present": 1399913487,
+      "voltage_battery": 0
+    }
+  },
+  "max_silence": 1.494,
+  "params": {
+    "AHRS_EKF_TYPE": 3.0,
+    "GPS1_TYPE": 1.0,
+    "SCHED_LOOP_RATE": 400.0
+  },
+  "port": "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00",
+  "rates_hz": {
+    "ATTITUDE": 3.0,
+    "EKF_STATUS_REPORT": 3.0,
+    "HEARTBEAT": 0.967,
+    "RAW_IMU": 3.0,
+    "SCALED_PRESSURE": 3.0,
+    "SYS_STATUS": 3.0
+  },
+  "reason": "ok",
+  "required_counts": {
+    "ATTITUDE": 60,
+    "EKF_STATUS_REPORT": 1,
+    "HEARTBEAT": 24,
+    "RAW_IMU": 60,
+    "SCALED_PRESSURE": 60,
+    "SYS_STATUS": 1
+  },
+  "timestamp_utc": "2026-06-07T11:00:24.750923+00:00",
+  "verdict": "GREEN"
+}

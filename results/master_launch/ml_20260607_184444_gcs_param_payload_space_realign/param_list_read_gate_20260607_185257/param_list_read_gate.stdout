@@ -1,0 +1,34 @@
+{
+  "heartbeat": {
+    "autopilot": 3,
+    "base_mode": 81,
+    "custom_mode": 0,
+    "mavlink_version": 3,
+    "mavpackettype": "HEARTBEAT",
+    "system_status": 3,
+    "type": 2
+  },
+  "port": "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00",
+  "read_params": [
+    "LOG_DISARMED",
+    "SYSID_THISMAV"
+  ],
+  "ready": {
+    "last": {
+      "autopilot": 3,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "mavlink_version": 3,
+      "mavpackettype": "HEARTBEAT",
+      "system_status": 3,
+      "type": 2
+    },
+    "ready_s": 0.991,
+    "status_histogram": {
+      "3": 1
+    }
+  },
+  "reason": "param_read_timeout:SYSID_THISMAV:seen=['STAT_RUNTIME']",
+  "timestamp_utc": "2026-06-07T10:52:57.430472+00:00",
+  "verdict": "RED"
+}

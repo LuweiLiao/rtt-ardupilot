@@ -1,0 +1,207 @@
+{
+  "run": "results/master_launch/ml_20260607_184444_gcs_param_payload_space_realign",
+  "timestamp_local": "2026-06-07T19:24:29+08:00",
+  "change": {
+    "file": "libraries/GCS_MAVLink/GCS_Common.cpp",
+    "line": 6396,
+    "summary": "Restore the PARAM_VALUE payload-space gate before MSG_NEXT_PARAM calls queued_param_send().",
+    "reason": "MSG_NEXT_PARAM must obey the normal GCS_MAVLink payload-space scheduler contract. Sending queued PARAM_VALUE without CHECK_PAYLOAD_SIZE(PARAM_VALUE) is an RTT upper-layer compatibility gap and risks masking lower-layer backpressure behavior instead of preserving upstream/master semantics.",
+    "upstream_reference": "ArduPilot master gates MSG_NEXT_PARAM with CHECK_PAYLOAD_SIZE(PARAM_VALUE) before queued_param_send()."
+  },
+  "verification": {
+    "static": {
+      "product_scope": "Only libraries/GCS_MAVLink/GCS_Common.cpp product code changed.",
+      "deferred_scope": "The larger GCS_Param.cpp workaround cluster remains intentionally deferred for a separate root-cause step."
+    },
+    "physical_initial_build": {
+      "command": "timeout 900s python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)",
+      "build_rc": 0,
+      "verify_bin_rc": 0,
+      "size": {
+        "text": 1314028,
+        "data": 5360,
+        "bss": 128428
+      },
+      "rt_thread_elf_sha256": "d6f46a0dadb3acd4f2632db5ba52ca087b809797d7806c1c428b9c614ce0b3db",
+      "rtthread_bin_sha256": "1c91a0efbf0691c43403196baa1e9713ba89877a953e96c1c94f2edb7342e331"
+    },
+    "physical_initial_flash_readback": {
+      "app_address": "0x08008000",
+      "pre_flash_backup_rc": 0,
+      "app_flash_verify_rc": 0,
+      "post_flash_readback_rc": 0,
+      "post_flash_cmp_rc": 0,
+      "readback_sha256": "1c91a0efbf0691c43403196baa1e9713ba89877a953e96c1c94f2edb7342e331"
+    },
+    "param_list_gate": {
+      "dir": "results/master_launch/ml_20260607_184444_gcs_param_payload_space_realign/param_list_read_gate_20260607_185449_valid_params",
+      "script": "results/master_launch/ml_20260607_184444_gcs_param_payload_space_realign/param_list_read_gate.py",
+      "rc": 0,
+      "verdict": "GREEN",
+      "read_params": {
+        "LOG_DISARMED": 0.0,
+        "MAV_SYSID": 1.0,
+        "AHRS_EKF_TYPE": 3.0
+      },
+      "param_list": {
+        "duration_s": 53.77,
+        "expected_count": 912,
+        "total_param_value_messages": 913,
+        "unique_indexes": 912,
+        "unique_names": 911,
+        "coverage": 1.0,
+        "duplicate_indexes": 1,
+        "missing_sample": [
+          911
+        ]
+      }
+    },
+    "sequential_30_param_persistence": {
+      "dir": "results/master_launch/ml_20260607_184444_gcs_param_payload_space_realign/param_sequence_persist_gate_20260607_185640",
+      "script": "results/master_launch/ml_20260607_175444_param_queue_upper_realign/param_sequence_persist_gate.py",
+      "rc": 0,
+      "verdict": "GREEN",
+      "reason": "sequential_param_persist_restore_ok",
+      "selected_count": 30,
+      "selected_family": "MAV1/MAV2/MAV3 stream-rate parameters",
+      "method": "Sequential PARAM_SET with matching PARAM_VALUE acknowledgement, reset-run, readback, sequential restore, second reset-run, final readback.",
+      "after_reset_value": 1.0,
+      "restored_after_reset_value": 0.0
+    },
+    "physical_initial_mavlink_interval_gate": {
+      "dir": "results/master_launch/ml_20260607_184444_gcs_param_payload_space_realign/physical_interval_gate_20260607_185944",
+      "rc": 0,
+      "verdict": "GREEN",
+      "params": {
+        "AHRS_EKF_TYPE": 3.0,
+        "GPS1_TYPE": 1.0,
+        "SCHED_LOOP_RATE": 400.0
+      },
+      "counts_30s": {
+        "HEARTBEAT": 29,
+        "SYS_STATUS": 90,
+        "RAW_IMU": 90,
+        "SCALED_PRESSURE": 90,
+        "ATTITUDE": 90,
+        "EKF_STATUS_REPORT": 90
+      },
+      "max_silence_s": 1.494
+    },
+    "physical_initial_gdb": {
+      "dir": "results/master_launch/ml_20260607_184444_gcs_param_payload_space_realign",
+      "rc": 0,
+      "pc": "0x0810052e <idle_thread_entry+6>",
+      "cfsr_words": [
+        "0x00000000",
+        "0x00000000",
+        "0x00000000",
+        "0x00000000"
+      ],
+      "hfsr": "0x00000000"
+    },
+    "sitl_on_hw_build_flash_gate": {
+      "build_dir": "results/master_launch/ml_20260607_184444_gcs_param_payload_space_realign/sitl_on_hw_build_20260607_190533",
+      "command": "timeout 900s python3 -m SCons --v=ArduCopter --target=cuav_v5 --extra-hwdef=Tools/scripts/sitl-on-hardware/extra-hwdef-sitl-on-hw.dat --default-param=Tools/scripts/sitl-on-hardware/default.param -j$(nproc)",
+      "build_rc": 0,
+      "verify_bin_rc": 0,
+      "app_flash_verify_rc": 0,
+      "post_flash_readback_rc": 0,
+      "post_flash_cmp_rc": 0,
+      "size": {
+        "text": 1241716,
+        "data": 5368,
+        "bss": 228212
+      },
+      "rt_thread_elf_sha256": "fc5ffbecbe8628b246b1933e7c2a370f3743eee5c286211d145c725a253d4472",
+      "rtthread_bin_sha256": "0d8b894c4aca2843fea2c471d1bca870b887700a80917ceb3f2333f835187833",
+      "gate_dir": "results/master_launch/ml_20260607_184444_gcs_param_payload_space_realign/sitl_on_hw_build_20260607_190533/sitl_on_hw_gate_20260607_190921",
+      "gate_rc": 0,
+      "gate_verdict": "GREEN",
+      "params": {
+        "AHRS_EKF_TYPE": 10.0,
+        "GPS1_TYPE": 100.0,
+        "SIM_RATE_HZ": 400.0,
+        "SCHED_LOOP_RATE": 400.0
+      },
+      "counts_20s": {
+        "HEARTBEAT": 20,
+        "RAW_IMU": 101,
+        "SCALED_PRESSURE": 101,
+        "ATTITUDE": 101,
+        "GPS_RAW_INT": 100,
+        "GLOBAL_POSITION_INT": 101,
+        "SIMSTATE": 100,
+        "SYS_STATUS": 101
+      },
+      "max_round_silence_s": 0.0
+    },
+    "physical_restore_build_flash_readback": {
+      "dir": "results/master_launch/ml_20260607_184444_gcs_param_payload_space_realign/physical_restore_build_20260607_191223",
+      "command": "timeout 900s python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)",
+      "build_rc": 0,
+      "verify_bin_rc": 0,
+      "app_flash_verify_rc": 0,
+      "post_flash_readback_rc": 0,
+      "post_flash_cmp_rc": 0,
+      "size": {
+        "text": 1314028,
+        "data": 5360,
+        "bss": 128428
+      },
+      "rt_thread_elf_sha256": "9bf01133de913f0f9831f8a6c769d48a79a280460cf66083a8d10104de865711",
+      "rtthread_bin_sha256": "89ba090fa2bb414345f8292ad21048fa38119cbf8d15cabe0da18c41be71cd14",
+      "readback_sha256": "89ba090fa2bb414345f8292ad21048fa38119cbf8d15cabe0da18c41be71cd14"
+    },
+    "final_physical_interval_gate_after_restore": {
+      "first_attempt": {
+        "dir": "results/master_launch/ml_20260607_184444_gcs_param_payload_space_realign/physical_restore_build_20260607_191223/final_physical_interval_gate_20260607_191833",
+        "rc": 1,
+        "verdict": "RED",
+        "interpretation": "The vehicle stream sample was healthy, but the first SYS_STATUS SET_MESSAGE_INTERVAL COMMAND_ACK was missed by the 3s script ACK window. GET_MESSAGE_INTERVAL immediately reported 200000us and later commands ACKed. This is retained as a host-side/script-window noise sample, not hidden."
+      },
+      "retry": {
+        "dir": "results/master_launch/ml_20260607_184444_gcs_param_payload_space_realign/physical_restore_build_20260607_191223/final_physical_interval_gate_20260607_192004_retry",
+        "rc": 0,
+        "verdict": "GREEN",
+        "params": {
+          "AHRS_EKF_TYPE": 3.0,
+          "GPS1_TYPE": 1.0,
+          "SCHED_LOOP_RATE": 400.0
+        },
+        "interval_us": 200000,
+        "set_message_interval_ack_result": 0,
+        "counts_30s": {
+          "HEARTBEAT": 30,
+          "SYS_STATUS": 123,
+          "RAW_IMU": 123,
+          "SCALED_PRESSURE": 123,
+          "ATTITUDE": 124,
+          "EKF_STATUS_REPORT": 123
+        },
+        "max_silence_s": 0.523
+      }
+    },
+    "final_gdb_after_physical_restore": {
+      "dir": "results/master_launch/ml_20260607_184444_gcs_param_payload_space_realign/physical_restore_build_20260607_191223",
+      "rc": 0,
+      "openocd_target": "STM32F7 via ST-Link/SWD",
+      "halt_mode": "Handler PendSV",
+      "pc": "0x0800829c <PendSV_Handler+18>",
+      "cfsr_words": [
+        "0x00000000",
+        "0x00000000",
+        "0x00000000",
+        "0x00000000"
+      ],
+      "hfsr": "0x00000000",
+      "cleanup": "openocd/openoccd not running after snapshot."
+    }
+  },
+  "notes": [
+    "No bootloader or AP_IOMCU files were modified.",
+    "SWD stayed available through build, flash/readback, GDB halt/resume, SITL-on-HW flash, physical restore, and final GDB snapshot.",
+    "The board was restored from SITL-on-HW firmware back to normal physical ArduCopter firmware before the final physical MAVLink and GDB gates.",
+    "The one-line MSG_NEXT_PARAM payload-space recovery is the only product-code change in this commit."
+  ],
+  "verdict": "GREEN"
+}

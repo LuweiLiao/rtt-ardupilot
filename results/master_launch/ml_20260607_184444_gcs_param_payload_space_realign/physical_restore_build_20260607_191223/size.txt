@@ -1,0 +1,2 @@
+   text	   data	    bss	    dec	    hex	filename
+1314028	   5360	 128428	1447816	 161788	build/rtt_deploy/cuav_v5/rt-thread.elf
