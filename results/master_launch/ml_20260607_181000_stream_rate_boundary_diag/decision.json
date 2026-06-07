@@ -1,0 +1,62 @@
+{
+  "time": "2026-06-07T18:10:00+08:00",
+  "operation": "diagnose/verify",
+  "modified_files": [],
+  "hypothesis": "上一轮 fast-green RED 与 stream request 低速率可能是运行时串口占用/暂态，而非当前固件不可达到 5Hz L1 MAVLink 流。",
+  "diagnostics": {
+    "attitude_only_request": {
+      "command": "MAV_CMD_SET_MESSAGE_INTERVAL ATTITUDE 200000us",
+      "ack": "COMMAND_ACK command=511 result=0",
+      "counts_30s": {
+        "HEARTBEAT": 31,
+        "RAW_IMU": 82,
+        "ATTITUDE": 82,
+        "EKF_STATUS_REPORT": 82,
+        "SCALED_PRESSURE": 82
+      },
+      "interpretation": "单消息请求后 L1 相关消息流提升到约 3Hz，发送链路不是全局堵死。"
+    },
+    "fast_green_current_run": {
+      "result": "GREEN",
+      "counts_30s": {
+        "HEARTBEAT": 30,
+        "RAW_IMU": 145,
+        "ATTITUDE": 145,
+        "EKF_STATUS_REPORT": 145,
+        "SCALED_PRESSURE": 145
+      }
+    },
+    "openocd_reset_run": {
+      "result": "PASS",
+      "method": "openocd reset run"
+    },
+    "heartbeat_after_reset": "PASS HEARTBEAT 2 3 81 0 3",
+    "fast_green_after_reset": {
+      "result": "GREEN",
+      "counts_30s": {
+        "HEARTBEAT": 30,
+        "RAW_IMU": 151,
+        "ATTITUDE": 151,
+        "EKF_STATUS_REPORT": 151,
+        "SCALED_PRESSURE": 151
+      },
+      "max_silence": 1.151,
+      "zacc_mg": -1016,
+      "baro_hpa": 1003.9,
+      "ekf_flags": "0xa7"
+    },
+    "openocd_gdb_after_reset": {
+      "result": "PASS",
+      "pc": "0x080e6e40 RTT::I2CDevice::_do_transfer",
+      "fault_status": "0xe000ed28: 00000000 00000000 0000000b 00000000",
+      "hardfault": false
+    },
+    "firmware_sha256": {
+      "bin": "8ede89a937af83e2d6e4f51d5d740262925a623eb9b081743fad99f158b2067b",
+      "elf": "ebdb8e56d8abed7acaebbc43da708d432b2c35d67dff5e8344946acbad899bd7"
+    }
+  },
+  "decision": "ACCEPT_RUNTIME_HEALTH_FOR_CURRENT_DIRTY_WORKTREE",
+  "reason": "同一固件在 reset run 后可重复通过 heartbeat、fast-green 和 GDB 无 HardFault；上一轮低速率诊断不是当前必须修复的源码问题。下一步应审计并提交当前 dirty worktree 中形成该可运行基线的源码切片。",
+  "next_step": "按 HAL 以上清理、HAL_RTT/BSP/build、RT-Thread 子模块三类审计 dirty diff；只提交与已验证固件一致且符合 HAL 换皮原则的内容。"
+}

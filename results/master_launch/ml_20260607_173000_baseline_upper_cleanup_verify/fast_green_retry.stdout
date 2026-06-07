@@ -1,0 +1,23 @@
+fast_green_gate run 1/1 port=/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00
+RED reason=imu_bad counts={'HEARTBEAT': 28, 'RAW_IMU': 29, 'ATTITUDE': 29, 'EKF_STATUS_REPORT': 29, 'SCALED_PRESSURE': 29}
+{
+  "baro_hpa": 1004.01,
+  "counts": {
+    "ATTITUDE": 29,
+    "EKF_STATUS_REPORT": 29,
+    "HEARTBEAT": 28,
+    "RAW_IMU": 29,
+    "SCALED_PRESSURE": 29
+  },
+  "ekf_flags": "0xa7",
+  "firmware_hint": "flight_sw_version=0x04070000",
+  "json_path": "/home/llw/firmare/pogo-apm/results/validation/fast_green/20260607T051520Z.json",
+  "max_silence": 1.999,
+  "port": "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00",
+  "reason": "imu_bad",
+  "sample_seconds": 30.0,
+  "settle_seconds": 0.74,
+  "timestamp_utc": "2026-06-07T05:15:20.418161+00:00",
+  "verdict": "RED",
+  "zacc_mg": -1014
+}

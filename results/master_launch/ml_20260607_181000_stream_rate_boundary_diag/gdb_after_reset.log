@@ -1,0 +1,14 @@
+0x080e6e40 in _i2c_master_xfer_ll (bus=<optimized out>, recv_len=6, recv=0x20053298 "?B\017", send_len=1, send=0x2005327c "\300\021\005 \260\257\004 \264\257\004 ?B\017", addr=14 '\016', i2c=0x40005c00) at /data/firmare/pogo-apm/libraries/AP_HAL_RTT/I2CDevice.cpp:259
+259	                                 I2C_ISR_ARLO)) && --timeout) { __NOP(); }
+pc             0x80e6e40           0x80e6e40 <RTT::I2CDevice::_do_transfer(unsigned char const*, unsigned long, unsigned char*, unsigned long)+284>
+lr             0x712               1810
+sp             0x2005321c          0x2005321c
+msp            0x200054f0          0x200054f0 <completed>
+psp            0x2005321c          0x2005321c
+#0  0x080e6e40 in _i2c_master_xfer_ll (bus=<optimized out>, recv_len=6, recv=0x20053298 "", send_len=1, send=0x2005327c "", addr=14 '\016', i2c=0x40005c00) at /data/firmare/pogo-apm/libraries/AP_HAL_RTT/I2CDevice.cpp:259
+#1  RTT::I2CDevice::_do_transfer (this=this@entry=0x20051170, send=<optimized out>, send_len=1, recv=0x20053298 "", recv_len=6) at /data/firmare/pogo-apm/libraries/AP_HAL_RTT/I2CDevice.cpp:425
+#2  0x080e6f28 in RTT::I2CDevice::transfer (recv_len=<optimized out>, recv=<optimized out>, send_len=<optimized out>, send=<optimized out>, this=<optimized out>) at /data/firmare/pogo-apm/libraries/AP_HAL_RTT/I2CDevice.cpp:457
+#3  RTT::I2CDevice::transfer (this=0x20051170, send=0x2005327b "", send_len=1, recv=0x20053298 "", recv_len=0) at /data/firmare/pogo-apm/libraries/AP_HAL_RTT/I2CDevice.cpp:429
+#4  0x00000000 in ?? ()
+0xe000ed28: 00000000 00000000 0000000b 00000000
+[Inferior 1 (Remote target) detached]

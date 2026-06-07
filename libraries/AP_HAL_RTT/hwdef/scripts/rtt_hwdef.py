@@ -9,7 +9,7 @@ and generates:
   3. rtconfig.h       — RTT peripheral enables based on hwdef.dat
   4. link.lds         — memory layout from FLASH_SIZE_KB / RAM_SIZE_KB
 
-Usage: rtt_hwdef.py [-D outdir] [--params params] hwdef.dat
+Usage: rtt_hwdef.py [-D outdir] [--params params] hwdef.dat [extra-hwdef.dat ...]
 """
 
 import argparse
@@ -1100,14 +1100,15 @@ def main():
     )
     parser.add_argument('-D', '--outdir', dest='outdir', default=None)
     parser.add_argument('--params', default='')
-    parser.add_argument('hwdef', nargs=1, metavar='hwdef.dat')
+    parser.add_argument('hwdef', nargs='+', metavar='hwdef.dat')
     args = parser.parse_args()
 
     outdir = args.outdir if args.outdir else os.getcwd()
-    hwdef_path = args.hwdef[0]
-    if not os.path.isfile(hwdef_path):
-        print('rtt_hwdef: hwdef file not found: %s' % hwdef_path, file=sys.stderr)
-        return 1
+    hwdef_paths = args.hwdef
+    for hwdef_path in hwdef_paths:
+        if not os.path.isfile(hwdef_path):
+            print('rtt_hwdef: hwdef file not found: %s' % hwdef_path, file=sys.stderr)
+            return 1
 
     try:
         os.makedirs(outdir, exist_ok=True)
@@ -1115,7 +1116,7 @@ def main():
         print('rtt_hwdef: cannot create outdir %s: %s' % (outdir, e), file=sys.stderr)
         return 1
 
-    h = RTTHWDef(outdir=outdir, hwdef=[hwdef_path])
+    h = RTTHWDef(outdir=outdir, hwdef=hwdef_paths)
     h.run()
 
     # Generate additional files

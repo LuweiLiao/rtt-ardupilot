@@ -627,6 +627,7 @@ def _ensure_librtthread_a(env):
     rtt_root = env.RTT_ROOT
     env_add = os.environ.copy()
     env_add['RTT_ROOT'] = rtt_root
+    env_add['ARDUPILOT_FULL'] = '1'
     rtt_exec = getattr(env, 'RTT_EXEC_PATH', None)
     if not rtt_exec and env.get_flat('CC'):
         cc = env.get_flat('CC')
@@ -640,8 +641,8 @@ def _ensure_librtthread_a(env):
     _inject_hwdef_into_rtconfig(env, bsp_dir)
 
     # 1) scons in BSP (RTT uses scons; run from BSP dir with RTT_ROOT set).
-    #    scons may fail at the link stage (missing HAL symbols when LL-only),
-    #    but compilation of .o files still succeeds — continue to archive step.
+    #    ARDUPILOT_FULL skips the BSP demo application so waf remains the only
+    #    ArduPilot firmware link step while SCons still produces BSP objects.
     try:
         subprocess.call(['scons'], env=env_add, cwd=bsp_dir)
     except OSError:
@@ -929,6 +930,21 @@ def rtt_dynamic_includes(self):
     bsp_dir = _rtt_bsp_dir(self.env)
     if bsp_dir and os.path.isdir(bsp_dir):
         self.env.append_value('INCLUDES', [bsp_dir])
+        for d in (
+                os.path.join(bsp_dir, 'board'),
+                os.path.join(bsp_dir, 'board', 'drivers_ll'),
+                os.path.join(os.path.dirname(bsp_dir), 'libraries', 'HAL_Drivers'),
+                os.path.join(os.path.dirname(bsp_dir), 'libraries', 'HAL_Drivers', 'drivers'),
+                os.path.join(self.env.AP_HAL_ROOT, 'cherryusb_board')):
+            if os.path.isdir(d):
+                self.env.append_value('INCLUDES', [d])
+        cherryusb_root = os.path.join(self.env.AP_HAL_ROOT, 'thirdparty', 'cherryusb')
+        for d in (
+                os.path.join(cherryusb_root, 'core'),
+                os.path.join(cherryusb_root, 'class', 'cdc'),
+                os.path.join(cherryusb_root, 'common')):
+            if os.path.isdir(d):
+                self.env.append_value('INCLUDES', [d])
         mcu = _rtt_mcu_family(self.env)
         hal_pkg = _RTT_HAL_PKG.get(mcu, _RTT_HAL_PKG['f4'])
         cmsis_pkg = _RTT_CMSIS_PKG.get(mcu, _RTT_CMSIS_PKG['f4'])
@@ -1124,6 +1140,7 @@ def build(bld):
                     '-DRT_USING_NEWLIBC', '-DRT_USING_LIBC',
                     '-I', bsp_dir,
                     '-I', os.path.join(rtt_root, 'include'),
+                    '-I', os.path.join(rtt_root, 'components', 'finsh'),
                     '-I', os.path.join(rtt_root, 'components', 'libc', 'compilers', 'newlib'),
                     '-I', os.path.join(rtt_root, 'components', 'libc', 'compilers', 'common', 'include'),
                     '-I', os.path.join(rtt_root, 'components', 'libc', 'posix', 'include'),

@@ -211,38 +211,24 @@ AP_InertialSensor_Invensensev3::~AP_InertialSensor_Invensensev3()
     }
 }
 
-/* [RTT DEBUG] track probe flow */
-volatile uint32_t rtt_dbg_dev_is_null = 0;
-volatile uint32_t rtt_dbg_probe_called = 0;
-volatile uint32_t rtt_dbg_probe_stage = 0;
-
 AP_InertialSensor_Backend *AP_InertialSensor_Invensensev3::probe(AP_InertialSensor &imu,
                                                                  AP_HAL::OwnPtr<AP_HAL::Device> _dev,
                                                                  enum Rotation _rotation)
 {
-    rtt_dbg_probe_called = 0xDEAD;
-    rtt_dbg_probe_stage = 1;
     if (!_dev) {
-        rtt_dbg_dev_is_null = 0xDEAD;
         return nullptr;
     }
-    rtt_dbg_dev_is_null = 0xBEEF;
-    rtt_dbg_probe_stage = 2;
 
     if (_dev->bus_type() == AP_HAL::Device::BUS_TYPE_SPI) {
         _dev->set_read_flag(BIT_READ_FLAG);
     }
-    rtt_dbg_probe_stage = 3;
 
     AP_InertialSensor_Invensensev3 *sensor =
         NEW_NOTHROW AP_InertialSensor_Invensensev3(imu, std::move(_dev), _rotation);
-    rtt_dbg_probe_stage = 4;
     if (!sensor || !sensor->hardware_init()) {
-        rtt_dbg_probe_stage = 5;
         delete sensor;
         return nullptr;
     }
-    rtt_dbg_probe_stage = 6;
     return sensor;
 }
 
@@ -1016,10 +1002,6 @@ void AP_InertialSensor_Invensensev3::set_filter_and_scaling_icm456xy(void)
 bool AP_InertialSensor_Invensensev3::check_whoami(void)
 {
     uint8_t whoami = register_read(INV3REG_WHOAMI);
-    
-    /* [RTT DEBUG] capture WHOAMI for diagnostic */
-    extern volatile uint32_t rtt_dbg_mpu_whoami;
-    rtt_dbg_mpu_whoami = whoami;
 
     switch (whoami) {
     case INV3_ID_ICM40609:
@@ -1100,19 +1082,14 @@ void AP_InertialSensor_Invensensev3::register_write_bank_icm456xy(uint16_t bank_
 
 bool AP_InertialSensor_Invensensev3::hardware_init(void)
 {
-    extern volatile uint32_t rtt_dbg_mpu_whoami;
-    rtt_dbg_mpu_whoami = 0xAAAAAAAA; // entered hardware_init
     WITH_SEMAPHORE(dev->get_semaphore());
-    rtt_dbg_mpu_whoami = 0xBBBBBBBB; // got semaphore
 
     dev->setup_checked_registers(8, dev->bus_type() == AP_HAL::Device::BUS_TYPE_I2C?200:20);
 
     // initially run the bus at low speed
     dev->set_speed(AP_HAL::Device::SPEED_LOW);
-    rtt_dbg_mpu_whoami = 0xCCCCCCCC; // about to check whoami
 
     if (!check_whoami()) {
-        rtt_dbg_mpu_whoami = 0xDDDDDDDD; // whoami failed
         return false;
     }
 

@@ -1,0 +1,27 @@
+Open On-Chip Debugger 0.12.0-dirty (2026-05-25-11:19)
+Licensed under GNU GPL v2
+For bug reports, read
+	http://openocd.org/doc/doxygen/bugs.html
+Info : auto-selecting first available session transport "hla_swd". To override use 'transport select <transport>'.
+Info : The selected transport took over low-level target control. The results might differ compared to plain JTAG/SWD
+Info : Listening on port 6666 for tcl connections
+Info : Listening on port 4444 for telnet connections
+Info : clock speed 2000 kHz
+Info : STLINK V2J41S7 (API v2) VID:PID 0483:3748
+Info : Target voltage: 3.247340
+Info : STLINK: DP CTRL/STAT = 0xe00fdfec
+Info : STLINK: DAP sticky error cleared!
+Info : [stm32f7x.cpu] Cortex-M7 r1p0 processor detected
+Info : [stm32f7x.cpu] target has 8 breakpoints, 4 watchpoints
+Info : starting gdb server for stm32f7x.cpu on 3333
+Info : Listening on port 3333 for gdb connections
+Info : accepting 'gdb' connection on tcp/3333
+[stm32f7x.cpu] halted due to debug-request, current mode: Thread
+xPSR: 0x21000000 pc: 0x080e6e40 psp: 0x2005321c
+Info : device id = 0x10016451
+Info : flash size = 2048 KiB
+Info : Single Bank 2048 kiB STM32F76x/77x found
+Info : flash size = 1024 bytes
+Warn : No RTOS could be auto-detected!
+Info : dropped 'gdb' connection
+shutdown command invoked

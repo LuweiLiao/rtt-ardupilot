@@ -1,0 +1,12 @@
+0x080fffbe in rt_tick_get () at /data/firmare/pogo-apm/modules/rt-thread/src/clock.c:72
+72	    return (rt_tick_t)rt_atomic_load(&(rt_tick));
+pc             0x80fffbe           0x80fffbe <rt_tick_get+2>
+lr             0x8090adb           134810331
+sp             0x2003e994          0x2003e994
+msp            0x200054f0          0x200054f0 <completed>
+psp            0x2003e994          0x2003e994
+#0  0x080fffbe in rt_tick_get () at /data/firmare/pogo-apm/modules/rt-thread/src/clock.c:72
+#1  0x08090ada in RTT::Util::get_millis (this=<optimized out>) at /data/firmare/pogo-apm/libraries/AP_HAL_RTT/Util.cpp:56
+#2  0x00000000 in ?? ()
+0xe000ed28: 00000000 00000000 0000000b 00000000
+[Inferior 1 (Remote target) detached]

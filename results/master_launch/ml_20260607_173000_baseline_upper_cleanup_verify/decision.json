@@ -1,0 +1,34 @@
+{
+  "time": "2026-06-07T17:30:00+08:00",
+  "operation": "diagnose/verify",
+  "modified_files": [
+    "libraries/AP_InertialSensor/AP_InertialSensor_config.h"
+  ],
+  "hypothesis": "移除冗余的 RTT 上层默认宏后，验证当前 dirty worktree 是否仍可作为可提交稳定基线。",
+  "build": {
+    "command": "python3 -m SCons --v=ArduCopter --target=cuav_v5 -j$(nproc)",
+    "result": "PASS",
+    "bin_sha256": "8ede89a937af83e2d6e4f51d5d740262925a623eb9b081743fad99f158b2067b",
+    "elf_sha256": "ebdb8e56d8abed7acaebbc43da708d432b2c35d67dff5e8344946acbad899bd7"
+  },
+  "flash": {
+    "method": "OpenOCD ST-Link direct flash",
+    "address": "0x08008000",
+    "result": "PASS verify OK"
+  },
+  "openocd_gdb": {
+    "result": "PASS",
+    "pc": "0x080fffbe rt_tick_get",
+    "fault_status": "0xe000ed28: 00000000 00000000 0000000b 00000000",
+    "hardfault": false
+  },
+  "cdc_mavlink": {
+    "heartbeat": "PASS HEARTBEAT 2 3 81 0 3",
+    "fast_green_initial": "FIXTURE_DIRTY dirty_ttyACM",
+    "fast_green_retry": "RED reason=imu_bad counts HEARTBEAT=28 RAW_IMU=29 ATTITUDE=29 EKF_STATUS_REPORT=29 SCALED_PRESSURE=29 sample=30s max_silence=1.999",
+    "stream_request_diag": "MAV_CMD_SET_MESSAGE_INTERVAL ACK result=0, but actual rates remain low: ATTITUDE=0.303Hz RAW_IMU=0.328Hz SCALED_PRESSURE=0.328Hz"
+  },
+  "decision": "NOT_ACCEPTED_AS_BASELINE",
+  "reason": "固件可启动、可调试、无 HardFault 且有心跳，但去除 HAL 以上 GCS RTT 速率 workaround 后，MAVLink 按需消息实际发送速率显著低于请求值；这暴露 RTT HAL/调度/USB CDC 发送链路问题，不能把当前状态作为已验证绿色基线提交。",
+  "next_step": "定位 GCS send budget、AP_Scheduler time_available_usec、HAL_RTT Scheduler/UART/CherryUSB CDC TX 路径，优先在 HAL_RTT/BSP 边界修复，不恢复 HAL 以上 RTT 专用速率补丁。"
+}

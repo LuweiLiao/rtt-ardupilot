@@ -26,10 +26,6 @@
 /* DMA stream stride between consecutive stream registers */
 #define DMA_STREAM_STRIDE       0x18U
 
-/* Dummy TX data for receive-only transfers (0xFFFF = idle high on MOSI) */
-static const uint16_t _dummy_tx = 0xFFFFU;
-static uint16_t _dummy_rx;
-
 /* ========================================================================== */
 /* DMA configuration table — 1-based bus index                                */
 /* ========================================================================== */

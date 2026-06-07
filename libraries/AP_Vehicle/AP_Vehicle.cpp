@@ -299,8 +299,6 @@ AP_Vehicle& vehicle = *AP_Vehicle::get_singleton();
 extern AP_Vehicle& vehicle;
 #endif
 
-volatile uint32_t rtt_dbg_setup_stage = 0;
-
 /*
   setup is called when the sketch starts
  */

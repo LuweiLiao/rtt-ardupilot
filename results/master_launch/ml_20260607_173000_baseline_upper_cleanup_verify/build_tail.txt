@@ -1,0 +1,200 @@
+/data/firmare/pogo-apm/build/rtt_cuav_v5/hwdef.h:274: warning: "HAL_NUM_CAN_IFACES" redefined
+  274 | #define HAL_NUM_CAN_IFACES 2
+      |
+<command-line>: note: this is the location of the previous definition
+In file included from /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_config.h:6,
+                 from <command-line>:
+/data/firmare/pogo-apm/build/rtt_cuav_v5/hwdef.h:272: warning: "HAL_STORAGE_SIZE" redefined
+  272 | #define HAL_STORAGE_SIZE 32768
+      |
+<command-line>: note: this is the location of the previous definition
+In file included from /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_config.h:6,
+                 from <command-line>:
+/data/firmare/pogo-apm/build/rtt_cuav_v5/hwdef.h:274: warning: "HAL_NUM_CAN_IFACES" redefined
+  274 | #define HAL_NUM_CAN_IFACES 2
+      |
+<command-line>: note: this is the location of the previous definition
+In file included from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/lprefix.h:47,
+                 from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/lmathlib.c:10:
+/data/firmare/pogo-apm/libraries/AP_Filesystem/posix_compat.h:93: warning: "clearerr" redefined
+   93 | #define clearerr(stream) apfs_clearerr(stream)
+      |
+In file included from ./stdio.h:64,
+                 from /data/firmare/pogo-apm/libraries/AP_Filesystem/posix_compat.h:21,
+                 from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/lprefix.h:47,
+                 from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/lmathlib.c:10:
+/opt/gcc-arm-none-eabi-10-2020-q4-major/arm-none-eabi/include/stdio.h:728: note: this is the location of the previous definition
+  728 | #define clearerr(p) __sclearerr(p)
+      |
+In file included from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/lprefix.h:47,
+                 from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/lmathlib.c:10:
+/data/firmare/pogo-apm/libraries/AP_Filesystem/posix_compat.h:95: warning: "ferror" redefined
+   95 | #define ferror(stream) apfs_ferror(stream)
+      |
+In file included from ./stdio.h:64,
+                 from /data/firmare/pogo-apm/libraries/AP_Filesystem/posix_compat.h:21,
+                 from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/lprefix.h:47,
+                 from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/lmathlib.c:10:
+/opt/gcc-arm-none-eabi-10-2020-q4-major/arm-none-eabi/include/stdio.h:727: note: this is the location of the previous definition
+  727 | #define ferror(p) __sferror(p)
+      |
+In file included from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/lprefix.h:47,
+                 from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/lmathlib.c:10:
+/data/firmare/pogo-apm/libraries/AP_Filesystem/posix_compat.h:101: warning: "feof" redefined
+  101 | #define feof(stream) apfs_ferror(stream)
+      |
+In file included from ./stdio.h:64,
+                 from /data/firmare/pogo-apm/libraries/AP_Filesystem/posix_compat.h:21,
+                 from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/lprefix.h:47,
+                 from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/lmathlib.c:10:
+/opt/gcc-arm-none-eabi-10-2020-q4-major/arm-none-eabi/include/stdio.h:726: note: this is the location of the previous definition
+  726 | #define feof(p)  __sfeof(p)
+      |
+In file included from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/lprefix.h:47,
+                 from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/liolib.c:10:
+/data/firmare/pogo-apm/libraries/AP_Filesystem/posix_compat.h:93: warning: "clearerr" redefined
+   93 | #define clearerr(stream) apfs_clearerr(stream)
+      |
+In file included from ./stdio.h:64,
+                 from /data/firmare/pogo-apm/libraries/AP_Filesystem/posix_compat.h:21,
+                 from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/lprefix.h:47,
+                 from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/liolib.c:10:
+/opt/gcc-arm-none-eabi-10-2020-q4-major/arm-none-eabi/include/stdio.h:728: note: this is the location of the previous definition
+  728 | #define clearerr(p) __sclearerr(p)
+      |
+In file included from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/lprefix.h:47,
+                 from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/liolib.c:10:
+/data/firmare/pogo-apm/libraries/AP_Filesystem/posix_compat.h:95: warning: "ferror" redefined
+   95 | #define ferror(stream) apfs_ferror(stream)
+      |
+In file included from ./stdio.h:64,
+                 from /data/firmare/pogo-apm/libraries/AP_Filesystem/posix_compat.h:21,
+                 from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/lprefix.h:47,
+                 from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/liolib.c:10:
+/opt/gcc-arm-none-eabi-10-2020-q4-major/arm-none-eabi/include/stdio.h:727: note: this is the location of the previous definition
+  727 | #define ferror(p) __sferror(p)
+      |
+In file included from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/lprefix.h:47,
+                 from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/liolib.c:10:
+/data/firmare/pogo-apm/libraries/AP_Filesystem/posix_compat.h:101: warning: "feof" redefined
+  101 | #define feof(stream) apfs_ferror(stream)
+      |
+In file included from ./stdio.h:64,
+                 from /data/firmare/pogo-apm/libraries/AP_Filesystem/posix_compat.h:21,
+                 from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/lprefix.h:47,
+                 from /data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/liolib.c:10:
+/opt/gcc-arm-none-eabi-10-2020-q4-major/arm-none-eabi/include/stdio.h:726: note: this is the location of the previous definition
+  726 | #define feof(p)  __sfeof(p)
+      |
+/data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/liolib.c:290:12: warning: 'io_tmpfile' defined but not used [-Wunused-function]
+  290 | static int io_tmpfile (lua_State *L) {
+      |            ^~~~~~~~~~
+/data/firmare/pogo-apm/libraries/AP_Scripting/lua/src/liolib.c:278:12: warning: 'io_popen' defined but not used [-Wunused-function]
+  278 | static int io_popen (lua_State *L) {
+      |            ^~~~~~~~
+CXX /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_objects/build/rtt_cuav_v5/libraries/AP_Scripting/lua_generated_bindings.o
+In file included from /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_config.h:6,
+                 from <command-line>:
+/data/firmare/pogo-apm/build/rtt_cuav_v5/hwdef.h:272: warning: "HAL_STORAGE_SIZE" redefined
+  272 | #define HAL_STORAGE_SIZE 32768
+      |
+<command-line>: note: this is the location of the previous definition
+In file included from /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_config.h:6,
+                 from <command-line>:
+/data/firmare/pogo-apm/build/rtt_cuav_v5/hwdef.h:274: warning: "HAL_NUM_CAN_IFACES" redefined
+  274 | #define HAL_NUM_CAN_IFACES 2
+      |
+<command-line>: note: this is the location of the previous definition
+CC /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_objects/libraries/AP_HAL_RTT/thirdparty/cherryusb/core/usbd_core.o
+In file included from /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_config.h:6,
+                 from <command-line>:
+/data/firmare/pogo-apm/build/rtt_cuav_v5/hwdef.h:272: warning: "HAL_STORAGE_SIZE" redefined
+  272 | #define HAL_STORAGE_SIZE 32768
+      |
+<command-line>: note: this is the location of the previous definition
+In file included from /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_config.h:6,
+                 from <command-line>:
+/data/firmare/pogo-apm/build/rtt_cuav_v5/hwdef.h:274: warning: "HAL_NUM_CAN_IFACES" redefined
+  274 | #define HAL_NUM_CAN_IFACES 2
+      |
+<command-line>: note: this is the location of the previous definition
+CC /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_objects/libraries/AP_HAL_RTT/thirdparty/cherryusb/class/cdc/usbd_cdc_acm.o
+CC /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_objects/libraries/AP_HAL_RTT/thirdparty/cherryusb/port/dwc2/usb_dc_dwc2.o
+CC /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_objects/libraries/AP_HAL_RTT/thirdparty/cherryusb/osal/usb_osal_rtthread.o
+In file included from /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_config.h:6,
+                 from <command-line>:
+/data/firmare/pogo-apm/build/rtt_cuav_v5/hwdef.h:272: warning: "HAL_STORAGE_SIZE" redefined
+  272 | #define HAL_STORAGE_SIZE 32768
+      |
+<command-line>: note: this is the location of the previous definition
+In file included from /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_config.h:6,
+                 from <command-line>:
+/data/firmare/pogo-apm/build/rtt_cuav_v5/hwdef.h:274: warning: "HAL_NUM_CAN_IFACES" redefined
+  274 | #define HAL_NUM_CAN_IFACES 2
+      |
+<command-line>: note: this is the location of the previous definition
+In file included from /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_config.h:6,
+                 from <command-line>:
+/data/firmare/pogo-apm/build/rtt_cuav_v5/hwdef.h:272: warning: "HAL_STORAGE_SIZE" redefined
+  272 | #define HAL_STORAGE_SIZE 32768
+      |
+<command-line>: note: this is the location of the previous definition
+In file included from /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_config.h:6,
+                 from <command-line>:
+/data/firmare/pogo-apm/build/rtt_cuav_v5/hwdef.h:274: warning: "HAL_NUM_CAN_IFACES" redefined
+  274 | #define HAL_NUM_CAN_IFACES 2
+      |
+<command-line>: note: this is the location of the previous definition
+CC /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_objects/libraries/AP_HAL_RTT/cherryusb_board/usb_dc_glue.o
+In file included from /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_config.h:6,
+                 from <command-line>:
+/data/firmare/pogo-apm/build/rtt_cuav_v5/hwdef.h:272: warning: "HAL_STORAGE_SIZE" redefined
+  272 | #define HAL_STORAGE_SIZE 32768
+      |
+<command-line>: note: this is the location of the previous definition
+In file included from /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_config.h:6,
+                 from <command-line>:
+/data/firmare/pogo-apm/build/rtt_cuav_v5/hwdef.h:274: warning: "HAL_NUM_CAN_IFACES" redefined
+  274 | #define HAL_NUM_CAN_IFACES 2
+      |
+<command-line>: note: this is the location of the previous definition
+CC /data/firmare/pogo-apm/modules/rt-thread/bsp/stm32/libraries/HAL_Drivers/drivers/drv_gpio.o
+In file included from /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_config.h:6,
+                 from <command-line>:
+/data/firmare/pogo-apm/build/rtt_cuav_v5/hwdef.h:272: warning: "HAL_STORAGE_SIZE" redefined
+  272 | #define HAL_STORAGE_SIZE 32768
+      |
+<command-line>: note: this is the location of the previous definition
+In file included from /data/firmare/pogo-apm/build/rtt_cuav_v5/ap_config.h:6,
+                 from <command-line>:
+/data/firmare/pogo-apm/build/rtt_cuav_v5/hwdef.h:274: warning: "HAL_NUM_CAN_IFACES" redefined
+  274 | #define HAL_NUM_CAN_IFACES 2
+      |
+<command-line>: note: this is the location of the previous definition
+CC /data/firmare/pogo-apm/modules/rt-thread/bsp/stm32/libraries/HAL_Drivers/drivers/drv_sdio.o
+CC /data/firmare/pogo-apm/modules/rt-thread/bsp/stm32/libraries/HAL_Drivers/drivers/drv_soft_i2c.o
+CC /data/firmare/pogo-apm/modules/rt-thread/bsp/stm32/libraries/HAL_Drivers/drivers/drv_spi.o
+CC /data/firmare/pogo-apm/modules/rt-thread/bsp/stm32/libraries/HAL_Drivers/drivers/drv_usart.o
+LINK rt-thread.elf
+Memory region         Used Size  Region Size  %age Used
+             ROM:     1313060 B      1504 KB     85.26%
+            DTCM:      129204 B       128 KB     98.57%
+           SRAM1:        4576 B       384 KB      1.16%
+arm-none-eabi-objcopy -O binary rt-thread.elf rtthread.bin
+arm-none-eabi-size rt-thread.elf
+   text	   data	    bss	    dec	    hex	filename
+1313060	   5360	 128420	1446840	 1613b8	rt-thread.elf
+python3 /data/firmare/pogo-apm/libraries/AP_HAL_RTT/scripts/set_app_descriptor.py rt-thread.elf rtthread.bin /data/firmare/pogo-apm
+  APP_DESCRIPTOR found at offset 0x1f8
+  git_hash=0x44f4f6b801 (44f4f6b801)
+  Packing: crc1=0x8007dad5 crc2=0x4f2934c4 size=1318420 hash=0xf4f6b801
+  Applied APP_DESCRIPTOR: crc1=0x8007dad5 crc2=0x4f2934c4 size=1318420 hash=0xf4f6b801
+  Applied APP_DESCRIPTOR to elf
+scons: done building targets.
+WARNING: Reset_Handler literal pool not found by pattern.
+Falling back to GDB ELF comparison...
+Reset_Handler literal pool (VMA 0x080F0E04, bin offset 0xE8E04):
+  Expected: [0x200054f0, 0x40003000, 0x08008000, 0xe000ed08]
+  Actual:   [0x200054f0, 0x40003000, 0x08008000, 0xe000ed08]
+✅ Binary integrity check PASSED — Reset_Handler literal pool correct
+Copied /data/firmare/pogo-apm/build/rtt_deploy/cuav_v5/rtthread.bin -> /data/firmare/pogo-apm/build/rtt_cuav_v5/rtthread.bin

@@ -1587,26 +1587,10 @@ void GCS_MAVLINK::update_send()
     const uint32_t start = AP_HAL::millis();
     const uint16_t start16 = start & 0xFFFF;
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && defined(GCS_DEBUG_SEND_MESSAGE_TIMINGS) == 0
-    // RTT diagnostic
-    extern "C" int rt_kprintf(const char *fmt, ...);
-    static uint32_t _rtt_call_count = 0;
-    static uint32_t _rtt_last_report_ms = 0;
-    _rtt_call_count++;
-    if (AP_HAL::millis() - _rtt_last_report_ms > 5000) {
-        rt_kprintf("[GCS_ENTRY] ch=%u total=%u\n", (unsigned)chan, _rtt_call_count);
-        _rtt_call_count = 0;
-        _rtt_last_report_ms = AP_HAL::millis();
-    }
-#endif
-
     while (AP_HAL::millis() - start < 5) { // spend a max of 5ms sending messages.  This should never trigger - out_of_time() should become true
         if (gcs().out_of_time()) {
 #if GCS_DEBUG_SEND_MESSAGE_TIMINGS
             try_send_message_stats.out_of_time++;
-#endif
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && defined(GCS_DEBUG_SEND_MESSAGE_TIMINGS) == 0
-            _rtt_call_count++;
 #endif
             break;
         }
@@ -1622,9 +1606,6 @@ void GCS_MAVLINK::update_send()
                 if (!do_try_send_message(deferred_message[next].id)) {
                     break;
                 }
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && defined(GCS_DEBUG_SEND_MESSAGE_TIMINGS) == 0
-                _rtt_call_count++;
-#endif
                 // we try to keep output on a regular clock to avoid
                 // user support questions:
                 const uint16_t interval_ms = deferred_message[next].interval_ms;
@@ -1666,44 +1647,33 @@ void GCS_MAVLINK::update_send()
             continue;
         }
 
-        // RTT-only: mute deferred stream telemetry while a param download is in
-        // progress, so the main loop's limited time_available goes to the param
-        // stream (RTT main loop is CPU-starved by SPI polling; see open-issues).
-        // Upstream/other boards keep their original behaviour.
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-        const bool rtt_param_download_active = (_queued_parameter != nullptr);
-#else
-        const bool rtt_param_download_active = false;
-#endif
-        if (!rtt_param_download_active) {
-            ap_message next = next_deferred_bucket_message_to_send(start16);
-            if (next != no_message_to_send) {
-                if (!do_try_send_message(next)) {
-                    break;
-                }
-                bucket_message_ids_to_send.clear(next);
-                if (bucket_message_ids_to_send.count() == 0) {
-                    // we sent everything in the bucket.  Reschedule it.
-                    // we try to keep output on a regular clock to avoid
-                    // user support questions:
-                    const uint16_t interval_ms = get_reschedule_interval_ms(deferred_message_bucket[sending_bucket_id]);
-                    deferred_message_bucket[sending_bucket_id].last_sent_ms += interval_ms;
-                    // but we do not want to try to catch up too much:
-                    if (uint16_t(start16 - deferred_message_bucket[sending_bucket_id].last_sent_ms) > interval_ms) {
-                        deferred_message_bucket[sending_bucket_id].last_sent_ms = start16;
-                    }
-                    find_next_bucket_to_send(start16);
-                }
-#if GCS_DEBUG_SEND_MESSAGE_TIMINGS
-                const uint32_t stop = AP_HAL::micros();
-                const uint32_t delta = stop - retry_deferred_body_start;
-                if (delta > try_send_message_stats.max_retry_deferred_body_us) {
-                    try_send_message_stats.max_retry_deferred_body_us = delta;
-                    try_send_message_stats.max_retry_deferred_body_type = 3;
-                }
-#endif
-                continue;
+        ap_message next = next_deferred_bucket_message_to_send(start16);
+        if (next != no_message_to_send) {
+            if (!do_try_send_message(next)) {
+                break;
             }
+            bucket_message_ids_to_send.clear(next);
+            if (bucket_message_ids_to_send.count() == 0) {
+                // we sent everything in the bucket.  Reschedule it.
+                // we try to keep output on a regular clock to avoid
+                // user support questions:
+                const uint16_t interval_ms = get_reschedule_interval_ms(deferred_message_bucket[sending_bucket_id]);
+                deferred_message_bucket[sending_bucket_id].last_sent_ms += interval_ms;
+                // but we do not want to try to catch up too much:
+                if (uint16_t(start16 - deferred_message_bucket[sending_bucket_id].last_sent_ms) > interval_ms) {
+                    deferred_message_bucket[sending_bucket_id].last_sent_ms = start16;
+                }
+                find_next_bucket_to_send(start16);
+            }
+#if GCS_DEBUG_SEND_MESSAGE_TIMINGS
+            const uint32_t stop = AP_HAL::micros();
+            const uint32_t delta = stop - retry_deferred_body_start;
+            if (delta > try_send_message_stats.max_retry_deferred_body_us) {
+                try_send_message_stats.max_retry_deferred_body_us = delta;
+                try_send_message_stats.max_retry_deferred_body_type = 3;
+            }
+#endif
+            continue;
         }
         break;
     }
@@ -7073,29 +7043,6 @@ void GCS_MAVLINK::initialise_message_intervals_from_config_files()
 void GCS_MAVLINK::initialise_message_intervals_from_streamrates()
 {
     // this is O(n^2), but it's once at boot and across a 10-entry list...
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && APM_BUILD_COPTER_OR_HELI
-    bool all_stream_rates_zero = true;
-    for (uint8_t i = 0; i < NUM_STREAMS; i++) {
-        if (streamRates[i].get() > 0) {
-            all_stream_rates_zero = false;
-            break;
-        }
-    }
-    if (all_stream_rates_zero) {
-        // Copter traditionally defaults these to 0 and waits for a GCS request.
-        // On RTT bring-up this makes fresh or migrated parameter sets look
-        // almost silent on simple ground-station links, so seed reasonable
-        // in-memory defaults without overwriting stored params.
-        // Rates chosen to match typical QGC/MissionPlanner expectations:
-        streamRates[STREAM_RAW_SENSORS].set(10);    // IMU, baro, mag
-        streamRates[STREAM_EXTENDED_STATUS].set(5);  // sys_status, power
-        streamRates[STREAM_RC_CHANNELS].set(5);      // RC channels
-        streamRates[STREAM_POSITION].set(5);         // GPS, position
-        streamRates[STREAM_EXTRA1].set(10);          // attitude
-        streamRates[STREAM_EXTRA2].set(5);           // VFR_HUD
-        streamRates[STREAM_EXTRA3].set(2);           // AHRS, EKF, vibration
-    }
-#endif
     for (uint8_t i=0; all_stream_entries[i].ap_message_ids != nullptr; i++) {
         initialise_message_intervals_for_stream(all_stream_entries[i].stream_id);
     }

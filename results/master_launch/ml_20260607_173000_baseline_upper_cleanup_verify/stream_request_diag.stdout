@@ -1,0 +1,4 @@
+HEARTBEAT 2 3 81 0 3 target 1 0
+ACKS [{"command": 511, "progress": 0, "result": 0}, {"command": 511, "progress": 0, "result": 0}, {"command": 511, "progress": 0, "result": 0}, {"command": 511, "progress": 0, "result": 0}]
+COUNTS {"ATTITUDE": 7, "EKF_STATUS_REPORT": 8, "HEARTBEAT": 20, "RAW_IMU": 8, "SCALED_PRESSURE": 8}
+RATES {"ATTITUDE": 0.303, "EKF_STATUS_REPORT": 0.269, "HEARTBEAT": 0.655, "RAW_IMU": 0.328, "SCALED_PRESSURE": 0.328}

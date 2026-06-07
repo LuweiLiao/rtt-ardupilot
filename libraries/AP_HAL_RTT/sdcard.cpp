@@ -835,7 +835,7 @@ static bool _sdio_read_data_pio(uint8_t *buf, uint32_t bytes)
 
     /* Wait for RXFIFOHF (half-full) or RXDAVL (data available) or error */
     uint32_t remaining = bytes / sizeof(uint32_t);
-    uint32_t *dest = (uint32_t *)buf;
+    uint8_t *dest = buf;
     uint32_t timeout = 10000000;
 
     while (remaining > 0) {
@@ -849,13 +849,17 @@ static bool _sdio_read_data_pio(uint8_t *buf, uint32_t bytes)
 
         if (sta & SDIO_STA_RXDAVL) {
             /* Read 1 word from FIFO */
-            *dest++ = SDIO->FIFO;
+            const uint32_t word = SDIO->FIFO;
+            memcpy(dest, &word, sizeof(word));
+            dest += sizeof(word);
             remaining--;
         } else if (sta & SDIO_STA_RXFIFOHF) {
             /* Read 8 words (burst) */
             uint32_t n = (remaining > 8) ? 8 : remaining;
             for (uint32_t i = 0; i < n; i++) {
-                *dest++ = SDIO->FIFO;
+                const uint32_t word = SDIO->FIFO;
+                memcpy(dest, &word, sizeof(word));
+                dest += sizeof(word);
             }
             remaining -= n;
         }

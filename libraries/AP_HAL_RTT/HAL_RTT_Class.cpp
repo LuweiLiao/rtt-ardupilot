@@ -383,8 +383,10 @@ void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
     {
         RTT::DeviceBus *spibus = RTT::DeviceBus::get_bus(1, APM_RTT_SPI_PRIORITY);
         /* Take+give to force lazy mutex init NOW, not during SPIDevice::transfer */
-        spibus->semaphore.take_nonblocking();
-        spibus->semaphore.give();
+        const bool semaphore_taken = spibus->semaphore.take_nonblocking();
+        if (semaphore_taken) {
+            spibus->semaphore.give();
+        }
     }
     /* SPI2 (FRAM) — CMSIS GPIO/mutex before setup() opens storage */
     RTT::spi_cmsis_prepare_bus(2);

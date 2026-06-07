@@ -11,13 +11,43 @@ import struct
 import subprocess
 import sys
 import os
+import glob
+import shutil
+
+
+def find_tool(tool):
+    """Resolve an ARM tool from PATH, common env vars, or bundled /opt toolchains."""
+    candidates = []
+    for env_name in ('ARM_NONE_EABI_PATH', 'RTT_EXEC_PATH', 'TOOLCHAIN_PATH'):
+        root = os.environ.get(env_name)
+        if root:
+            candidates.append(os.path.join(root, tool))
+            candidates.append(os.path.join(root, 'bin', tool))
+
+    path_tool = shutil.which(tool)
+    if path_tool:
+        candidates.append(path_tool)
+
+    candidates.extend(sorted(glob.glob(f'/opt/gcc-arm-none-eabi*/bin/{tool}')))
+
+    seen = set()
+    for candidate in candidates:
+        candidate = os.path.abspath(os.path.expanduser(candidate))
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+
+    return tool
 
 
 def read_elf_literal_pool(elf_path, pool_vma):
     """Use GDB to read 4 words from ELF at a VMA."""
     try:
+        gdb = find_tool('arm-none-eabi-gdb')
         r = subprocess.run(
-            ['arm-none-eabi-gdb', '-batch',
+            [gdb, '-batch',
              '-ex', f'file {elf_path}',
              '-ex', f'x/4wx {pool_vma:#x}',
              '-ex', 'quit'],
@@ -80,8 +110,9 @@ def verify_binary(bin_path, elf_path):
 
         if os.path.isfile(elf_path):
             try:
+                gdb = find_tool('arm-none-eabi-gdb')
                 r = subprocess.run(
-                    ['arm-none-eabi-gdb', '-batch',
+                    [gdb, '-batch',
                      '-ex', f'file {elf_path}',
                      '-ex', 'disassemble Reset_Handler',
                      '-ex', 'quit'],
