@@ -15,11 +15,6 @@ void Copter::esc_calibration_startup_check()
     }
 
 #if FRAME_CONFIG != HELI_FRAME
-    // [RTT] No RC connected in dev mode — skip ESC cal check to avoid
-    // blocking on radio wait. The 2-second radio wait + throttle check
-    // causes main thread exit before reaching main loop.
-    return;
-
     // delay up to 2 second for first radio input
     uint8_t i = 0;
     while ((i++ < 100) && (last_radio_update_ms == 0)) {

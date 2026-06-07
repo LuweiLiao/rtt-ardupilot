@@ -1,0 +1,55 @@
+{
+  "change": "Remove the RTT-specific early return from Copter ESC calibration startup check.",
+  "changed_files": [
+    "ArduCopter/esc_calibration.cpp"
+  ],
+  "intent": "Move ArduCopter behaviour back toward upstream semantics; missing RC input must be handled by the HAL/RCInput/board layer, not by skipping vehicle-level ESC calibration logic.",
+  "result": "GREEN",
+  "verification": {
+    "scons_build_rc": 0,
+    "verify_bin_rc": 0,
+    "openocd_pre_flash_backup_rc": 0,
+    "openocd_flash_verify_rc": 0,
+    "openocd_post_flash_readback_rc": 0,
+    "post_flash_cmp_rc": 0,
+    "physical_interval_gate": {
+      "path": "results/master_launch/ml_20260607_171847_esc_cal_upper_realign/physical_interval_gate_20260607_172642/physical_interval_gate.stdout",
+      "verdict": "GREEN",
+      "reason": "ok",
+      "counts": {
+        "HEARTBEAT": 29,
+        "RAW_IMU": 112,
+        "SCALED_PRESSURE": 112,
+        "ATTITUDE": 113,
+        "EKF_STATUS_REPORT": 112,
+        "SYS_STATUS": 112
+      },
+      "rates_hz": {
+        "HEARTBEAT": 0.967,
+        "RAW_IMU": 3.733,
+        "SCALED_PRESSURE": 3.733,
+        "ATTITUDE": 3.767,
+        "EKF_STATUS_REPORT": 3.733,
+        "SYS_STATUS": 3.733
+      },
+      "interval_checks": [
+        ["SYS_STATUS", 0, 200000],
+        ["RAW_IMU", 0, 200000],
+        ["SCALED_PRESSURE", 0, 200000],
+        ["ATTITUDE", 0, 200000],
+        ["EKF_STATUS_REPORT", 0, 200000]
+      ]
+    },
+    "gdb_after_gate": {
+      "path": "results/master_launch/ml_20260607_171847_esc_cal_upper_realign/gdb_after_esc_realign_sync.log",
+      "rc": 0,
+      "pc": "0x080f0e6a _idle_hook+46",
+      "cfsr_hfsr_dfsr_afsr": ["0x00000000", "0x00000000", "0x00000000", "0x00000000"],
+      "bfar": "0x00000000"
+    }
+  },
+  "notes": [
+    "The SITL-on-HW gate was intentionally not used as final verdict for this firmware state because current parameters are physical/default style: AHRS_EKF_TYPE=3 and GPS1_TYPE=1, not the SITL-on-HW expected AHRS_EKF_TYPE=10 and GPS1_TYPE=100.",
+    "The old rtt_fast_green_gate red result was separated from this source change by running an explicit SET_MESSAGE_INTERVAL/GET_MESSAGE_INTERVAL physical gate, which passed."
+  ]
+}

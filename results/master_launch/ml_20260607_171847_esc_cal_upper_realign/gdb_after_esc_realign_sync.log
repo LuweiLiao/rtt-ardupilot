@@ -1,0 +1,16 @@
+Reading symbols from build/rtt_deploy/cuav_v5/rt-thread.elf...
+Remote debugging using :3333
+0x080f0e6a in _idle_hook () at board/rt_board_init.c:561
+561	        _idle_cycles_acc += (now - _idle_last_cyc);
+pc             0x80f0e6a           0x80f0e6a <_idle_hook+46>
+Invalid register `xpsr'
+0xe000ed28:	0x00000000	0x00000000	0x00000000	0x00000000
+0xe000ed2c:	0x00000000
+#0  0x080f0e6a in _idle_hook () at board/rt_board_init.c:561
+#1  0x08100526 in idle_thread_entry (parameter=<optimized out>)
+    at /data/firmare/pogo-apm/modules/rt-thread/src/idle.c:144
+#2  0x08102fd0 in rt_thread_close (thread=<optimized out>)
+    at /data/firmare/pogo-apm/modules/rt-thread/src/thread.c:469
+#3  0x00000000 in ?? ()
+Detaching from program: /data/firmare/pogo-apm/build/rtt_deploy/cuav_v5/rt-thread.elf, Remote target
+[Inferior 1 (Remote target) detached]

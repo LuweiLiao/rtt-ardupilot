@@ -1,0 +1,77 @@
+{
+  "allow_param_list_fallback": false,
+  "completed_rounds": [],
+  "detail": "param_direct_timeout:SIM_RATE_HZ",
+  "heartbeat": {
+    "autopilot": 3,
+    "base_mode": 81,
+    "custom_mode": 0,
+    "mavlink_version": 3,
+    "mavpackettype": "HEARTBEAT",
+    "system_status": 3,
+    "type": 2
+  },
+  "heartbeat_ready": {
+    "first_heartbeat_s": 0.989,
+    "last": {
+      "autopilot": 3,
+      "base_mode": 81,
+      "custom_mode": 0,
+      "mavlink_version": 3,
+      "mavpackettype": "HEARTBEAT",
+      "system_status": 3,
+      "type": 2
+    },
+    "ready_heartbeat_s": 0.989,
+    "status_histogram": {
+      "3": 1
+    }
+  },
+  "json_path": "results/master_launch/ml_20260607_171847_esc_cal_upper_realign/sitl_on_hw_after_esc_realign_20260607_172214/sitl_on_hw_gate.json",
+  "param": "SIM_RATE_HZ",
+  "params": {
+    "AHRS_EKF_TYPE": 3.0,
+    "GPS1_TYPE": 1.0
+  },
+  "port": "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00",
+  "reason": "param_read_failed",
+  "reset": {
+    "cdc_wait_started_utc": "2026-06-07T09:22:15.316417+00:00",
+    "log": "results/master_launch/ml_20260607_171847_esc_cal_upper_realign/sitl_on_hw_after_esc_realign_20260607_172214/reset_round_1.log",
+    "port_after": {
+      "by_id": [
+        "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5565052973-if00",
+        "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00"
+      ],
+      "port": "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00",
+      "realpath": "/dev/ttyACM0",
+      "tty_acm": [
+        "/dev/ttyACM0",
+        "/dev/ttyACM1"
+      ]
+    },
+    "port_before": {
+      "by_id": [
+        "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5565052973-if00",
+        "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00"
+      ],
+      "port": "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00",
+      "realpath": "/dev/ttyACM0",
+      "tty_acm": [
+        "/dev/ttyACM0",
+        "/dev/ttyACM1"
+      ]
+    },
+    "rc": 0
+  },
+  "round": 1,
+  "round_timing_partial": {
+    "connect_s": 0.295,
+    "ready_heartbeat_s": 0.989,
+    "total_s": 10.333
+  },
+  "sample_seconds": 30.0,
+  "source_system": 247,
+  "timestamp_utc": "2026-06-07T09:23:40.683971+00:00",
+  "verdict": "RED"
+}
