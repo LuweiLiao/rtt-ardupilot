@@ -750,7 +750,7 @@ extern volatile uint32_t rtt_dbg_gcs_param_delay_pump_calls;
 #endif
         _singleton->notify.update();
     }
-    if (tnow - last_5s > 5000) {
+    if (!hal.scheduler->is_system_initialized() && tnow - last_5s > 5000) {
         last_5s = tnow;
         if (AP_BoardConfig::in_config_error()) {
             GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "Config Error: fix problem then reboot");
