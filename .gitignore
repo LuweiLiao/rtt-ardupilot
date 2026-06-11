@@ -223,3 +223,11 @@ tests/*forensic*
 tests/mavftp_backback_*round.py
 tests/run_mavftp_forensics.sh
 results/perf/
+results/master_launch/
+results/validation/
+results/execution/
+results/gdb_cmds/
+results/recycle/
+archive/recycle/
+.agents/
+.cursor/
