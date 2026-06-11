@@ -101,6 +101,57 @@ static constexpr uint8_t can_interfaces[HAL_NUM_CAN_IFACES] = { HAL_CAN_INTERFAC
 // mapping from physical interface back to logical. First physical is 0, first logical is 0
 static constexpr int8_t can_iface_to_idx[3] = { HAL_CAN_INTERFACE_REV_LIST };
 
+#if defined(STM32F767xx)
+static void configure_gpio_af(GPIO_TypeDef *gpio, uint8_t pin, uint8_t af, bool pullup)
+{
+    const uint32_t pin2 = uint32_t(pin) * 2U;
+    const uint32_t pin4 = uint32_t(pin & 7U) * 4U;
+
+    gpio->MODER = (gpio->MODER & ~(3U << pin2)) | (2U << pin2);
+    gpio->OTYPER &= ~(1U << pin);
+    gpio->OSPEEDR = (gpio->OSPEEDR & ~(3U << pin2)) | (2U << pin2);
+    gpio->PUPDR = (gpio->PUPDR & ~(3U << pin2)) | ((pullup ? 1U : 0U) << pin2);
+    gpio->AFR[pin >> 3U] = (gpio->AFR[pin >> 3U] & ~(0xFU << pin4)) | (uint32_t(af) << pin4);
+}
+
+static void configure_gpio_output(GPIO_TypeDef *gpio, uint8_t pin, bool high)
+{
+    const uint32_t pin2 = uint32_t(pin) * 2U;
+    if (high) {
+        gpio->BSRR = 1U << pin;
+    } else {
+        gpio->BSRR = 1U << (pin + 16U);
+    }
+    gpio->MODER = (gpio->MODER & ~(3U << pin2)) | (1U << pin2);
+    gpio->OTYPER &= ~(1U << pin);
+    gpio->OSPEEDR &= ~(3U << pin2);
+    gpio->PUPDR &= ~(3U << pin2);
+}
+
+static void configure_can_pins(uint8_t phys_index)
+{
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN | RCC_AHB1ENR_GPIOHEN | RCC_AHB1ENR_GPIOIEN;
+    (void)RCC->AHB1ENR;
+
+    // CUAV V5 CAN transceivers use active-low silent pins.
+    configure_gpio_output(GPIOH, 2, false);
+    configure_gpio_output(GPIOH, 3, false);
+
+    switch (phys_index) {
+    case 0:
+        configure_gpio_af(GPIOI, 9, 9, true);   // CAN1_RX
+        configure_gpio_af(GPIOH, 13, 9, false); // CAN1_TX
+        break;
+    case 1:
+        configure_gpio_af(GPIOB, 12, 9, true);  // CAN2_RX
+        configure_gpio_af(GPIOB, 13, 9, false); // CAN2_TX
+        break;
+    default:
+        break;
+    }
+}
+#endif
+
 static inline void handleTxInterrupt(uint8_t phys_index)
 {
     const int8_t iface_index = can_iface_to_idx[phys_index];
@@ -777,6 +828,9 @@ void CANIface::initOnce(bool enable_irq)
      */
     {
         CriticalSectionLocker lock;
+#if defined(STM32F767xx)
+        configure_can_pins(can_interfaces[self_index_]);
+#endif
         switch (can_interfaces[self_index_]) {
         case 0:
 #if defined(RCC_APB1ENR1_CAN1EN)

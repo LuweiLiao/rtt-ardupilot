@@ -99,7 +99,7 @@ static uint32_t uart_pclk(USART_TypeDef *usart)
 
 extern const AP_HAL::HAL &hal;
 
-// ChibiOS-style dual CDC: OTG1/SERIAL0 -> usb-acm0, OTG2/SERIAL7 -> usb-acm1.
+// ChibiOS-style dual CDC: OTG1/SERIAL0 -> usb-acm0, OTG2 -> usb-acm1.
 static RTT::UARTDriver *_usb_drivers[2] = {};
 
 extern "C" void uart_usb_rx_bridge(const uint8_t *data, uint32_t len)

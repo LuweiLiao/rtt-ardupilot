@@ -145,11 +145,20 @@ static RTT::Flash flashDriver;
 static RTT::DSP dspDriver;
 #endif
 #if HAL_WITH_IO_MCU
-// IOMCU UART mirrors ChibiOS: uart_io is the regular serial8Driver (UART8),
-// not a second driver instance with the same HAL index.
-AP_IOMCU iomcu(serial8Driver);
+// IOMCU UART mirrors ChibiOS: uart_io is the generated IOMCU serial slot,
+// not a second driver instance with a hard-coded HAL index.
+#if HAL_UART_IOMCU_IDX == 7
+#define RTT_IOMCU_SERIAL_DRIVER serial7Driver
+#elif HAL_UART_IOMCU_IDX == 8
+#define RTT_IOMCU_SERIAL_DRIVER serial8Driver
+#elif HAL_UART_IOMCU_IDX == 9
+#define RTT_IOMCU_SERIAL_DRIVER serial9Driver
+#else
+#error "Unsupported HAL_UART_IOMCU_IDX for AP_HAL_RTT"
+#endif
+AP_IOMCU iomcu(RTT_IOMCU_SERIAL_DRIVER);
 
-RTT::UARTDriver *get_rtt_iomcu_uart(void) { return &serial8Driver; }
+RTT::UARTDriver *get_rtt_iomcu_uart(void) { return &RTT_IOMCU_SERIAL_DRIVER; }
 #endif
 #if AP_SIM_ENABLED && CONFIG_HAL_BOARD != HAL_BOARD_SITL
 static AP_HAL::SIMState xsimstate;

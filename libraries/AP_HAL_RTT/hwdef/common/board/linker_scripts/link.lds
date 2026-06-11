@@ -148,6 +148,7 @@ SECTIONS
         _sdtcm_bss = .;
         *(.dtcm_bss)
         *(.dtcm_bss.*)
+        *(.bss.copter)
         *(.bss._ZL13storageDriver)
         *(.bss._ZL16supported_frames)
         . = ALIGN(8);

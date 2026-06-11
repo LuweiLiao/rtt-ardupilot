@@ -17,7 +17,7 @@ import sys
 
 # Match Tools/ardupilotwaf/ardupilotwaf.py
 COMMON_VEHICLE_DEPENDENT_CAN_LIBRARIES = [
-    'AP_CANManager', 'AP_KDECAN', 'AP_PiccoloCAN', 'AP_PiccoloCAN/piccolo_protocol',
+    'AP_CANManager', 'AP_DroneCAN', 'AP_KDECAN', 'AP_PiccoloCAN', 'AP_PiccoloCAN/piccolo_protocol',
 ]
 COMMON_VEHICLE_DEPENDENT_LIBRARIES = [
     'AP_AccelCal', 'AP_ADC', 'AP_AHRS', 'AP_Airspeed', 'AP_Baro', 'AP_BattMonitor',
@@ -133,7 +133,7 @@ def _append_bsp_include(paths, bsp_dir, hwdef_common, *rel_parts):
             return
 
 
-def _collect_sources(ap_root, bsp_dir, rtt_root):
+def _collect_sources(ap_root, bsp_dir, rtt_root, board="rtt_pixhawk6c_mini"):
     ap_root = os.path.abspath(ap_root)
     bsp_dir = os.path.abspath(bsp_dir)
     rtt_root = os.path.abspath(rtt_root)
@@ -197,6 +197,20 @@ def _collect_sources(ap_root, bsp_dir, rtt_root):
         for rel in rtt_usb_backend.cherryusb_extra_sources(ap_root):
             if rel not in sources:
                 sources.append(rel)
+
+    # ChibiOS setup_canmgr_build() pulls in libcanard and DSDL generated C
+    # sources whenever CAN manager support is present. Keep RTT SCons aligned.
+    for rel in _glob_subdir_sources(ap_root, os.path.join('modules', 'DroneCAN', 'libcanard')):
+        if rel not in sources:
+            sources.append(rel)
+    dronecan_gen_src = os.path.join(ap_root, 'build', board, 'dronecan-gen', 'src')
+    if os.path.isdir(dronecan_gen_src):
+        for ext in SOURCE_EXTS:
+            for p in glob.glob(os.path.join(dronecan_gen_src, ext)):
+                if os.path.isfile(p):
+                    rel = os.path.relpath(p, ap_root)
+                    if rel not in sources:
+                        sources.append(rel)
 
     hwdef_env = _load_hwdef_env(bsp_dir)
     if _env_truthy(hwdef_env, 'SIM_ENABLED'):
@@ -265,6 +279,9 @@ def _collect_cpppath(ap_root, bsp_dir, rtt_root, build_root, board="rtt_pixhawk6
     dronecan_dir = os.path.join(ap_root, 'modules', 'DroneCAN', 'libcanard')
     if os.path.isdir(dronecan_dir):
         paths.append(dronecan_dir)
+    dronecan_canard_dir = os.path.join(ap_root, 'libraries', 'AP_DroneCAN', 'canard')
+    if os.path.isdir(dronecan_canard_dir):
+        paths.append(dronecan_canard_dir)
     # DroneCAN generated headers (dronecan_msgs.h etc.)
     dronecan_gen = os.path.join(ap_root, 'build', board, 'dronecan-gen', 'include')
     if os.path.isdir(dronecan_gen):
@@ -319,8 +336,16 @@ def _collect_defines_f7(sim_enabled=False):
         'AP_BUILD_TARGET_NAME="arducopter"',
         'FRAME_CONFIG=MULTICOPTER_FRAME',
         'AP_DDS_ENABLED=0',
-        'HAL_NUM_CAN_IFACES=0',
         'DRONECAN_CXX_WRAPPERS=1',
+        'USE_USER_HELPERS=1',
+        'CANARD_ENABLE_DEADLINE=1',
+        'CANARD_MULTI_IFACE=1',
+        'CANARD_ALLOCATE_SEM=1',
+        'HAL_NUM_CAN_IFACES=2',
+        'HAL_MAX_CAN_PROTOCOL_DRIVERS=2',
+        'HAL_CANMANAGER_ENABLED=1',
+        'HAL_ENABLE_DRONECAN_DRIVERS=1',
+        'AP_CAN_SLCAN_ENABLED=2',
     ]
     defines.append('AP_SIM_ENABLED=%d' % (1 if sim_enabled else 0))
     return defines
@@ -364,7 +389,7 @@ def main():
     hwdef_env = _load_hwdef_env(bsp_dir)
     sim_enabled = _env_truthy(hwdef_env, 'SIM_ENABLED')
 
-    ap_sources = _collect_sources(ap_root, bsp_dir, rtt_root)
+    ap_sources = _collect_sources(ap_root, bsp_dir, rtt_root, args.board)
     ap_cpppath = _collect_cpppath(ap_root, bsp_dir, rtt_root, build_root, args.board)
     ap_defines = _collect_defines(args.board, sim_enabled=sim_enabled)
 

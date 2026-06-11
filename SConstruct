@@ -220,6 +220,12 @@ if canonical_target:
     # 2.5) Generate mavlink headers for scons (waf does this for waf build)
     if not is_clean:
         board = RTT_TARGETS[canonical_target]['board']
+        dronecangen_script = os.path.join(ap_root, 'Tools', 'scripts', 'rtt_dronecangen.py')
+        if os.path.isfile(dronecangen_script):
+            ret_dronecan = subprocess.call([sys.executable, dronecangen_script, ap_root, board], cwd=ap_root)
+            if ret_dronecan != 0:
+                print('rtt_dronecangen.py failed', file=sys.stderr)
+                Exit(ret_dronecan)
         mavgen_script = os.path.join(ap_root, 'Tools', 'scripts', 'rtt_mavgen.py')
         if os.path.isfile(mavgen_script):
             ret_mav = subprocess.call([sys.executable, mavgen_script, ap_root, board], cwd=ap_root)

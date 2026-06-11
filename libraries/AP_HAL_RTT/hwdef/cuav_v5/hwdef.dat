@@ -13,10 +13,10 @@ FLASH_RESERVE_END_KB 512
 # Match ArduPilot CUAVv5/fmuv5: 16MHz HSE -> 216MHz SYSCLK
 OSCILLATOR_HZ 16000000
 
-# Serial order — match ChibiOS fmuv5: OTG1 USART2 USART3 USART1 UART4 USART6 UART7 OTG2
-# (8 ports). UART7 stays in the list as a normal serial port now.
-# OTG2 is not physically wired on CUAV V5, included for API compatibility.
-SERIAL_ORDER OTG1 USART2 USART3 USART1 UART4 USART6 UART7 OTG2
+# Serial order — match ChibiOS fmuv5 GCS/telemetry ports while leaving UART7
+# exclusively to the RT-Thread console/shell debug port.
+# The second logical CDC function is exposed as OTG2/SERIAL6 for SLCAN.
+SERIAL_ORDER OTG1 USART2 USART3 USART1 UART4 USART6 OTG2
 
 # ---- USB OTG FS pins (match RT-Thread stm32f765-cuav-v5 BSP) ----
 PA8  OTG1_SOF  OTG1 AF10

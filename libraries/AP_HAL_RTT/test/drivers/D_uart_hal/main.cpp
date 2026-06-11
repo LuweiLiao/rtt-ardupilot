@@ -4,9 +4,10 @@
  * Exercises real AP_HAL::UARTDriver via hal.serial() — begin / printf / write.
  * Does not claim RX or loopback; does not start full hal.run() / scheduler threads.
  *
- * CUAV V5 SERIAL_ORDER: OTG1(0) USART2(1) … UART7(6) OTG2(7).
+ * CUAV V5 SERIAL_ORDER: OTG1(0) USART2(1) ... USART6(5) OTG2(6).
  * Module tests use USB backend NONE — serial(0) may be USB CDC without native USB;
- * primary smoke target is serial(6) = UART7 (same console as test_runner).
+ * primary hardware smoke target is serial(5) = USART6. UART7 is reserved for
+ * the RT-Thread console/shell debug port.
  *
  * Build: scons --target=cuav_v5 --test=D_uart_hal -j$(nproc)
  */
@@ -52,14 +53,14 @@ static void step_uart_hal_smoke(void)
     test_printf("    hal.scheduler->delay(200) before UART begin\r\n");
     hal.scheduler->delay(200);
 
-    AP_HAL::UARTDriver *const s6 = hal.serial(6);
+    AP_HAL::UARTDriver *const s5 = hal.serial(5);
     AP_HAL::UARTDriver *const s0 = hal.serial(0);
 
-    TEST_ASSERT(s6 != nullptr, "serial(6) UART7 driver");
-    test_printf("    serial(6)=UART7 hardware path (primary)\r\n");
+    TEST_ASSERT(s5 != nullptr, "serial(5) USART6 driver");
+    test_printf("    serial(5)=USART6 hardware path (primary)\r\n");
 
-    setup_uart(s6, "SERIAL6/UART7");
-    exercise_uart(s6, "SERIAL6/UART7");
+    setup_uart(s5, "SERIAL5/USART6");
+    exercise_uart(s5, "SERIAL5/USART6");
 
     test_printf("    serial(0)=OTG1/USB (optional; USB backend may be NONE)\r\n");
     setup_uart(s0, "SERIAL0/OTG1");

@@ -398,6 +398,10 @@ const char* SLCAN::CANIface::processCommand(char* cmd)
         return nullptr;
     }
 
+    if (cmd[0] == '\0') {
+        return nullptr;
+    }
+
     /*
     * High-traffic SLCAN commands go first
     */

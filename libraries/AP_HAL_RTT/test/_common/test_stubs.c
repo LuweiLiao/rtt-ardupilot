@@ -55,10 +55,21 @@ void usb_lld_set_rx_callback(void (*cb)(const uint8_t *, uint32_t, void *), void
     (void)cb;
     (void)ctx;
 }
+void usb_lld_set_rx_callback_idx(uint8_t idx, void (*cb)(const uint8_t *, uint32_t, void *), void *ctx)
+{
+    (void)idx;
+    (void)cb;
+    (void)ctx;
+}
 uint32_t usb_lld_send_rtt(const uint8_t *data, uint32_t len)
 {
     (void)data;
     (void)len;
+    return 0;
+}
+uint32_t usb_lld_txspace_rtt(uint8_t ep)
+{
+    (void)ep;
     return 0;
 }
 uint32_t usb_lld_get_connected_rtt(void)
