@@ -304,7 +304,7 @@ void SLCAN::CANIface::poll()
  */
 int16_t SLCAN::CANIface::reportFrame(const AP_HAL::CANFrame& frame, uint64_t timestamp_usec)
 {
-    if (!is_enabled()) {
+    if (!is_enabled() || !_slcan_open) {
         return -1;
     }
 #if HAL_CANFD_SUPPORTED
@@ -428,15 +428,21 @@ const char* SLCAN::CANIface::processCommand(char* cmd)
     */
     switch (cmd[0]) {
     case 'S':               // Set CAN bitrate
-    case 'O':               // Open CAN in normal mode
-    case 'L':               // Open CAN in listen-only mode
-    case 'l':               // Open CAN with loopback enabled
-    case 'C':               // Close CAN
     case 'M':               // Set CAN acceptance filter ID
     case 'm':               // Set CAN acceptance filter mask
     case 'U':               // Set UART baud rate, see http://www.can232.com/docs/can232_v3.pdf
     case 'Z': {             // Enable/disable RX and loopback timestamping
         return getASCIIStatusCode(true);    // Returning success for compatibility reasons
+    }
+    case 'O':               // Open CAN in normal mode
+    case 'L':               // Open CAN in listen-only mode
+    case 'l': {             // Open CAN with loopback enabled
+        _slcan_open = true;
+        return getASCIIStatusCode(true);
+    }
+    case 'C': {             // Close CAN
+        _slcan_open = false;
+        return getASCIIStatusCode(true);
     }
     case 'F': {             // Get status flags
         resp_len = snprintf((char*)resp_bytes, sizeof(resp_bytes), "F%02X\r", unsigned(0));    // Returning success for compatibility reasons
@@ -476,6 +482,10 @@ const char* SLCAN::CANIface::processCommand(char* cmd)
     }
     }
 
+    if (cmd[1] == '\0') {
+        return nullptr;
+    }
+
     return getASCIIStatusCode(false);
 }
 
@@ -490,14 +500,18 @@ inline void SLCAN::CANIface::addByte(const uint8_t byte)
             buf_[pos_] = char(byte);
             pos_ += 1;
         } else {
-            pos_ = 0;   // Buffer overrun; silently drop the data
+            reset_parser();   // Buffer overrun; silently drop the data
         }
     } else if (byte == '\r') {  // End of command (SLCAN)
+        if (pos_ == 0) {
+            buf_[0] = '\0';
+            return;
+        }
 
         // Processing the command
         buf_[pos_] = '\0';
         const char* const response = processCommand(reinterpret_cast<char*>(&buf_[0]));
-        pos_ = 0;
+        reset_parser();
 
         // Sending the response if provided
         if (response != nullptr) {
@@ -510,7 +524,7 @@ inline void SLCAN::CANIface::addByte(const uint8_t byte)
             pos_ -= 1;
         }
     } else {    // This also includes Ctrl+C, Ctrl+D
-        pos_ = 0;   // Invalid byte - drop the current command
+        reset_parser();   // Invalid byte - drop the current command
     }
 }
 
@@ -523,6 +537,8 @@ void SLCAN::CANIface::update_slcan_port()
             _port->lock_port(0, 0);
             _enabled = false;
             _set_by_sermgr = false;
+            _slcan_open = false;
+            reset_parser();
         }
         return;
     }
@@ -531,6 +547,9 @@ void SLCAN::CANIface::update_slcan_port()
         if (new_port != nullptr) {
             _port = new_port;
             _port->lock_port(_serial_lock_key, _serial_lock_key);
+            _port->discard_input();
+            reset_parser();
+            _slcan_open = false;
             _enabled = true;
             _set_by_sermgr = true;
             return;
@@ -551,6 +570,9 @@ void SLCAN::CANIface::update_slcan_port()
         }
         _port = new_port;
         _port->lock_port(_serial_lock_key, _serial_lock_key);
+        _port->discard_input();
+        reset_parser();
+        _slcan_open = false;
         _enabled = true;
         _prev_ser_port = _slcan_ser_port;
         GCS_SEND_TEXT(MAV_SEVERITY_INFO, "CANManager: Starting SLCAN Passthrough on Serial %d with CAN%d", _slcan_ser_port.get(), _iface_num);
@@ -566,6 +588,8 @@ void SLCAN::CANIface::update_slcan_port()
         _slcan_ser_port.set_and_save(-1);
         _prev_ser_port = -1;
         _slcan_start_req = false;
+        _slcan_open = false;
+        reset_parser();
     }
 }
 

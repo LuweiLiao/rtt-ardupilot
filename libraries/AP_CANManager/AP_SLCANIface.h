@@ -59,6 +59,12 @@ class CANIface: public AP_HAL::CANIface
     // Parsing bytes received on the serial port
     inline void addByte(const uint8_t byte);
 
+    void reset_parser()
+    {
+        pos_ = 0;
+        buf_[0] = '\0';
+    }
+
     // track changes to slcan serial port
     void update_slcan_port();
 
@@ -68,6 +74,7 @@ class CANIface: public AP_HAL::CANIface
     int16_t pos_ = 0; // position in the buffer recording nibble frames before parsing
     AP_HAL::UARTDriver* _port = nullptr; // UART interface port reference to be used for SLCAN iface
     bool _enabled = false; // Flag to check whether we are allowed to use _port
+    bool _slcan_open = false; // True after the host opens the SLCAN channel with O/L/l
 
     ObjectBuffer<AP_HAL::CANIface::CanRxItem> rx_queue_; // Parsed Rx Frame queue
 
