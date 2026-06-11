@@ -719,9 +719,32 @@ void AP_Vehicle::scheduler_delay_callback()
         GCS_SEND_MESSAGE(MSG_HEARTBEAT);
         GCS_SEND_MESSAGE(MSG_SYS_STATUS);
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+extern volatile uint32_t rtt_dbg_gcs_param_active_until_ms;
+extern volatile uint32_t rtt_dbg_gcs_param_delay_pump_calls;
+
+    static uint32_t last_rtt_gcs_ms;
+    const bool rtt_param_active =
+        rtt_dbg_gcs_param_active_until_ms != 0U &&
+        (int32_t)(rtt_dbg_gcs_param_active_until_ms - tnow) > 0;
+    if (rtt_param_active && tnow - last_rtt_gcs_ms >= 5) {
+        last_rtt_gcs_ms = tnow;
+        /*
+         * [Cybernetics Ch.4] Closed-loop: on RTT, delay_microseconds_boost()
+         * yields while waiting for IMU samples.  Service only the active USB
+         * PARAM producer window here, so a PARAM_REQUEST_LIST can keep
+         * refilling CDC without making delay callbacks a permanent GCS work
+         * path during INS/EKF startup.
+         */
+#if HAL_GCS_ENABLED
+        gcs().update_send();
+        rtt_dbg_gcs_param_delay_pump_calls++;
+#endif
+    }
+#endif
     if (tnow - last_50hz > 20) {
         last_50hz = tnow;
-#if HAL_GCS_ENABLED
+#if CONFIG_HAL_BOARD != HAL_BOARD_RTT && HAL_GCS_ENABLED
         gcs().update_receive();
         gcs().update_send();
 #endif

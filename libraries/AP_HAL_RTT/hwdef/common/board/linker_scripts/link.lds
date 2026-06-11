@@ -121,6 +121,23 @@ SECTIONS
     } > RAM_STACK
 
     /*
+     * GDB-visible RTT diagnostics. The symbols still use the historical
+     * ".dtcm_bss.rtt_dbg" input name, but runtime gates depend on reading them
+     * after USB/PARAM stress via SWD. Keep this diagnostic-only data in the
+     * non-cacheable RAM_DMA window so OpenOCD/GDB sees CPU writes without a
+     * D-cache clean, and without relying on DTCM debug visibility.
+     */
+    .rtt_dbg_bss (NOLOAD) :
+    {
+        . = ALIGN(8);
+        _srtt_dbg_bss = .;
+        KEEP(*(.dtcm_bss.rtt_dbg))
+        KEEP(*(.dtcm_bss.rtt_dbg.*))
+        . = ALIGN(8);
+        _ertt_dbg_bss = .;
+    } > RAM_DMA
+
+    /*
      * CPU-only static BSS.  These large objects are not used by DMA and do
      * not need to live in SRAM1_APP; keeping them in DTCM preserves SRAM1_APP
      * for RT-Thread dynamic thread stacks and ArduPilot runtime heap.
@@ -129,6 +146,8 @@ SECTIONS
     {
         . = ALIGN(8);
         _sdtcm_bss = .;
+        *(.dtcm_bss)
+        *(.dtcm_bss.*)
         *(.bss._ZL13storageDriver)
         *(.bss._ZL16supported_frames)
         . = ALIGN(8);
@@ -169,6 +188,7 @@ SECTIONS
     ASSERT(SIZEOF(.stack) <= LENGTH(RAM_STACK), "RTT stack exceeds RAM_STACK")
     ASSERT((SIZEOF(.stack) + SIZEOF(.dtcm_bss)) <= LENGTH(RAM_STACK), "RTT DTCM stack+.dtcm_bss exceeds RAM_STACK")
     ASSERT(SIZEOF(.sram1_bss) <= LENGTH(RAM_DMA), "RTT .sram1_bss exceeds non-cacheable RAM_DMA window")
+    ASSERT(_sram1_bss_end <= ORIGIN(RAM_DMA) + LENGTH(RAM_DMA), "RTT .rtt_dbg_bss+.sram1_bss exceeds non-cacheable RAM_DMA window")
 
     /* Stabs debugging sections.  */
     .stab          0 : { *(.stab) }

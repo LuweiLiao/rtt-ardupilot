@@ -25,6 +25,21 @@
 
 extern const AP_HAL::HAL &hal;
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#define RTT_IOMCU_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+volatile uint32_t rtt_dbg_iomcu_reg_access_gap_resets RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_last_reg_access_gap_ms RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_max_reg_access_gap_ms RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_status_error_resets RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_last_read_status_errors RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_last_read_status_ok RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_timestamp_resets RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_last_timestamp_delta_ms RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_max_timestamp_delta_ms RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_last_protocol_fail_count RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_last_total_errors RTT_IOMCU_DBG_DTCM_BSS;
+#endif
+
 // pending IO events to send, used as an event mask
 enum ioevents {
     IOEVENT_INIT=1,
@@ -140,6 +155,16 @@ void AP_IOMCU::thread_main(void)
         // check if we have lost contact with the IOMCU
         const uint32_t now_ms = AP_HAL::millis();
         if (last_reg_access_ms != 0 && now_ms - last_reg_access_ms > 1000) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            const uint32_t gap_ms = now_ms - last_reg_access_ms;
+            rtt_dbg_iomcu_reg_access_gap_resets++;
+            rtt_dbg_iomcu_last_reg_access_gap_ms = gap_ms;
+            if (gap_ms > rtt_dbg_iomcu_max_reg_access_gap_ms) {
+                rtt_dbg_iomcu_max_reg_access_gap_ms = gap_ms;
+            }
+            rtt_dbg_iomcu_last_protocol_fail_count = protocol_fail_count;
+            rtt_dbg_iomcu_last_total_errors = total_errors;
+#endif
             INTERNAL_ERROR(AP_InternalError::error_t::iomcu_reset);
             last_reg_access_ms = 0;
         }
@@ -490,17 +515,35 @@ void AP_IOMCU::read_status()
     uint16_t *r = (uint16_t *)&reg_status;
     if (!read_registers(PAGE_STATUS, 0, sizeof(reg_status)/2, r)) {
         read_status_errors++;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_iomcu_last_read_status_errors = read_status_errors;
+        rtt_dbg_iomcu_last_read_status_ok = read_status_ok;
+        rtt_dbg_iomcu_last_protocol_fail_count = protocol_fail_count;
+        rtt_dbg_iomcu_last_total_errors = total_errors;
+#endif
         if (read_status_errors == 20 && last_iocmu_timestamp_ms != 0) {
             // the IOMCU has stopped responding to status requests
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_dbg_iomcu_status_error_resets++;
+#endif
             INTERNAL_ERROR(AP_InternalError::error_t::iomcu_reset);
         }
         return;
     }
-    if (read_status_ok == 0) {
-        // reset error count on first good read
-        read_status_errors = 0;
-    }
+    /*
+     * Status read errors are a consecutive-failure signal.  A successful
+     * status read proves the IOMCU is responding again, so clear the streak
+     * before the 20-failure reset detector can turn sparse UART misses into a
+     * false iomcu_reset pre-arm error.
+     */
+    read_status_errors = 0;
     read_status_ok++;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_iomcu_last_read_status_errors = read_status_errors;
+    rtt_dbg_iomcu_last_read_status_ok = read_status_ok;
+    rtt_dbg_iomcu_last_protocol_fail_count = protocol_fail_count;
+    rtt_dbg_iomcu_last_total_errors = total_errors;
+#endif
 
     check_iomcu_reset();
 
@@ -1334,6 +1377,14 @@ void AP_IOMCU::check_iomcu_reset(void)
     // delta. This copes with flash erase, such as bootloader update
     const uint32_t max_delay = hal.scheduler->in_expected_delay()?8000:500;
     last_iocmu_timestamp_ms = reg_status.timestamp_ms;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_iomcu_last_timestamp_delta_ms = dt_ms;
+    if (dt_ms > rtt_dbg_iomcu_max_timestamp_delta_ms) {
+        rtt_dbg_iomcu_max_timestamp_delta_ms = dt_ms;
+    }
+    rtt_dbg_iomcu_last_protocol_fail_count = protocol_fail_count;
+    rtt_dbg_iomcu_last_total_errors = total_errors;
+#endif
 
     if (dt_ms < max_delay) {
         // all OK
@@ -1341,6 +1392,9 @@ void AP_IOMCU::check_iomcu_reset(void)
         return;
     }
     detected_io_reset = true;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_iomcu_timestamp_resets++;
+#endif
     INTERNAL_ERROR(AP_InternalError::error_t::iomcu_reset);
     debug("IOMCU reset t=%u %u %u dt=%u\n",
           unsigned(AP_HAL::millis()), unsigned(ts1), unsigned(reg_status.timestamp_ms), unsigned(dt_ms));

@@ -5,6 +5,9 @@
  */
 #include "usbd_core.h"
 #include "usb_dwc2_reg.h"
+#include <rtthread.h>
+
+#define RTT_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
 
 // clang-format off
 #if   defined ( __CC_ARM )
@@ -143,46 +146,151 @@ USB_NOCACHE_RAM_SECTION struct dwc2_udc {
 } g_dwc2_udc[CONFIG_USBDEV_MAX_BUS];
 
 /* [Cybernetics Ch.4] Closed-loop: DWC2 IN completion diagnostics. */
-volatile uint32_t rtt_dbg_dwc2_irq_calls;
-volatile uint32_t rtt_dbg_dwc2_gint_last;
-volatile uint32_t rtt_dbg_dwc2_gint_iepint;
-volatile uint32_t rtt_dbg_dwc2_iep_intr_last;
-volatile uint32_t rtt_dbg_dwc2_ep1_seen;
-volatile uint32_t rtt_dbg_dwc2_ep1_raw;
-volatile uint32_t rtt_dbg_dwc2_ep1_masked;
-volatile uint32_t rtt_dbg_dwc2_ep1_msk;
-volatile uint32_t rtt_dbg_dwc2_ep1_empmsk;
-volatile uint32_t rtt_dbg_dwc2_ep1_xfrc;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe;
-volatile uint32_t rtt_dbg_dwc2_ep1_epdisd;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_process;
-volatile uint32_t rtt_dbg_dwc2_ep1_complete_calls;
-volatile uint32_t rtt_dbg_dwc2_ep1_start_write_calls;
-volatile uint32_t rtt_dbg_dwc2_ep1_start_len_last;
-volatile uint32_t rtt_dbg_dwc2_ep1_dieptsiz_last;
-volatile uint32_t rtt_dbg_dwc2_ep1_diepctl_last;
-volatile uint32_t rtt_dbg_dwc2_ep1_daintmsk_last;
-volatile uint32_t rtt_dbg_dwc2_ep1_diepmsk_last;
-volatile uint32_t rtt_dbg_dwc2_ep1_gintmsk_last;
-volatile uint32_t rtt_dbg_dwc2_ep1_actual_last;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_zero_remaining;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_no_fifo_space;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_write_loops;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_wrote_bytes;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_enter_xfer_len;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_enter_actual;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_enter_len;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_enter_len32b;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_enter_dtxfsts;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_enter_dieptsiz;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_enter_diepctl;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_enter_diepint;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_post_dtxfsts;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_post_dieptsiz;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_post_diepctl;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_post_diepint;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_post_actual;
-volatile uint32_t rtt_dbg_dwc2_ep1_txfe_mask_clears;
+volatile uint32_t rtt_dbg_dwc2_irq_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_gint_last RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_gint_iepint RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_iep_intr_last RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_seen RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_raw RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_masked RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_msk RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_empmsk RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_xfrc RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_xfrc_incomplete_ignored RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_xfrc_incomplete_dieptsiz RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_xfrc_incomplete_actual RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_xfrc_incomplete_xfer_len RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_xfrc_incomplete_txfe_rearmed RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_xfrc_deferred_until_drained RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_xfrc_complete_after_fifo_load_with_residue RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_xfrc_complete_after_fifo_load_dieptsiz RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_epdisd RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_process RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_complete_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_start_write_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_start_len_last RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_dieptsiz_last RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_diepctl_last RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_daintmsk_last RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_diepmsk_last RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_gintmsk_last RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_actual_last RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_zero_remaining RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_no_fifo_space RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_write_loops RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_wrote_bytes RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_enter_xfer_len RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_enter_actual RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_enter_len RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_enter_len32b RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_enter_dtxfsts RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_enter_dieptsiz RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_enter_diepctl RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_enter_diepint RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_post_dtxfsts RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_post_dieptsiz RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_post_diepctl RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_post_diepint RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_post_actual RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_mask_clears RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_irq_xfrc_txfe_same RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_before_xfrc RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_immediate_prime_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_immediate_prime_wrote RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_immediate_prime_zero RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_immediate_prime_bytes RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_last_start_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_last_txfe_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_last_xfrc_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_start_gap_last_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_start_gap_max_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_start_to_txfe_last_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_start_to_txfe_max_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_start_to_xfrc_last_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_start_to_xfrc_max_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_to_xfrc_last_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_to_xfrc_max_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_xfrc_to_start_last_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_xfrc_to_start_max_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_start_gap_hist[6] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_start_to_xfrc_hist[6] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_to_xfrc_hist[6] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_xfrc_to_start_hist[6] RTT_DBG_DTCM_BSS;
+#define RTT_DBG_DWC2_TXFE_TRACE_DEPTH 64U
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_trace_head RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_trace_total RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_trace_len[RTT_DBG_DWC2_TXFE_TRACE_DEPTH] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_trace_actual[RTT_DBG_DWC2_TXFE_TRACE_DEPTH] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_trace_xfer_len[RTT_DBG_DWC2_TXFE_TRACE_DEPTH] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_trace_w0[RTT_DBG_DWC2_TXFE_TRACE_DEPTH] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_trace_w1[RTT_DBG_DWC2_TXFE_TRACE_DEPTH] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_trace_w2[RTT_DBG_DWC2_TXFE_TRACE_DEPTH] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_dwc2_ep1_txfe_trace_w3[RTT_DBG_DWC2_TXFE_TRACE_DEPTH] RTT_DBG_DTCM_BSS;
+
+static inline uint32_t dwc2_dbg_now_ms(void)
+{
+    return (uint32_t)((rt_tick_get() * 1000U) / RT_TICK_PER_SECOND);
+}
+
+static uint32_t dwc2_dbg_pack4(const uint8_t *buf, uint32_t len, uint32_t ofs)
+{
+    uint32_t v = 0;
+    for (uint32_t i = 0; i < 4U; i++) {
+        const uint32_t p = ofs + i;
+        if (buf != NULL && p < len) {
+            v |= (uint32_t)buf[p] << (i * 8U);
+        }
+    }
+    return v;
+}
+
+static void dwc2_dbg_ep1_txfe_trace(const uint8_t *buf, uint32_t len,
+                                    uint32_t actual, uint32_t xfer_len)
+{
+    const uint32_t idx = rtt_dbg_dwc2_ep1_txfe_trace_head & (RTT_DBG_DWC2_TXFE_TRACE_DEPTH - 1U);
+    rtt_dbg_dwc2_ep1_txfe_trace_len[idx] = len;
+    rtt_dbg_dwc2_ep1_txfe_trace_actual[idx] = actual;
+    rtt_dbg_dwc2_ep1_txfe_trace_xfer_len[idx] = xfer_len;
+    rtt_dbg_dwc2_ep1_txfe_trace_w0[idx] = dwc2_dbg_pack4(buf, len, 0U);
+    rtt_dbg_dwc2_ep1_txfe_trace_w1[idx] = dwc2_dbg_pack4(buf, len, 4U);
+    rtt_dbg_dwc2_ep1_txfe_trace_w2[idx] = dwc2_dbg_pack4(buf, len, 8U);
+    rtt_dbg_dwc2_ep1_txfe_trace_w3[idx] = dwc2_dbg_pack4(buf, len, 12U);
+    rtt_dbg_dwc2_ep1_txfe_trace_head++;
+    rtt_dbg_dwc2_ep1_txfe_trace_total++;
+}
+
+static inline uint32_t dwc2_dbg_ms_bucket(uint32_t delta_ms)
+{
+    if (delta_ms <= 1U) {
+        return 0U;
+    }
+    if (delta_ms <= 5U) {
+        return 1U;
+    }
+    if (delta_ms <= 20U) {
+        return 2U;
+    }
+    if (delta_ms <= 73U) {
+        return 3U;
+    }
+    if (delta_ms <= 200U) {
+        return 4U;
+    }
+    return 5U;
+}
+
+static inline void dwc2_dbg_hist_add(volatile uint32_t hist[6], uint32_t delta_ms)
+{
+    hist[dwc2_dbg_ms_bucket(delta_ms)]++;
+}
+
+static inline void dwc2_dbg_max_update(volatile uint32_t *max_value, uint32_t delta_ms)
+{
+    if (delta_ms > *max_value) {
+        *max_value = delta_ms;
+    }
+}
 
 static inline int dwc2_reset(uint8_t busid)
 {
@@ -478,12 +586,20 @@ static void dwc2_tx_fifo_empty_procecss(uint8_t busid, uint8_t ep_idx)
         }
     }
 
-    while (((USB_OTG_INEP(ep_idx)->DTXFSTS & USB_OTG_DTXFSTS_INEPTFSAV) >= len32b) &&
-           (g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len < g_dwc2_udc[busid].in_ep[ep_idx].xfer_len) && (g_dwc2_udc[busid].in_ep[ep_idx].xfer_len != 0U)) {
-        /* Write the FIFO */
+    while ((g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len < g_dwc2_udc[busid].in_ep[ep_idx].xfer_len) &&
+           (g_dwc2_udc[busid].in_ep[ep_idx].xfer_len != 0U)) {
+        /*
+         * [Cybernetics Ch.4] Closed-loop: mirror ChibiOS otg_txfifo_handler().
+         * Recompute the next packet size before each FIFO-space check; the final
+         * short packet may fit even when a full 64B packet would not.
+         */
         len = g_dwc2_udc[busid].in_ep[ep_idx].xfer_len - g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len;
         if (len > g_dwc2_udc[busid].in_ep[ep_idx].ep_mps) {
             len = g_dwc2_udc[busid].in_ep[ep_idx].ep_mps;
+        }
+        len32b = (len + 3U) / 4U;
+        if ((USB_OTG_INEP(ep_idx)->DTXFSTS & USB_OTG_DTXFSTS_INEPTFSAV) < len32b) {
+            break;
         }
         if (g_dwc2_udc[busid].in_ep[ep_idx].ep_type == USB_ENDPOINT_TYPE_ISOCHRONOUS) {
             if ((USB_OTG_DEV->DSTS & (1U << 8)) == 0U) {
@@ -495,6 +611,13 @@ static void dwc2_tx_fifo_empty_procecss(uint8_t busid, uint8_t ep_idx)
             }
             USB_OTG_INEP(ep_idx)->DIEPTSIZ &= ~(USB_OTG_DIEPTSIZ_MULCNT);
             USB_OTG_INEP(ep_idx)->DIEPTSIZ |= (USB_OTG_DIEPTSIZ_MULCNT & (1U << 29));
+        }
+
+        if (ep_idx == 1U) {
+            dwc2_dbg_ep1_txfe_trace(g_dwc2_udc[busid].in_ep[ep_idx].xfer_buf,
+                                    len,
+                                    g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len,
+                                    g_dwc2_udc[busid].in_ep[ep_idx].xfer_len);
         }
 
         /* [Cybernetics Ch.4] Closed-loop: keep FIFO write and byte accounting atomic. */
@@ -600,6 +723,7 @@ static inline uint32_t dwc2_get_inep_intstatus(uint8_t busid, uint8_t epnum)
     msk = USB_OTG_DEV->DIEPMSK;
     emp = USB_OTG_DEV->DIEPEMPMSK;
     msk |= ((emp >> (epnum & 0x0F)) & 0x1U) << 7;
+    msk |= USB_OTG_DIEPINT_EPDISD;
 
     tmpreg = USB_OTG_INEP((uint32_t)epnum)->DIEPINT;
     if (epnum == 1U) {
@@ -608,7 +732,14 @@ static inline uint32_t dwc2_get_inep_intstatus(uint8_t busid, uint8_t epnum)
         rtt_dbg_dwc2_ep1_empmsk = emp;
         rtt_dbg_dwc2_ep1_diepmsk_last = USB_OTG_DEV->DIEPMSK;
     }
-    USB_OTG_INEP((uint32_t)epnum)->DIEPINT = tmpreg;
+    /*
+     * [Cybernetics Ch.4] Closed-loop: ChibiOS clears DIEPINT before handling
+     * because it accepts XFRC as a final completion event.  The RTT EP1 path
+     * can defer XFRC when DIEPTSIZ still reports transfer residue; do not clear
+     * masked IN events here or the deferred event is lost and the CDC layer has
+     * to fall back to slow timeout/recovery.
+     */
+    USB_OTG_INEP((uint32_t)epnum)->DIEPINT = tmpreg & ~msk;
     tmpreg = tmpreg & msk;
     if (epnum == 1U) {
         rtt_dbg_dwc2_ep1_masked = tmpreg;
@@ -999,6 +1130,20 @@ int usbd_ep_start_write(uint8_t busid, const uint8_t ep, const uint8_t *data, ui
     uint32_t pktcnt = 0;
 
     if (ep_idx == 1U) {
+        const uint32_t now_ms = dwc2_dbg_now_ms();
+        if (rtt_dbg_dwc2_ep1_last_start_ms != 0U) {
+            const uint32_t delta_ms = now_ms - rtt_dbg_dwc2_ep1_last_start_ms;
+            rtt_dbg_dwc2_ep1_start_gap_last_ms = delta_ms;
+            dwc2_dbg_max_update(&rtt_dbg_dwc2_ep1_start_gap_max_ms, delta_ms);
+            dwc2_dbg_hist_add(rtt_dbg_dwc2_ep1_start_gap_hist, delta_ms);
+        }
+        if (rtt_dbg_dwc2_ep1_last_xfrc_ms != 0U) {
+            const uint32_t delta_ms = now_ms - rtt_dbg_dwc2_ep1_last_xfrc_ms;
+            rtt_dbg_dwc2_ep1_xfrc_to_start_last_ms = delta_ms;
+            dwc2_dbg_max_update(&rtt_dbg_dwc2_ep1_xfrc_to_start_max_ms, delta_ms);
+            dwc2_dbg_hist_add(rtt_dbg_dwc2_ep1_xfrc_to_start_hist, delta_ms);
+        }
+        rtt_dbg_dwc2_ep1_last_start_ms = now_ms;
         rtt_dbg_dwc2_ep1_start_write_calls++;
         rtt_dbg_dwc2_ep1_start_len_last = data_len;
     }
@@ -1025,28 +1170,32 @@ int usbd_ep_start_write(uint8_t busid, const uint8_t ep, const uint8_t *data, ui
     g_dwc2_udc[busid].in_ep[ep_idx].xfer_len = data_len;
     g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len = 0;
 
-    USB_OTG_INEP(ep_idx)->DIEPTSIZ &= ~(USB_OTG_DIEPTSIZ_PKTCNT);
-    USB_OTG_INEP(ep_idx)->DIEPTSIZ &= ~(USB_OTG_DIEPTSIZ_XFRSIZ);
-
     if (data_len == 0) {
-        USB_OTG_INEP(ep_idx)->DIEPTSIZ |= (USB_OTG_DIEPTSIZ_PKTCNT & (1U << 19));
+        USB_OTG_INEP(ep_idx)->DIEPTSIZ = (USB_OTG_DIEPTSIZ_PKTCNT & (1U << 19));
         USB_OTG_INEP(ep_idx)->DIEPCTL |= (USB_OTG_DIEPCTL_CNAK | USB_OTG_DIEPCTL_EPENA);
         return 0;
     }
 
+    uint32_t dieptsiz;
     if (ep_idx == 0) {
         if (data_len > g_dwc2_udc[busid].in_ep[ep_idx].ep_mps) {
             data_len = g_dwc2_udc[busid].in_ep[ep_idx].ep_mps;
         }
         g_dwc2_udc[busid].in_ep[ep_idx].xfer_len = data_len;
-        USB_OTG_INEP(ep_idx)->DIEPTSIZ |= (USB_OTG_DIEPTSIZ_PKTCNT & (1U << 19));
-        USB_OTG_INEP(ep_idx)->DIEPTSIZ |= (USB_OTG_DIEPTSIZ_XFRSIZ & data_len);
+        dieptsiz = (USB_OTG_DIEPTSIZ_PKTCNT & (1U << 19)) |
+                   (USB_OTG_DIEPTSIZ_XFRSIZ & data_len);
     } else {
         pktcnt = (uint16_t)((data_len + g_dwc2_udc[busid].in_ep[ep_idx].ep_mps - 1U) / g_dwc2_udc[busid].in_ep[ep_idx].ep_mps);
 
-        USB_OTG_INEP(ep_idx)->DIEPTSIZ |= (USB_OTG_DIEPTSIZ_PKTCNT & (pktcnt << 19));
-        USB_OTG_INEP(ep_idx)->DIEPTSIZ |= (USB_OTG_DIEPTSIZ_XFRSIZ & data_len);
+        dieptsiz = (USB_OTG_DIEPTSIZ_PKTCNT & (pktcnt << 19)) |
+                   (USB_OTG_DIEPTSIZ_XFRSIZ & data_len);
     }
+    /*
+     * [Cybernetics Ch.4] Closed-loop: match ChibiOS OTGv1 usb_lld_start_in().
+     * Non-zero IN transfers program MCNT=1 together with PKTCNT/XFRSIZ; ZLPs
+     * intentionally keep only PKTCNT(1)|XFRSIZ(0).
+     */
+    USB_OTG_INEP(ep_idx)->DIEPTSIZ = dieptsiz | (USB_OTG_DIEPTSIZ_MULCNT & (1U << 29));
 
     if (g_dwc2_udc[busid].in_ep[ep_idx].ep_type == USB_ENDPOINT_TYPE_ISOCHRONOUS) {
         if ((USB_OTG_DEV->DSTS & (1U << 8)) == 0U) {
@@ -1073,6 +1222,25 @@ int usbd_ep_start_write(uint8_t busid, const uint8_t ep, const uint8_t *data, ui
         uint32_t primask = dwc2_irq_save();
         USB_OTG_DEV->DIEPEMPMSK |= 1UL << (ep_idx & 0x0f);
         dwc2_irq_restore(primask);
+        if (ep_idx == 1U) {
+            /*
+             * [Cybernetics Ch.4] Closed-loop: ChibiOS' OTG transmit path fills
+             * the endpoint FIFO promptly after arming the transfer.  Do one
+             * immediate EP1 service pass so RTT/CherryUSB does not depend on a
+             * later TXFE interrupt before the first bytes of a PARAM/MAVFTP
+             * reply reach DWC2.
+             */
+            const uint32_t before = g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len;
+            rtt_dbg_dwc2_ep1_immediate_prime_calls++;
+            dwc2_tx_fifo_empty_procecss(busid, ep_idx);
+            const uint32_t after = g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len;
+            if (after > before) {
+                rtt_dbg_dwc2_ep1_immediate_prime_wrote++;
+                rtt_dbg_dwc2_ep1_immediate_prime_bytes += after - before;
+            } else {
+                rtt_dbg_dwc2_ep1_immediate_prime_zero++;
+            }
+        }
     }
 #endif
     if (ep_idx == 1U) {
@@ -1233,10 +1401,41 @@ void USBD_IRQHandler(uint8_t busid)
                     }
                     epint = dwc2_get_inep_intstatus(busid, ep_idx);
 
-                    if ((epint & USB_OTG_DIEPINT_XFRC) == USB_OTG_DIEPINT_XFRC) {
+                    const bool epint_has_xfrc = (epint & USB_OTG_DIEPINT_XFRC) == USB_OTG_DIEPINT_XFRC;
+                    const bool epint_has_txfe = (epint & USB_OTG_DIEPINT_TXFE) == USB_OTG_DIEPINT_TXFE;
+                    if (ep_idx == 1U && epint_has_xfrc && epint_has_txfe) {
+                        rtt_dbg_dwc2_ep1_irq_xfrc_txfe_same++;
+                    }
+                    if (epint_has_txfe) {
+                        if (ep_idx == 1U) {
+                            const uint32_t now_ms = dwc2_dbg_now_ms();
+                            rtt_dbg_dwc2_ep1_last_txfe_ms = now_ms;
+                            if (rtt_dbg_dwc2_ep1_last_start_ms != 0U) {
+                                const uint32_t delta_ms = now_ms - rtt_dbg_dwc2_ep1_last_start_ms;
+                                rtt_dbg_dwc2_ep1_start_to_txfe_last_ms = delta_ms;
+                                dwc2_dbg_max_update(&rtt_dbg_dwc2_ep1_start_to_txfe_max_ms, delta_ms);
+                            }
+                            rtt_dbg_dwc2_ep1_txfe++;
+                            if (epint_has_xfrc) {
+                                rtt_dbg_dwc2_ep1_txfe_before_xfrc++;
+                            }
+                        }
+                        /*
+                         * [Cybernetics Ch.4] Closed-loop: TXFE belongs to the
+                         * transfer that was active when this interrupt snapshot
+                         * was taken.  Fill/retire that transfer before XFRC can
+                         * call the class completion handler and arm the next
+                         * CherryUSB buffer, otherwise a stale TXFE bit can act
+                         * on the newly armed transfer.
+                        */
+                        dwc2_tx_fifo_empty_procecss(busid, ep_idx);
+                        USB_OTG_INEP(ep_idx)->DIEPINT = USB_OTG_DIEPINT_TXFE;
+                    }
+                    if (epint_has_xfrc) {
                         if (ep_idx == 0) {
                             g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len = g_dwc2_udc[busid].in_ep[ep_idx].xfer_len - ((USB_OTG_INEP(ep_idx)->DIEPTSIZ) & USB_OTG_DIEPTSIZ_XFRSIZ);
                             g_dwc2_udc[busid].in_ep[ep_idx].xfer_len = 0;
+                            USB_OTG_INEP(ep_idx)->DIEPINT = USB_OTG_DIEPINT_XFRC;
                             usbd_event_ep_in_complete_handler(busid, 0x80, g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len);
 
                             if (g_dwc2_udc[busid].setup.wLength && ((g_dwc2_udc[busid].setup.bmRequestType & USB_REQUEST_DIR_MASK) == USB_REQUEST_DIR_OUT)) {
@@ -1247,24 +1446,87 @@ void USBD_IRQHandler(uint8_t busid)
                                 dwc2_ep0_start_read_setup(busid, (uint8_t *)&g_dwc2_udc[busid].setup);
                             }
                         } else {
-                            g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len = g_dwc2_udc[busid].in_ep[ep_idx].xfer_len - ((USB_OTG_INEP(ep_idx)->DIEPTSIZ) & USB_OTG_DIEPTSIZ_XFRSIZ);
-                            g_dwc2_udc[busid].in_ep[ep_idx].xfer_len = 0;
-                            if (ep_idx == 1U) {
-                                rtt_dbg_dwc2_ep1_xfrc++;
-                                rtt_dbg_dwc2_ep1_complete_calls++;
-                                rtt_dbg_dwc2_ep1_actual_last = g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len;
+                            const uint32_t dieptsiz_snapshot = USB_OTG_INEP(ep_idx)->DIEPTSIZ;
+                            const uint32_t dieptsiz_xfrsiz = dieptsiz_snapshot & USB_OTG_DIEPTSIZ_XFRSIZ;
+                            const bool ep1_fifo_loaded_with_residue =
+                                (ep_idx == 1U) &&
+                                (dieptsiz_xfrsiz != 0U) &&
+                                (g_dwc2_udc[busid].in_ep[ep_idx].xfer_len != 0U) &&
+                                (g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len >=
+                                 g_dwc2_udc[busid].in_ep[ep_idx].xfer_len);
+                            /*
+                             * [Cybernetics Ch.4] Closed-loop: a CherryUSB bulk-IN callback
+                             * releases the CDC ring slots and allows cdc_tx_buf reuse.  Treat
+                             * EP1 XFRC as too early only while software still has bytes to put
+                             * into DWC2.  Once the whole transfer has been loaded into the FIFO,
+                             * follow ChibiOS OTGv1 semantics and let XFRC close the transfer:
+                             * `actual_xfer_len` is FIFO-fill progress, not host-completion
+                             * progress, and waiting for a second XFRC after XFRSIZ drains can
+                             * lose the only completion edge.
+                             */
+                            if (ep_idx == 1U && (dieptsiz_xfrsiz != 0U) &&
+                                !ep1_fifo_loaded_with_residue) {
+                                rtt_dbg_dwc2_ep1_xfrc_incomplete_ignored++;
+                                rtt_dbg_dwc2_ep1_xfrc_incomplete_dieptsiz = dieptsiz_snapshot;
+                                rtt_dbg_dwc2_ep1_xfrc_incomplete_actual = g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len;
+                                rtt_dbg_dwc2_ep1_xfrc_incomplete_xfer_len = g_dwc2_udc[busid].in_ep[ep_idx].xfer_len;
+                                if (g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len <
+                                    g_dwc2_udc[busid].in_ep[ep_idx].xfer_len) {
+                                    USB_OTG_DEV->DIEPEMPMSK |= 1UL << (ep_idx & 0x0f);
+                                    rtt_dbg_dwc2_ep1_xfrc_incomplete_txfe_rearmed++;
+                                    USB_OTG_INEP(ep_idx)->DIEPINT = USB_OTG_DIEPINT_XFRC;
+                                } else {
+                                    /*
+                                     * [Cybernetics Ch.4] Closed-loop: when TXFE and XFRC arrive
+                                     * together, the FIFO can be fully loaded while DWC2 still shows
+                                     * host-visible XFRSIZ residue.  Clearing XFRC here creates the
+                                     * observed 256B failure mode: the residue later drains to zero,
+                                     * but no second XFRC is guaranteed, so CDC waits for timeout
+                                     * recovery.  Keep XFRC pending and do not release the CDC buffer
+                                     * until a later ISR observes XFRSIZ==0 and completes normally.
+                                     */
+                                    rtt_dbg_dwc2_ep1_xfrc_deferred_until_drained++;
+                                }
+                            } else {
+                                if (ep1_fifo_loaded_with_residue) {
+                                    rtt_dbg_dwc2_ep1_xfrc_complete_after_fifo_load_with_residue++;
+                                    rtt_dbg_dwc2_ep1_xfrc_complete_after_fifo_load_dieptsiz = dieptsiz_snapshot;
+                                    g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len =
+                                        g_dwc2_udc[busid].in_ep[ep_idx].xfer_len;
+                                } else {
+                                    g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len =
+                                        g_dwc2_udc[busid].in_ep[ep_idx].xfer_len - dieptsiz_xfrsiz;
+                                }
+                                g_dwc2_udc[busid].in_ep[ep_idx].xfer_len = 0;
+                                if (ep_idx == 1U) {
+                                    const uint32_t now_ms = dwc2_dbg_now_ms();
+                                    rtt_dbg_dwc2_ep1_last_xfrc_ms = now_ms;
+                                    if (rtt_dbg_dwc2_ep1_last_start_ms != 0U) {
+                                        const uint32_t delta_ms = now_ms - rtt_dbg_dwc2_ep1_last_start_ms;
+                                        rtt_dbg_dwc2_ep1_start_to_xfrc_last_ms = delta_ms;
+                                        dwc2_dbg_max_update(&rtt_dbg_dwc2_ep1_start_to_xfrc_max_ms, delta_ms);
+                                        dwc2_dbg_hist_add(rtt_dbg_dwc2_ep1_start_to_xfrc_hist, delta_ms);
+                                    }
+                                    if (rtt_dbg_dwc2_ep1_last_txfe_ms != 0U) {
+                                        const uint32_t delta_ms = now_ms - rtt_dbg_dwc2_ep1_last_txfe_ms;
+                                        rtt_dbg_dwc2_ep1_txfe_to_xfrc_last_ms = delta_ms;
+                                        dwc2_dbg_max_update(&rtt_dbg_dwc2_ep1_txfe_to_xfrc_max_ms, delta_ms);
+                                        dwc2_dbg_hist_add(rtt_dbg_dwc2_ep1_txfe_to_xfrc_hist, delta_ms);
+                                    }
+                                    rtt_dbg_dwc2_ep1_xfrc++;
+                                    rtt_dbg_dwc2_ep1_complete_calls++;
+                                    rtt_dbg_dwc2_ep1_actual_last = g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len;
+                                }
+                                USB_OTG_INEP(ep_idx)->DIEPINT = USB_OTG_DIEPINT_XFRC;
+                                usbd_event_ep_in_complete_handler(busid, ep_idx | 0x80, g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len);
                             }
-                            usbd_event_ep_in_complete_handler(busid, ep_idx | 0x80, g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len);
                         }
                     }
-                    if ((epint & USB_OTG_DIEPINT_TXFE) == USB_OTG_DIEPINT_TXFE) {
+                    if ((epint & USB_OTG_DIEPINT_EPDISD) == USB_OTG_DIEPINT_EPDISD) {
                         if (ep_idx == 1U) {
-                            rtt_dbg_dwc2_ep1_txfe++;
+                            rtt_dbg_dwc2_ep1_epdisd++;
                         }
-                        dwc2_tx_fifo_empty_procecss(busid, ep_idx);
-                    }
-                    if ((epint & USB_OTG_DIEPINT_EPDISD) == USB_OTG_DIEPINT_EPDISD && ep_idx == 1U) {
-                        rtt_dbg_dwc2_ep1_epdisd++;
+                        USB_OTG_INEP(ep_idx)->DIEPINT = USB_OTG_DIEPINT_EPDISD;
                     }
                 }
                 ep_intr >>= 1U;

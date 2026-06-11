@@ -2266,6 +2266,26 @@ bool usb_lld_send_rtt(uint8_t ep, const uint8_t *data, uint32_t len)
     return true;
 }
 
+uint32_t usb_lld_txspace_rtt(uint8_t ep)
+{
+    if (!_usb_driver_inited || ep > 3 || ep == 0 || ep == 2) {
+        return 0;
+    }
+    if (rtt_usb.state != USB_STATE_ACTIVE) {
+        return 0;
+    }
+
+    stm32_otg_t *otgp = (stm32_otg_t *)rtt_usb.otg;
+    if (otgp->ie[ep].DIEPCTL & DIEPCTL_EPENA) {
+        return 0;
+    }
+
+    const uint32_t fifo_words = otgp->ie[ep].DTXFSTS & DTXFSTS_INEPTFSAV_MASK;
+    const uint32_t fifo_bytes = fifo_words * 4U;
+    const uint32_t mps = (ep == 1) ? EP1_MAX_PACKET : 8U;
+    return fifo_bytes > mps ? mps : fifo_bytes;
+}
+
 /* -------------------------------------------------------------------------- */
 /* usb_lld_set_rx_callback — register CDC data receive callback               */
 /* -------------------------------------------------------------------------- */

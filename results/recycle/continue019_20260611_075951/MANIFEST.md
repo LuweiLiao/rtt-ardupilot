@@ -1,0 +1,156 @@
+# continue019 Recycle Manifest
+
+Created: `2026-06-11 07:59:51 Asia/Shanghai`
+
+Purpose: keep `results/master_launch` readable while preserving old continue019
+process evidence.  Files were moved, not deleted.
+
+## Retained In Place
+
+These directories remain in `results/master_launch` because they are direct
+evidence for the current root-cause report or are used by the current gate
+scripts:
+
+| Path | Reason |
+|---|---|
+| `results/master_launch/ml_20260610_190021_continue019_chibios_rtt_usb_systemic` | ChibiOS-vs-RTT USB systemic comparison evidence. |
+| `results/master_launch/ml_20260610_193015_continue019_chibios_rtt_core_trace` | ChibiOS-vs-RTT core trace evidence. |
+| `results/master_launch/ml_20260611_020000_continue019_multiround_usb_gate_retry` | Contains gate helper scripts used by later GREEN evidence. |
+| `results/master_launch/ml_20260611_060000_continue019_param_active_iomcu_streak` | Contains PARAM probe helper script and preserved pre-root-cause evidence. |
+| `results/master_launch/ml_20260611_065250_continue019_dbg_bss_zero_startup` | Preserved `.rtt_dbg_bss` / startup zeroing evidence. |
+| `results/master_launch/ml_20260611_072954_continue019_final_gate` | Preserved reliable RED gate and counter evidence. |
+| `results/master_launch/ml_20260611_074609_continue019_monotonic_time_gate` | Preserved latest monotonic-time GREEN gate and counter evidence. |
+
+Retained pointer files:
+
+| Path | Reason |
+|---|---|
+| `results/master_launch/latest_continue019_chibios_rtt_core_trace.path` | Points to retained ChibiOS-vs-RTT trace evidence. |
+| `results/master_launch/latest_continue019_chibios_rtt_usb_systemic.path` | Points to retained ChibiOS-vs-RTT systemic evidence. |
+| `results/master_launch/latest_continue019_dbg_bss_zero_startup.path` | Points to retained startup/counter evidence. |
+| `results/master_launch/latest_continue019_final_gate.path` | Points to retained RED gate evidence. |
+| `results/master_launch/latest_continue019_monotonic_time_gate.path` | Points to retained GREEN gate evidence. |
+| `results/master_launch/latest_continue019_param_active_iomcu_streak.path` | Points to retained PARAM helper/evidence directory. |
+
+## Moved Directories
+
+Moved under:
+
+```text
+results/recycle/continue019_20260611_075951/master_launch_dirs/
+```
+
+Reason: obsolete continue019 process directories from earlier perturbations,
+candidate experiments, rejected USB/DWC2/queue hypotheses, or superseded
+diagnostic probes.  They are retained for audit but no longer clutter the active
+`results/master_launch` view.
+
+Moved top-level directories:
+
+```text
+ml_20260609_162110_continue019_current_reflash
+ml_20260610_092648_continue019_usb_dtr_close_cleanup_replay
+ml_20260610_104307_continue019_ep1_immediate_fifo_prime_aon
+ml_20260610_164001_continue019_usb_post_write_drain
+ml_20260610_164659_continue019_usb_zlp_core
+ml_20260610_164731_continue019_chibios_rtt_core_model
+ml_20260610_164731_continue019_param_priority_probe
+ml_20260610_170412_continue019_mavftp_param_cursor
+ml_20260610_174500_continue019_mavftp_trace
+ml_20260610_181000_continue019_mavftp_no_banner
+ml_20260610_181855_continue019_revert_deferred_baseline
+ml_20260610_183000_continue019_mavftp_no_banner_trace2
+ml_20260610_183604_continue019_usb_state_machine
+ml_20260610_185000_continue019_mavftp_post_drain
+ml_20260610_195000_continue019_usb_no_flowctrl_mavftp_pacing
+ml_20260610_201416_continue019_usb_short_write_guard
+ml_20260610_202154_continue019_dwc2_txfe_before_xfrc
+ml_20260610_203000_continue019_cherry_no_replay_recovery
+ml_20260610_203000_continue019_usb_deferred_kick
+ml_20260610_203659_continue019_cherry_256b_aggregation
+ml_20260610_204600_continue019_cherry_chibios_scale_queue
+ml_20260610_210000_continue019_ep1_immediate_prime_chibios_start
+ml_20260610_212200_continue019_dwc2_dieptsiz_mcnt_chibios
+ml_20260610_212800_continue019_dwc2_dieptsiz_full_assign
+ml_20260610_213000_continue019_dwc2_tail_packet_fifo_check
+ml_20260610_214500_continue019_ep1_xfrc_residue_guard
+ml_20260610_214900_continue019_ep1_xfrc_deferred_completion
+ml_20260610_215500_continue019_usb_semantic_audit
+ml_20260610_220500_continue019_dwc2_epdisd_mask_closure
+ml_20260610_221000_continue019_dwc2_deferred_clear_audit
+ml_20260610_221000_continue019_usb_txspace_chibios_contract
+ml_20260610_224500_continue019_pre_drain_epena_guard
+ml_20260610_230500_continue019_runtime_usb_core_probe
+ml_20260610_231500_continue019_cherry_128b_completion_probe
+ml_20260610_232500_continue019_restore_256b_candidate
+ml_20260611_000000_continue019_defer_xfrc_until_xfrsiz0
+ml_20260611_010500_continue019_xfrc_fifo_loaded_as_complete
+ml_20260611_011300_continue019_param_before_out_of_time
+ml_20260611_012500_continue019_param_defer_pushed
+ml_20260611_013000_continue019_multiround_usb_gate
+ml_20260611_013800_continue019_param_5ms_pushed_defer
+ml_20260611_020800_continue019_param_gap_diagnostics
+ml_20260611_021500_continue019_param_time_budget
+ml_20260611_022200_continue019_uart_poll_limit
+ml_20260611_023000_continue019_param_time_budget_safe_probe
+ml_20260611_024000_continue019_uart_no_tc_wait
+ml_20260611_024500_continue019_param_gap_firmware_trace
+ml_20260611_030000_continue019_param_scheduler_catchup
+ml_20260611_031500_continue019_usb_chibios_queue_scale
+ml_20260611_033500_continue019_param_gap_clean_trace
+ml_20260611_034500_continue019_scheduler_gap_trace
+ml_20260611_040000_continue019_delaycb_param_producer
+ml_20260611_041500_continue019_delaycb_param_producer_tight
+ml_20260611_044500_continue019_delaycb_param_5ms
+ml_20260611_052000_continue019_param_active_window
+ml_20260611_065138_continue019_direct_mdw_probe
+ml_20260611_070000_continue019_live_counter_reprobe
+ml_20260611_071500_continue019_dbg_sram_counter
+ml_20260611_073000_continue019_dbg_nocache_counter
+```
+
+## Moved Pointer Files
+
+Moved under:
+
+```text
+results/recycle/continue019_20260611_075951/latest_pointers/
+```
+
+Reason: stale `latest_continue019_*.path` and old run pointer files that point
+to superseded process directories.
+
+Moved pointer files:
+
+```text
+latest_continue019_compass_retry.path
+latest_continue019_current_reflash.path
+latest_continue019_delaycb_param_5ms.path
+latest_continue019_delaycb_param_producer.path
+latest_continue019_delaycb_param_producer_tight.path
+latest_continue019_final_nondiag.path
+latest_continue019_mavftp_param_cursor.path
+latest_continue019_param_5ms_pushed_defer.path
+latest_continue019_param_active_window.path
+latest_continue019_param_before_out_of_time.path
+latest_continue019_param_defer_pushed.path
+latest_continue019_param_gap_clean_trace.path
+latest_continue019_param_gap_diagnostics.path
+latest_continue019_param_gap_firmware_trace.path
+latest_continue019_revert_deferred_baseline.path
+latest_continue019_scheduler_gap_trace.path
+latest_continue019_uart_no_tc_wait.path
+latest_continue019_uart_poll_limit.path
+latest_continue019_usb_chibios_queue_scale.path
+latest_continue019_usb_post_write_drain.path
+latest_continue019_usb_state_machine.path
+latest_continue019_usb_zlp_core.path
+latest_continue_run.txt
+```
+
+## Build/Verification Impact
+
+No source file, build script, bootloader, IO firmware, or validation script used
+by the retained GREEN gate was changed by this cleanup.  This cleanup should
+not change firmware output.  If any moved directory is needed for forensic
+inspection, restore it from this recycle directory rather than deleting it.

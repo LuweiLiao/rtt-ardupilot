@@ -97,6 +97,76 @@ extern uint32_t rtt_last_fault_hfsr;
 extern uint32_t rtt_last_fault_bfar;
 }
 extern uint32_t rtt_boot_rcc_csr;
+
+#define RTT_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+
+volatile uint32_t rtt_dbg_gcs_update_send_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_break_out_of_time RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_overtime_grace RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_overtime_grace_denied RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_break_try_send RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_break_try_send_id RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_param_catchup RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_param_grace_limit RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_last_chan RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_last_txspace RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_last_slowdown_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_last_queued_param RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_param_pushed_deferred RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_param_pushed_last_id RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_param_overtime_active RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_param_overtime_granted RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_param_overtime_denied RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_param_priority_due RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_param_priority_not_due RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_param_priority_no_slot RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_param_priority_sent RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_param_priority_try_false RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_param_priority_last_since RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_param_priority_last_interval RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_param_break_active_tail RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_global_update_send_gap_max_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_global_update_send_gap_last_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_global_update_send_gap_large_count RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_global_update_send_last_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_chan0_update_send_gap_max_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_chan0_update_send_gap_last_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_chan0_update_send_gap_large_count RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_chan0_update_send_last_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_bucket_selected[10] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_bucket_last_interval[10] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_bucket_last_resched[10] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_bucket_last_since[10] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_target_set_interval[5] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_target_try[5] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_target_sent[5] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_target_fail[5] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_target_last_interval[5] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_target_last_txspace[5] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_target_last_slowdown_ms[5] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_target_last_queued_param[5] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_target_last_bucket_id[5] RTT_DBG_DTCM_BSS;
+
+static int8_t rtt_dbg_gcs_target_index(const ap_message id)
+{
+    switch (id) {
+    case MSG_SYS_STATUS:
+        return 0;
+    case MSG_RAW_IMU:
+        return 1;
+    case MSG_SCALED_PRESSURE:
+        return 2;
+#if AP_AHRS_ENABLED
+    case MSG_ATTITUDE:
+        return 3;
+    case MSG_EKF_STATUS_REPORT:
+        return 4;
+#endif
+    default:
+        return -1;
+    }
+}
+
 #endif
 
 #if HAL_MAX_CAN_PROTOCOL_DRIVERS
@@ -1306,9 +1376,19 @@ void GCS_MAVLINK::find_next_bucket_to_send(uint16_t now16_ms)
             sending_bucket_id = i;
             ms_before_send_next_bucket_to_send = ms_before_send_this_bucket;
         }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_gcs_bucket_last_interval[i] = deferred_message_bucket[i].interval_ms;
+        rtt_dbg_gcs_bucket_last_resched[i] = interval;
+        rtt_dbg_gcs_bucket_last_since[i] = ms_since_last_sent;
+#endif
     }
     if (sending_bucket_id != no_bucket_to_send) {
         bucket_message_ids_to_send = deferred_message_bucket[sending_bucket_id].ap_message_ids;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        if (sending_bucket_id < ARRAY_SIZE(rtt_dbg_gcs_bucket_selected)) {
+            rtt_dbg_gcs_bucket_selected[sending_bucket_id]++;
+        }
+#endif
     } else {
         bucket_message_ids_to_send.clearall();
     }
@@ -1352,6 +1432,17 @@ ap_message GCS_MAVLINK::next_deferred_bucket_message_to_send(uint16_t now16_ms)
 // expected to be overridden, not this function.
 bool GCS_MAVLINK::do_try_send_message(const ap_message id)
 {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const int8_t rtt_target_index = rtt_dbg_gcs_target_index(id);
+    const uint32_t rtt_space_before = txspace();
+    if (rtt_target_index >= 0) {
+        rtt_dbg_gcs_target_try[rtt_target_index]++;
+        rtt_dbg_gcs_target_last_txspace[rtt_target_index] = rtt_space_before;
+        rtt_dbg_gcs_target_last_slowdown_ms[rtt_target_index] = stream_slowdown_ms;
+        rtt_dbg_gcs_target_last_queued_param[rtt_target_index] = _queued_parameter != nullptr ? 1U : 0U;
+        rtt_dbg_gcs_target_last_bucket_id[rtt_target_index] = sending_bucket_id;
+    }
+#endif
     const bool in_delay_callback = hal.scheduler->in_delay_callback();
     if (in_delay_callback && !should_send_message_in_delay_callback(id)) {
         return true;
@@ -1366,12 +1457,26 @@ bool GCS_MAVLINK::do_try_send_message(const ap_message id)
 #endif
     if (!try_send_message(id)) {
         // didn't fit in buffer...
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        if (rtt_target_index >= 0) {
+            rtt_dbg_gcs_target_fail[rtt_target_index]++;
+        }
+#endif
 #if GCS_DEBUG_SEND_MESSAGE_TIMINGS
         try_send_message_stats.no_space_for_message++;
         hal.scheduler->restore_interrupts(data);
 #endif
         return false;
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    if (rtt_target_index >= 0) {
+        rtt_dbg_gcs_target_sent[rtt_target_index]++;
+        rtt_dbg_gcs_target_last_txspace[rtt_target_index] = txspace();
+        rtt_dbg_gcs_target_last_slowdown_ms[rtt_target_index] = stream_slowdown_ms;
+        rtt_dbg_gcs_target_last_queued_param[rtt_target_index] = _queued_parameter != nullptr ? 1U : 0U;
+        rtt_dbg_gcs_target_last_bucket_id[rtt_target_index] = sending_bucket_id;
+    }
+#endif
 #if GCS_DEBUG_SEND_MESSAGE_TIMINGS
     const uint32_t delta_us = AP_HAL::micros() - start_send_message_us;
     hal.scheduler->restore_interrupts(data);
@@ -1563,6 +1668,27 @@ void GCS_MAVLINK_InProgress::check_tasks()
 
 void GCS_MAVLINK::update_send()
 {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    if (chan == MAVLINK_COMM_0) {
+        const uint32_t now_ms = AP_HAL::millis();
+        if (rtt_dbg_gcs_chan0_update_send_last_ms != 0U) {
+            const uint32_t gap_ms = now_ms - rtt_dbg_gcs_chan0_update_send_last_ms;
+            rtt_dbg_gcs_chan0_update_send_gap_last_ms = gap_ms;
+            if (gap_ms > rtt_dbg_gcs_chan0_update_send_gap_max_ms) {
+                rtt_dbg_gcs_chan0_update_send_gap_max_ms = gap_ms;
+            }
+            if (gap_ms > 250U) {
+                rtt_dbg_gcs_chan0_update_send_gap_large_count++;
+            }
+        }
+        rtt_dbg_gcs_chan0_update_send_last_ms = now_ms;
+    }
+    rtt_dbg_gcs_update_send_calls++;
+    rtt_dbg_gcs_update_send_last_chan = chan;
+    rtt_dbg_gcs_update_send_last_txspace = txspace();
+    rtt_dbg_gcs_update_send_last_slowdown_ms = stream_slowdown_ms;
+    rtt_dbg_gcs_update_send_last_queued_param = _queued_parameter != nullptr ? 1U : 0U;
+#endif
 #if HAL_LOGGING_ENABLED
     if (!hal.scheduler->in_delay_callback()) {
         // AP_Logger will not send log data if we are armed.
@@ -1586,24 +1712,130 @@ void GCS_MAVLINK::update_send()
 
     const uint32_t start = AP_HAL::millis();
     const uint16_t start16 = start & 0xFFFF;
-
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    uint8_t rtt_overtime_grace_used = 0;
+#endif
     while (AP_HAL::millis() - start < 5) { // spend a max of 5ms sending messages.  This should never trigger - out_of_time() should become true
         if (gcs().out_of_time()) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            /*
+             * [Cybernetics Ch.4] Closed-loop: RTT USB CDC can run with
+             * scheduler load near 100%, causing telemetry recovery to starve
+             * even when the MAVLink TX buffer has room.  Allow bounded
+             * USB-main-channel sends per update_send() call, then yield.
+             */
+            const bool rtt_param_active = _queued_parameter != nullptr;
+            const bool rtt_ftp_active =
+#if AP_MAVLINK_FTP_ENABLED
+                AP_HAL::millis() - ftp.last_send_ms < 1000
+#else
+                false
+#endif
+                ;
+            /*
+             * [Cybernetics Ch.4] Feedback split: ChibiOS queues PARAM_VALUE
+             * bytes into SerialUSB and lets the USB service path drain them
+             * independently.  RTT/CherryUSB still enters through the main GCS
+             * scheduler, so high scheduler load can otherwise spend the only
+             * overtime slot on a heartbeat/FTP retry and leave MSG_NEXT_PARAM
+             * one full update behind.  Keep the per-call PARAM quantum small,
+             * but allow a bounded catch-up window while the list is active.
+             */
+            const uint8_t rtt_grace_limit = rtt_param_active ? 4U : (rtt_ftp_active ? 1U : 8U);
+            rtt_dbg_gcs_update_send_param_grace_limit = rtt_grace_limit;
+            if (rtt_param_active && chan == MAVLINK_COMM_0) {
+                rtt_dbg_gcs_update_send_param_overtime_active++;
+            }
+            if (rtt_overtime_grace_used < rtt_grace_limit && chan == MAVLINK_COMM_0 && txspace() > 256U) {
+                rtt_overtime_grace_used++;
+                rtt_dbg_gcs_update_send_overtime_grace++;
+                if (rtt_param_active) {
+                    rtt_dbg_gcs_update_send_param_overtime_granted++;
+                }
+            } else {
+                if (!rtt_overtime_grace_used && chan == MAVLINK_COMM_0) {
+                    rtt_dbg_gcs_update_send_overtime_grace_denied++;
+                }
+                if (rtt_param_active && chan == MAVLINK_COMM_0) {
+                    rtt_dbg_gcs_update_send_param_overtime_denied++;
+                }
+                rtt_dbg_gcs_update_send_break_out_of_time++;
+                break;
+            }
+#else
 #if GCS_DEBUG_SEND_MESSAGE_TIMINGS
             try_send_message_stats.out_of_time++;
 #endif
             break;
+#endif
         }
 
 #if GCS_DEBUG_SEND_MESSAGE_TIMINGS
         retry_deferred_body_start = AP_HAL::micros();
 #endif
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        /*
+         * [Cybernetics Ch.4] Closed-loop: while a full parameter list is
+         * active on RTT USB, do not let another cached deferred message keep
+         * MSG_NEXT_PARAM behind the scheduler boundary.  ChibiOS SerialUSB
+         * hides more endpoint latency below its output queues; RTT must give
+         * the parameter producer first chance when its interval is already due.
+         * queued_param_send() still enforces the 4-message quantum, txspace
+         * checks, and per-call CPU budget.
+         */
+        if (chan == MAVLINK_COMM_0 && (_queued_parameter != nullptr || !param_replies.is_empty())) {
+            const int8_t param_next = get_deferred_message_index(MSG_NEXT_PARAM);
+            if (param_next != -1 && deferred_message[param_next].interval_ms != 0) {
+                const uint16_t interval_ms = deferred_message[param_next].interval_ms;
+                const uint16_t ms_since_last_sent = start16 - deferred_message[param_next].last_sent_ms;
+                rtt_dbg_gcs_update_send_param_priority_last_since = ms_since_last_sent;
+                rtt_dbg_gcs_update_send_param_priority_last_interval = interval_ms;
+                if (ms_since_last_sent >= interval_ms) {
+                    rtt_dbg_gcs_update_send_param_priority_due++;
+                    if (!do_try_send_message(MSG_NEXT_PARAM)) {
+                        rtt_dbg_gcs_update_send_param_priority_try_false++;
+                        rtt_dbg_gcs_update_send_break_try_send++;
+                        rtt_dbg_gcs_update_send_break_try_send_id = MSG_NEXT_PARAM;
+                        break;
+                    }
+                    rtt_dbg_gcs_update_send_param_priority_sent++;
+                    deferred_message[param_next].last_sent_ms += interval_ms;
+                    if (uint16_t(start16 - deferred_message[param_next].last_sent_ms) > interval_ms) {
+                        if (_queued_parameter != nullptr) {
+                            rtt_dbg_gcs_update_send_param_catchup++;
+                        } else {
+                            deferred_message[param_next].last_sent_ms = start16;
+                        }
+                    }
+                    next_deferred_message_to_send_cache = -1;
+                    continue;
+                }
+                rtt_dbg_gcs_update_send_param_priority_not_due++;
+            } else {
+                rtt_dbg_gcs_update_send_param_priority_no_slot++;
+            }
+        }
+#endif
+
         // check if any "specially handled" messages should be sent out
         {
             const int8_t next = deferred_message_to_send_index(start16);
             if (next != -1) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                if (deferred_message[next].id == MSG_NEXT_PARAM &&
+                    _queued_parameter == nullptr &&
+                    param_replies.is_empty()) {
+                    deferred_message[next].last_sent_ms = start16;
+                    next_deferred_message_to_send_cache = -1;
+                    continue;
+                }
+#endif
                 if (!do_try_send_message(deferred_message[next].id)) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                    rtt_dbg_gcs_update_send_break_try_send++;
+                    rtt_dbg_gcs_update_send_break_try_send_id = deferred_message[next].id;
+#endif
                     break;
                 }
                 // we try to keep output on a regular clock to avoid
@@ -1612,7 +1844,23 @@ void GCS_MAVLINK::update_send()
                 deferred_message[next].last_sent_ms += interval_ms;
                 // but we do not want to try to catch up too much:
                 if (uint16_t(start16 - deferred_message[next].last_sent_ms) > interval_ms) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                    if (chan == MAVLINK_COMM_0 &&
+                        deferred_message[next].id == MSG_NEXT_PARAM &&
+                        _queued_parameter != nullptr) {
+                        /*
+                         * [Cybernetics Ch.15] Extremum seeking: when RTT has
+                         * already missed a parameter interval, do not collapse
+                         * the entire backlog to "now" after one small quantum.
+                         * The loop's 5 ms wall, the overtime grace above, the
+                         * PARAM quantum cap, and txspace still bound this.
+                         */
+                        rtt_dbg_gcs_update_send_param_catchup++;
+                    } else
+#endif
+                    {
                     deferred_message[next].last_sent_ms = start16;
+                    }
                 }
 
                 next_deferred_message_to_send_cache = -1; // deferred_message_to_send will recalculate
@@ -1632,7 +1880,28 @@ void GCS_MAVLINK::update_send()
         const int16_t fs = pushed_ap_message_ids.first_set();
         if (fs != -1) {
             ap_message next = (ap_message)fs;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            if (chan == MAVLINK_COMM_0 && _queued_parameter != nullptr) {
+                /*
+                 * [Cybernetics Ch.4] Closed-loop: status text and other pushed
+                 * messages can arrive in clusters during bring-up/prearm checks.
+                 * ChibiOS can hide those bytes below GCS in SerialUSB queues; on
+                 * RTT they compete with the PARAM_VALUE producer and create
+                 * 100 ms-class holes despite perfect USB byte conservation.
+                 * During a full USB parameter list, keep pushed messages pending
+                 * until the list finishes; deferred MSG_NEXT_PARAM above still
+                 * owns the short high-priority window.
+                 */
+                rtt_dbg_gcs_update_send_param_pushed_deferred++;
+                rtt_dbg_gcs_update_send_param_pushed_last_id = next;
+                break;
+            }
+#endif
             if (!do_try_send_message(next)) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                rtt_dbg_gcs_update_send_break_try_send++;
+                rtt_dbg_gcs_update_send_break_try_send_id = next;
+#endif
                 break;
             }
             pushed_ap_message_ids.clear(next);
@@ -1647,9 +1916,20 @@ void GCS_MAVLINK::update_send()
             continue;
         }
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        if (chan == MAVLINK_COMM_0 && _queued_parameter != nullptr) {
+            rtt_dbg_gcs_update_send_param_break_active_tail++;
+            break;
+        }
+#endif
+
         ap_message next = next_deferred_bucket_message_to_send(start16);
         if (next != no_message_to_send) {
             if (!do_try_send_message(next)) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                rtt_dbg_gcs_update_send_break_try_send++;
+                rtt_dbg_gcs_update_send_break_try_send_id = next;
+#endif
                 break;
             }
             bucket_message_ids_to_send.clear(next);
@@ -1723,11 +2003,21 @@ void GCS_MAVLINK::remove_message_from_bucket(int8_t bucket, ap_message id)
 
 bool GCS_MAVLINK::set_ap_message_interval(enum ap_message id, uint16_t interval_ms)
 {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const int8_t rtt_target_index = rtt_dbg_gcs_target_index(id);
+#endif
     if (id == MSG_NEXT_PARAM) {
         // force parameters to *always* get streamed so a vehicle is
         // recoverable from bad configuration:
         if (interval_ms == 0) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            // [Cybernetics Ch.4] Closed-loop: RTT/CherryUSB needs a short
+            // parameter scheduler interval, then ordinary streams recover after
+            // the list finishes.
+            interval_ms = 5;
+#else
             interval_ms = 100;
+#endif
         } else if (interval_ms > 1000) {
             interval_ms = 1000;
         }
@@ -1735,6 +2025,15 @@ bool GCS_MAVLINK::set_ap_message_interval(enum ap_message id, uint16_t interval_
 
 #if AP_SCHEDULER_ENABLED
     interval_ms = cap_message_interval(interval_ms);
+#endif
+
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    if (rtt_target_index >= 0) {
+        rtt_dbg_gcs_target_set_interval[rtt_target_index]++;
+        rtt_dbg_gcs_target_last_interval[rtt_target_index] = interval_ms;
+        rtt_dbg_gcs_target_last_slowdown_ms[rtt_target_index] = stream_slowdown_ms;
+        rtt_dbg_gcs_target_last_queued_param[rtt_target_index] = _queued_parameter != nullptr ? 1U : 0U;
+    }
 #endif
 
     // check if it's a specially-handled message:
@@ -2732,6 +3031,20 @@ void GCS::send_message(enum ap_message id)
 
 void GCS::update_send()
 {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_now_ms = AP_HAL::millis();
+    if (rtt_dbg_gcs_global_update_send_last_ms != 0U) {
+        const uint32_t gap_ms = rtt_now_ms - rtt_dbg_gcs_global_update_send_last_ms;
+        rtt_dbg_gcs_global_update_send_gap_last_ms = gap_ms;
+        if (gap_ms > rtt_dbg_gcs_global_update_send_gap_max_ms) {
+            rtt_dbg_gcs_global_update_send_gap_max_ms = gap_ms;
+        }
+        if (gap_ms > 250U) {
+            rtt_dbg_gcs_global_update_send_gap_large_count++;
+        }
+    }
+    rtt_dbg_gcs_global_update_send_last_ms = rtt_now_ms;
+#endif
     // cope with changes to mavlink system ID parameter
     mavlink_system.sysid = sysid;
 

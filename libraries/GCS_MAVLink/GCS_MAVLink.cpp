@@ -76,6 +76,26 @@ bool gcs_alternative_active[MAVLINK_COMM_NUM_BUFFERS];
 static HAL_Semaphore chan_locks[MAVLINK_COMM_NUM_BUFFERS];
 static bool chan_discard[MAVLINK_COMM_NUM_BUFFERS];
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#define RTT_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+volatile uint32_t rtt_dbg_mav_send_buffer_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_mav_send_buffer_discarded RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_mav_send_buffer_discarded_by_lock RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_mav_send_buffer_short_writes RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_mav_send_buffer_last_chan RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_mav_send_buffer_last_len RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_mav_send_buffer_last_written RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_mav_send_buffer_last_txspace RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_mav_send_lock_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_mav_send_lock_discards RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_mav_send_lock_last_chan RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_mav_send_lock_last_size RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_mav_send_lock_last_txspace RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_mav_send_lock_depth_total RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_mav_send_lock_depth[MAVLINK_COMM_NUM_BUFFERS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_mav_send_unlock_flush_calls RTT_DBG_DTCM_BSS;
+#endif
+
 mavlink_system_t mavlink_system = {7,1};
 
 // routing table
@@ -132,9 +152,30 @@ uint16_t comm_get_txspace(mavlink_channel_t chan)
  */
 void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint8_t len)
 {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const bool rtt_discard_now = (!valid_channel(chan) || mavlink_comm_port[chan] == nullptr || chan_discard[chan]);
+    const uint32_t rtt_trace_txspace = (!rtt_discard_now && mavlink_comm_port[chan] != nullptr) ?
+        mavlink_comm_port[chan]->txspace() : 0U;
+#endif
     if (!valid_channel(chan) || mavlink_comm_port[chan] == nullptr || chan_discard[chan]) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_mav_send_buffer_discarded++;
+        if (valid_channel(chan)) {
+            rtt_dbg_mav_send_buffer_last_chan = (uint8_t)chan;
+            rtt_dbg_mav_send_buffer_last_len = len;
+            if (chan_discard[chan]) {
+                rtt_dbg_mav_send_buffer_discarded_by_lock++;
+            }
+        }
+#endif
         return;
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_mav_send_buffer_calls++;
+    rtt_dbg_mav_send_buffer_last_chan = (uint8_t)chan;
+    rtt_dbg_mav_send_buffer_last_len = len;
+    rtt_dbg_mav_send_buffer_last_txspace = rtt_trace_txspace;
+#endif
 #if HAL_HIGH_LATENCY2_ENABLED
     // if it's a disabled high latency channel, don't send
     GCS_MAVLINK *link = gcs().chan(chan);
@@ -152,6 +193,12 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint8_t len)
         AP_HAL::panic("Short write on UART: %lu < %u", (unsigned long)written, len);
     }
 #else
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_mav_send_buffer_last_written = written;
+    if (written < len && !mavlink_comm_port[chan]->is_write_locked()) {
+        rtt_dbg_mav_send_buffer_short_writes++;
+    }
+#endif
     (void)written;
 #endif
 }
@@ -166,9 +213,21 @@ void comm_send_lock(mavlink_channel_t chan_m, uint16_t size)
 {
     const uint8_t chan = uint8_t(chan_m);
     chan_locks[chan].take_blocking();
-    if (mavlink_comm_port[chan]->txspace() < size) {
+    const uint16_t txspace = mavlink_comm_port[chan]->txspace();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_mav_send_lock_calls++;
+    rtt_dbg_mav_send_lock_last_chan = chan;
+    rtt_dbg_mav_send_lock_last_size = size;
+    rtt_dbg_mav_send_lock_last_txspace = txspace;
+    rtt_dbg_mav_send_lock_depth[chan]++;
+    rtt_dbg_mav_send_lock_depth_total++;
+#endif
+    if (txspace < size) {
         chan_discard[chan] = true;
         gcs_out_of_space_to_send(chan_m);
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_mav_send_lock_discards++;
+#endif
     }
 }
 
@@ -179,6 +238,25 @@ void comm_send_unlock(mavlink_channel_t chan_m)
 {
     const uint8_t chan = uint8_t(chan_m);
     chan_discard[chan] = false;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    if (rtt_dbg_mav_send_lock_depth[chan] > 0U) {
+        rtt_dbg_mav_send_lock_depth[chan]--;
+    }
+    if (rtt_dbg_mav_send_lock_depth_total > 0U) {
+        rtt_dbg_mav_send_lock_depth_total--;
+    }
+    if (mavlink_comm_port[chan] != nullptr) {
+        /*
+         * [Cybernetics Ch.4] Closed-loop: flush once after the MAVLink helper
+         * has queued header, payload, and checksum.  ChibiOS SerialUSB keeps
+         * these fragments in its output queue and starts/flushed USB transfers
+         * from queue boundaries; RTT must not kick CherryUSB after only the
+         * 10-byte MAVLink2 header fragment.
+         */
+        rtt_dbg_mav_send_unlock_flush_calls++;
+        mavlink_comm_port[chan]->flush();
+    }
+#endif
     chan_locks[chan].give();
 }
 

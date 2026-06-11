@@ -27,6 +27,54 @@
 
 extern const AP_HAL::HAL& hal;
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#define RTT_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+volatile uint32_t rtt_dbg_gcs_param_queued_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_queued_empty RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_async_sent_total RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_stream_sent_total RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_last_async_sent RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_last_stream_sent RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_last_count_initial RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_last_count_after_async RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_last_bytes_allowed RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_last_txspace RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_last_link_bw RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_time_breaks RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_txbuf_breaks RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_completed RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_last_index RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_quantum_caps RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_last_quantum_count RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_broadcast_deferred RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_last_time_budget_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_zero_stream_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_zero_due_async_cover RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_zero_due_count_zero RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_zero_due_txbuf RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_last_stream_before_index RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_last_stream_after_index RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_last_stream_elapsed_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_max_stream_elapsed_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_last_zero_reason RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_call_gap_max_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_call_gap_last_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_call_gap_large_count RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_call_gap_last_index RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_send_gap_max_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_send_gap_last_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_send_gap_large_count RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_send_gap_before_index RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_send_gap_after_index RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_last_call_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_last_send_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_request_list_count RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_active_until_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_active_window_opened RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_active_window_closed RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_delay_pump_calls RTT_DBG_DTCM_BSS;
+#endif
+
 // queue of pending parameter requests and replies
 // Use thread-safe ObjectBuffer_TS because param_io_timer runs in a
 // separate IO thread on RT-Thread (and ChibiOS), racing with pushes
@@ -43,28 +91,78 @@ bool GCS_MAVLINK::param_timer_registered;
 void
 GCS_MAVLINK::queued_param_send()
 {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_gcs_param_queued_calls++;
+    rtt_dbg_gcs_param_last_stream_sent = 0;
+    const uint32_t rtt_param_call_ms = AP_HAL::millis();
+    if (rtt_dbg_gcs_param_last_call_ms != 0U) {
+        const uint32_t call_gap_ms = rtt_param_call_ms - rtt_dbg_gcs_param_last_call_ms;
+        rtt_dbg_gcs_param_call_gap_last_ms = call_gap_ms;
+        rtt_dbg_gcs_param_call_gap_last_index = _queued_parameter_index;
+        if (call_gap_ms > rtt_dbg_gcs_param_call_gap_max_ms) {
+            rtt_dbg_gcs_param_call_gap_max_ms = call_gap_ms;
+        }
+        if (call_gap_ms > 250U && _queued_parameter != nullptr) {
+            rtt_dbg_gcs_param_call_gap_large_count++;
+        }
+    }
+    rtt_dbg_gcs_param_last_call_ms = rtt_param_call_ms;
+#endif
     // send parameter async replies
     uint8_t async_replies_sent_count = send_parameter_async_replies();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_gcs_param_last_async_sent = async_replies_sent_count;
+    rtt_dbg_gcs_param_async_sent_total += async_replies_sent_count;
+#endif
 
     // now send the streaming parameters (from PARAM_REQUEST_LIST)
     if (_queued_parameter == nullptr) {
         // .... or not....
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_gcs_param_queued_empty++;
+        if (chan == MAVLINK_COMM_0 && rtt_dbg_gcs_param_active_until_ms != 0U) {
+            rtt_dbg_gcs_param_active_until_ms = 0U;
+            rtt_dbg_gcs_param_active_window_closed++;
+        }
+#endif
         return;
     }
 
     const uint32_t tnow = AP_HAL::millis();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    if (chan == MAVLINK_COMM_0) {
+        /*
+         * [Cybernetics Ch.4] Closed-loop: only keep the RTT delay-callback
+         * MAVLink producer assist alive while a real USB PARAM list transfer
+         * is in progress.  This gives ChibiOS-like producer continuity without
+         * permanently stealing startup/INS time from sensor and EKF work.
+         */
+        rtt_dbg_gcs_param_active_until_ms = tnow + 30000U;
+    }
+#endif
     const uint32_t tstart = AP_HAL::micros();
 
     // use at most 30% of bandwidth on parameters
     const uint32_t link_bw = _port->bw_in_bytes_per_second();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_gcs_param_last_link_bw = link_bw;
+#endif
 
-    uint32_t bytes_allowed = link_bw * (tnow - _queued_parameter_send_time_ms) / 3333;
+    uint32_t param_bw_divisor = 3333;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    if (chan == MAVLINK_COMM_0) {
+        // [Cybernetics Ch.15] Extremum seeking: raise USB parameter share while retaining txspace feedback.
+        param_bw_divisor = 2000;
+    }
+#endif
+    uint32_t bytes_allowed = link_bw * (tnow - _queued_parameter_send_time_ms) / param_bw_divisor;
     const uint16_t size_for_one_param_value_msg = MAVLINK_MSG_ID_PARAM_VALUE_LEN + packet_overhead();
     if (bytes_allowed < size_for_one_param_value_msg) {
         bytes_allowed = size_for_one_param_value_msg;
     }
-    if (bytes_allowed > txspace()) {
-        bytes_allowed = txspace();
+    const uint32_t txspace_bytes = txspace();
+    if (bytes_allowed > txspace_bytes) {
+        bytes_allowed = txspace_bytes;
     }
     uint32_t count = bytes_allowed / size_for_one_param_value_msg;
 
@@ -73,11 +171,65 @@ GCS_MAVLINK::queued_param_send()
     if (!have_flow_control() && count > 5) {
         count = 5;
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    if (chan == MAVLINK_COMM_0 && count > 4) {
+        /*
+         * [Cybernetics Ch.4] Closed-loop time slicing: RTT/CherryUSB can now
+         * report a short queue, but a single PARAM_VALUE burst can still occupy
+         * the GCS send window long enough for live sensor/status streams to miss
+         * their 5Hz slots.  Keep parameter throughput via a shorter scheduler
+         * interval, but bound each parameter quantum.
+         */
+        count = 4;
+        rtt_dbg_gcs_param_quantum_caps++;
+    }
+    rtt_dbg_gcs_param_last_quantum_count = count;
+#endif
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_gcs_param_last_bytes_allowed = bytes_allowed;
+    rtt_dbg_gcs_param_last_txspace = txspace_bytes;
+    rtt_dbg_gcs_param_last_count_initial = count;
+#endif
     if (async_replies_sent_count >= count) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        if (_queued_parameter != nullptr) {
+            rtt_dbg_gcs_param_zero_stream_calls++;
+            rtt_dbg_gcs_param_zero_due_async_cover++;
+            rtt_dbg_gcs_param_last_zero_reason = 1;
+            rtt_dbg_gcs_param_last_count_after_async = 0;
+            rtt_dbg_gcs_param_last_stream_before_index = _queued_parameter_index;
+            rtt_dbg_gcs_param_last_stream_after_index = _queued_parameter_index;
+            rtt_dbg_gcs_param_last_stream_elapsed_us = AP_HAL::micros() - tstart;
+        }
+#endif
         return;
     }
     count -= async_replies_sent_count;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_gcs_param_last_count_after_async = count;
+#endif
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    /*
+     * [Cybernetics Ch.4] Closed-loop: DWC2/CherryUSB accounting is now clean,
+     * but stress runs still show PARAM_VALUE bursts breaking on the 1 ms CPU
+     * budget, producing 20s-class downloads while USB bytes remain conserved.
+     * ChibiOS can usually finish the same MAVLink quantum inside 1 ms because
+     * SerialUSB only queues stable buffers here; RTT's path also services the
+     * CherryUSB ring/flush feedback.  Give only the USB main channel a slightly
+     * wider per-quantum CPU budget, while keeping txspace and the 4-message
+     * quantum cap as the backpressure guard.
+     */
+    const uint32_t param_time_budget_us = (chan == MAVLINK_COMM_0) ? 2500U : 1000U;
+    rtt_dbg_gcs_param_last_time_budget_us = param_time_budget_us;
+#else
+    const uint32_t param_time_budget_us = 1000U;
+#endif
+
+    uint32_t stream_sent = 0;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_stream_start_index = _queued_parameter_index;
+#endif
     while (count && _queued_parameter != nullptr && last_txbuf_is_greater(33)) {
         char param_name[AP_MAX_NAME_SIZE];
         _queued_parameter->copy_name_token(_queued_parameter_token, param_name, sizeof(param_name), true);
@@ -90,15 +242,75 @@ GCS_MAVLINK::queued_param_send()
             _queued_parameter_count,
             _queued_parameter_index);
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        const uint32_t rtt_param_send_ms = AP_HAL::millis();
+        if (rtt_dbg_gcs_param_last_send_ms != 0U) {
+            const uint32_t send_gap_ms = rtt_param_send_ms - rtt_dbg_gcs_param_last_send_ms;
+            rtt_dbg_gcs_param_send_gap_last_ms = send_gap_ms;
+            if (send_gap_ms > rtt_dbg_gcs_param_send_gap_max_ms) {
+                rtt_dbg_gcs_param_send_gap_max_ms = send_gap_ms;
+            }
+            if (send_gap_ms > 250U) {
+                rtt_dbg_gcs_param_send_gap_large_count++;
+                rtt_dbg_gcs_param_send_gap_before_index = _queued_parameter_index - 1U;
+                rtt_dbg_gcs_param_send_gap_after_index = _queued_parameter_index;
+            }
+        }
+        rtt_dbg_gcs_param_last_send_ms = rtt_param_send_ms;
+#endif
+
         _queued_parameter = AP_Param::next_scalar(&_queued_parameter_token, &_queued_parameter_type);
         _queued_parameter_index++;
+        stream_sent++;
 
-        if (AP_HAL::micros() - tstart > 1000) {
+        if (AP_HAL::micros() - tstart > param_time_budget_us) {
             // don't use more than 1ms sending blocks of parameters
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_dbg_gcs_param_time_breaks++;
+#endif
             break;
         }
         count--;
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    if (count != 0 && _queued_parameter != nullptr && !last_txbuf_is_greater(33)) {
+        rtt_dbg_gcs_param_txbuf_breaks++;
+    }
+    if (_queued_parameter == nullptr) {
+        rtt_dbg_gcs_param_completed++;
+        if (chan == MAVLINK_COMM_0 && rtt_dbg_gcs_param_active_until_ms != 0U) {
+            rtt_dbg_gcs_param_active_until_ms = 0U;
+            rtt_dbg_gcs_param_active_window_closed++;
+        }
+    }
+    const uint32_t rtt_stream_elapsed_us = AP_HAL::micros() - tstart;
+    rtt_dbg_gcs_param_last_stream_before_index = rtt_stream_start_index;
+    rtt_dbg_gcs_param_last_stream_after_index = _queued_parameter_index;
+    rtt_dbg_gcs_param_last_stream_elapsed_us = rtt_stream_elapsed_us;
+    if (rtt_stream_elapsed_us > rtt_dbg_gcs_param_max_stream_elapsed_us) {
+        rtt_dbg_gcs_param_max_stream_elapsed_us = rtt_stream_elapsed_us;
+    }
+    if (stream_sent == 0 && _queued_parameter != nullptr) {
+        rtt_dbg_gcs_param_zero_stream_calls++;
+        if (async_replies_sent_count >= rtt_dbg_gcs_param_last_count_initial) {
+            rtt_dbg_gcs_param_zero_due_async_cover++;
+            rtt_dbg_gcs_param_last_zero_reason = 1;
+        } else if (rtt_dbg_gcs_param_last_count_after_async == 0) {
+            rtt_dbg_gcs_param_zero_due_count_zero++;
+            rtt_dbg_gcs_param_last_zero_reason = 2;
+        } else if (!last_txbuf_is_greater(33)) {
+            rtt_dbg_gcs_param_zero_due_txbuf++;
+            rtt_dbg_gcs_param_last_zero_reason = 3;
+        } else {
+            rtt_dbg_gcs_param_last_zero_reason = 4;
+        }
+    } else {
+        rtt_dbg_gcs_param_last_zero_reason = 0;
+    }
+    rtt_dbg_gcs_param_last_stream_sent = stream_sent;
+    rtt_dbg_gcs_param_stream_sent_total += stream_sent;
+    rtt_dbg_gcs_param_last_index = _queued_parameter_index;
+#endif
     _queued_parameter_send_time_ms = tnow;
 }
 
@@ -223,6 +435,20 @@ void GCS_MAVLINK::handle_param_request_list(const mavlink_message_t &msg)
     _queued_parameter_index = 0;
     _queued_parameter_count = AP_Param::count_parameters();
     _queued_parameter_send_time_ms = AP_HAL::millis(); // avoid initial flooding
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    /*
+     * [Cybernetics Ch.4] Closed-loop: PARAM gap diagnostics must measure
+     * gaps inside one active PARAM_REQUEST_LIST, not the intentional idle time
+     * between two host download rounds.
+     */
+    rtt_dbg_gcs_param_request_list_count++;
+    rtt_dbg_gcs_param_last_call_ms = 0;
+    rtt_dbg_gcs_param_last_send_ms = 0;
+    if (chan == MAVLINK_COMM_0) {
+        rtt_dbg_gcs_param_active_until_ms = AP_HAL::millis() + 30000U;
+        rtt_dbg_gcs_param_active_window_opened++;
+    }
+#endif
 
     // Ensure MSG_NEXT_PARAM is scheduled even if _PARAMS stream rate is 0
     send_message(MSG_NEXT_PARAM);
@@ -237,32 +463,6 @@ void GCS_MAVLINK::handle_param_request_read(const mavlink_message_t &msg)
     
     mavlink_param_request_read_t packet;
     mavlink_msg_param_request_read_decode(&msg, &packet);
-
-    // Direct send: bypass the broken async IO pipeline on AP_HAL_RTT
-    {
-        AP_Param *vp;
-        AP_Param::ParamToken token {};
-        enum ap_var_type p_type;
-        char param_name[AP_MAX_NAME_SIZE+1] {};
-
-        if (packet.param_index != -1) {
-            vp = AP_Param::find_by_index(packet.param_index, &p_type, &token);
-            if (vp != nullptr) {
-                vp->copy_name_token(token, param_name, AP_MAX_NAME_SIZE, true);
-            }
-        } else {
-            strncpy(param_name, packet.param_id, AP_MAX_NAME_SIZE);
-            vp = AP_Param::find(param_name, &p_type);
-        }
-
-        if (vp != nullptr) {
-            param_name[AP_MAX_NAME_SIZE] = 0;
-            send_parameter_value(param_name, p_type, vp->cast_to_float(p_type));
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-            return;  // avoid duplicate io-timer queue + count_parameters
-#endif
-        }
-    }
 
     /*
       we reserve some space for sending parameters if the client ever
@@ -383,8 +583,38 @@ void GCS::send_parameter_value(const char *param_name, ap_var_type param_type, f
     packet.param_count = AP_Param::count_parameters();
     packet.param_index = -1;
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const mavlink_msg_entry_t *entry = mavlink_get_msg_entry(MAVLINK_MSG_ID_PARAM_VALUE);
+    if (entry == nullptr) {
+        return;
+    }
+    for (uint8_t i = 0; i < num_gcs(); i++) {
+        GCS_MAVLINK &c = *chan(i);
+        if (c.is_private() || !c.is_active()) {
+            continue;
+        }
+#if HAL_HIGH_LATENCY2_ENABLED
+        if (c.is_high_latency_link) {
+            continue;
+        }
+#endif
+        /*
+         * [Cybernetics Ch.4] Closed-loop: on RTT USB, a full PARAM_REQUEST_LIST
+         * owns the PARAM_VALUE stream.  Do not interleave index=-1 parameter
+         * broadcasts such as STAT_RUNTIME into the same CDC backlog; they are
+         * refreshed after the list transfer and otherwise disturb ordering and
+         * live telemetry on the short USB queue.
+         */
+        if (c.get_chan() == MAVLINK_COMM_0 && c._queued_parameter != nullptr) {
+            rtt_dbg_gcs_param_broadcast_deferred++;
+            continue;
+        }
+        c.send_message((const char *)&packet, entry);
+    }
+#else
     gcs().send_to_active_channels(MAVLINK_MSG_ID_PARAM_VALUE,
                                   (const char *)&packet);
+#endif
 
 #if HAL_LOGGING_ENABLED
     // also log to AP_Logger

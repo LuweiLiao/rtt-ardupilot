@@ -50,9 +50,45 @@ extern const AP_HAL::HAL& hal;
 struct GCS_MAVLINK::ftp_state GCS_MAVLINK::ftp;
 
 #if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-volatile uint32_t ftp_dbg_state = 0;
-volatile uint32_t ftp_dbg_opcode = 0;
-volatile uint32_t ftp_dbg_stat_count = 0;
+#define RTT_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+volatile uint32_t ftp_dbg_state RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t ftp_dbg_opcode RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t ftp_dbg_stat_count RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_dbg_ftp_requests_pushed RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_requests_dropped RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_last_request_opcode RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_last_request_seq RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_last_request_session RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_last_request_offset RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_last_request_size RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_send_reply_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_send_reply_sent RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_send_reply_block_last_txbuf RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_send_reply_block_payload RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_send_reply_last_txspace RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_send_reply_last_opcode RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_send_reply_last_req_opcode RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_send_reply_last_seq RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_send_reply_last_offset RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_send_reply_last_size RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_push_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_push_wait_loops RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_push_last_wait_loops RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_push_max_wait_loops RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_readfile_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_readfile_last_offset RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_readfile_last_size RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_readfile_lseek_ret RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_readfile_read_ret RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_readfile_errno RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_readfile_ack RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_readfile_eof RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_param_banner_suppressed RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_post_send_drain_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_post_send_drain_wait_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_post_send_drain_max_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_post_send_drain_timeouts RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ftp_post_send_drain_last_txspace RTT_DBG_DTCM_BSS;
 #endif
 
 // timeout for session inactivity
@@ -115,17 +151,44 @@ void GCS_MAVLINK::handle_file_transfer_protocol(const mavlink_message_t &msg) {
         if (!ftp.requests->push(request)) {
             // dropping the message, no buffer space to queue it in
             // we could NACK it, but that can lead to GCS confusion, so we're treating it like lost data
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_dbg_ftp_requests_dropped++;
+#endif
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        } else {
+            rtt_dbg_ftp_requests_pushed++;
+            rtt_dbg_ftp_last_request_opcode = static_cast<uint32_t>(request.opcode);
+            rtt_dbg_ftp_last_request_seq = request.seq_number;
+            rtt_dbg_ftp_last_request_session = request.session;
+            rtt_dbg_ftp_last_request_offset = request.offset;
+            rtt_dbg_ftp_last_request_size = request.size;
+#endif
         }
     }
 }
 
 bool GCS_MAVLINK::send_ftp_reply(const pending_ftp &reply)
 {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_ftp_send_reply_calls++;
+    rtt_dbg_ftp_send_reply_last_txspace = txspace();
+    rtt_dbg_ftp_send_reply_last_opcode = static_cast<uint32_t>(reply.opcode);
+    rtt_dbg_ftp_send_reply_last_req_opcode = static_cast<uint32_t>(reply.req_opcode);
+    rtt_dbg_ftp_send_reply_last_seq = reply.seq_number;
+    rtt_dbg_ftp_send_reply_last_offset = reply.offset;
+    rtt_dbg_ftp_send_reply_last_size = reply.size;
+#endif
     if (!last_txbuf_is_greater(33)) { // It helps avoid GCS timeout if this is less than the threshold where we slow down normal streams (<=49)
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_ftp_send_reply_block_last_txbuf++;
+#endif
         return false;
     }
     WITH_SEMAPHORE(comm_chan_lock(reply.chan));
     if (!HAVE_PAYLOAD_SPACE(chan, FILE_TRANSFER_PROTOCOL)) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_ftp_send_reply_block_payload++;
+#endif
         return false;
     }
     uint8_t payload[251] = {};
@@ -141,6 +204,9 @@ bool GCS_MAVLINK::send_ftp_reply(const pending_ftp &reply)
         reply.chan,
         0, reply.sysid, reply.compid,
         payload);
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_ftp_send_reply_sent++;
+#endif
     return true;
 }
 
@@ -183,9 +249,52 @@ void GCS_MAVLINK::ftp_push_replies(pending_ftp &reply)
 {
     ftp.last_send_ms = AP_HAL::millis(); // Used to detect active FTP session
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_ftp_push_calls++;
+    uint32_t rtt_wait_loops = 0;
+#endif
     while (!send_ftp_reply(reply)) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_wait_loops++;
+        rtt_dbg_ftp_push_wait_loops++;
+#endif
         hal.scheduler->delay(2);
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    if (reply.req_opcode == FTP_OP::ReadFile &&
+        reply.opcode == FTP_OP::Ack &&
+        reply.size > 64U) {
+        /*
+         * [Cybernetics Ch.4] Closed-loop: on RTT/CherryUSB, mavlink send
+         * success only means the FTP ACK was accepted into the short USB
+         * pipeline.  Pace large FTP replies by the same txspace feedback used
+         * by the scheduler so the next request/reply pair does not outrun
+         * the CDC IN completion chain.
+         */
+        rtt_dbg_ftp_post_send_drain_calls++;
+        const uint32_t need_space = PAYLOAD_SIZE(reply.chan, FILE_TRANSFER_PROTOCOL);
+        uint32_t waited_ms = 0;
+        while (comm_get_txspace(reply.chan) < need_space && waited_ms < 25U) {
+            hal.scheduler->delay(1);
+            waited_ms++;
+        }
+        const uint32_t txspace_after = comm_get_txspace(reply.chan);
+        rtt_dbg_ftp_post_send_drain_last_txspace = txspace_after;
+        rtt_dbg_ftp_post_send_drain_wait_ms += waited_ms;
+        if (waited_ms > rtt_dbg_ftp_post_send_drain_max_ms) {
+            rtt_dbg_ftp_post_send_drain_max_ms = waited_ms;
+        }
+        if (txspace_after < need_space) {
+            rtt_dbg_ftp_post_send_drain_timeouts++;
+        }
+    }
+#endif
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_ftp_push_last_wait_loops = rtt_wait_loops;
+    if (rtt_wait_loops > rtt_dbg_ftp_push_max_wait_loops) {
+        rtt_dbg_ftp_push_max_wait_loops = rtt_wait_loops;
+    }
+#endif
 
     if (reply.req_opcode == FTP_OP::TerminateSession) {
         ftp.last_send_ms = 0;
@@ -382,12 +491,32 @@ void GCS_MAVLINK::ftp_worker(void) {
 
                         // provide compatibility with old protocol banner download
                         if (strncmp((const char *)request.data, "@PARAM/param.pck", 16) == 0) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                            /*
+                             * [Cybernetics Ch.4] Closed-loop: keep RTT USB
+                             * MAVFTP parameter transfer as a pure request/reply
+                             * stream while CherryUSB backpressure is being
+                             * closed. Injecting STATUSTEXT banner frames after
+                             * OpenFileRO can fill the short CDC queue before the
+                             * next 239B ReadFile ACK reaches the host.
+                             */
+                            rtt_dbg_ftp_param_banner_suppressed++;
+#else
                             ftp.need_banner_send_mask |= 1U<<reply.chan;
+#endif
                         }
                         break;
                     }
                 case FTP_OP::ReadFile:
                     {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                        rtt_dbg_ftp_readfile_calls++;
+                        rtt_dbg_ftp_readfile_last_offset = request.offset;
+                        rtt_dbg_ftp_readfile_last_size = request.size;
+                        rtt_dbg_ftp_readfile_lseek_ret = 0xFFFFFFFFU;
+                        rtt_dbg_ftp_readfile_read_ret = 0xFFFFFFFFU;
+                        rtt_dbg_ftp_readfile_errno = 0;
+#endif
                         // must actually be working on a file
                         if (ftp.fd == -1) {
                             ftp_error(reply, FTP_ERROR::FileNotFound);
@@ -401,18 +530,30 @@ void GCS_MAVLINK::ftp_worker(void) {
                         }
 
                         // seek to requested offset
-                        if (AP::FS().lseek(ftp.fd, request.offset, SEEK_SET) == -1) {
+                        const int32_t seek_ret = AP::FS().lseek(ftp.fd, request.offset, SEEK_SET);
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                        rtt_dbg_ftp_readfile_lseek_ret = (uint32_t)seek_ret;
+                        rtt_dbg_ftp_readfile_errno = (uint32_t)errno;
+#endif
+                        if (seek_ret == -1) {
                             ftp_error(reply, FTP_ERROR::FailErrno);
                             break;
                         }
 
                         // fill the buffer
                         const ssize_t read_bytes = AP::FS().read(ftp.fd, reply.data, MIN(sizeof(reply.data),request.size));
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                        rtt_dbg_ftp_readfile_read_ret = (uint32_t)read_bytes;
+                        rtt_dbg_ftp_readfile_errno = (uint32_t)errno;
+#endif
                         if (read_bytes == -1) {
                             ftp_error(reply, FTP_ERROR::FailErrno);
                             break;
                         }
                         if (read_bytes == 0) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                            rtt_dbg_ftp_readfile_eof++;
+#endif
                             ftp_error(reply, FTP_ERROR::EndOfFile);
                             break;
                         }
@@ -420,6 +561,9 @@ void GCS_MAVLINK::ftp_worker(void) {
                         reply.opcode = FTP_OP::Ack;
                         reply.offset = request.offset;
                         reply.size = (uint8_t)read_bytes;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                        rtt_dbg_ftp_readfile_ack++;
+#endif
                         break;
                     }
                 case FTP_OP::Ack:

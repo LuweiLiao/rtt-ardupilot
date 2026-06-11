@@ -78,20 +78,76 @@ static const int16_t IST8310_MIN_VAL_Z  = -IST8310_MAX_VAL_Z;
 
 extern const AP_HAL::HAL &hal;
 
+#define RTT_IST8310_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+
+enum {
+    RTT_IST8310_FAIL_NONE = 0,
+    RTT_IST8310_FAIL_NO_DEV = 1,
+    RTT_IST8310_FAIL_ALLOC_OR_INIT = 2,
+    RTT_IST8310_FAIL_WHOAMI_READ = 3,
+    RTT_IST8310_FAIL_WHOAMI_MISMATCH = 4,
+    RTT_IST8310_FAIL_RESET_STUCK = 5,
+    RTT_IST8310_FAIL_SETUP_WRITE = 6,
+    RTT_IST8310_FAIL_REGISTER_COMPASS = 7,
+};
+
+volatile uint32_t rtt_dbg_ist8310_probe_calls RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_probe_null_dev RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_probe_init_fail RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_probe_success RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_init_calls RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_init_success RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_fail_reason RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_fail_counts[8] RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_initial_reset_write_ok RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_whoami_read_ok RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_whoami_attempts RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_last_whoami RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_reset_attempts RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_reset_write_fail RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_reset_read_ok RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_last_cntl2 RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_setup_avgcntl_ok RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_setup_pdcntl_ok RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_start_conversion_calls RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_start_conversion_fail RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_timer_calls RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_timer_read_fail RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_timer_outlier RTT_IST8310_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ist8310_timer_accumulate RTT_IST8310_DBG_DTCM_BSS;
+
+static void rtt_ist8310_fail(uint32_t reason)
+{
+    rtt_dbg_ist8310_fail_reason = reason;
+    if (reason < sizeof(rtt_dbg_ist8310_fail_counts) / sizeof(rtt_dbg_ist8310_fail_counts[0])) {
+        rtt_dbg_ist8310_fail_counts[reason]++;
+    }
+}
+
 AP_Compass_Backend *AP_Compass_IST8310::probe(AP_HAL::OwnPtr<AP_HAL::I2CDevice> dev,
                                               bool force_external,
                                               enum Rotation rotation)
 {
+    rtt_dbg_ist8310_probe_calls++;
     if (!dev) {
+        rtt_dbg_ist8310_probe_null_dev++;
+        rtt_ist8310_fail(RTT_IST8310_FAIL_NO_DEV);
         return nullptr;
     }
 
     AP_Compass_IST8310 *sensor = NEW_NOTHROW AP_Compass_IST8310(std::move(dev), force_external, rotation);
-    if (!sensor || !sensor->init()) {
+    if (!sensor) {
+        rtt_dbg_ist8310_probe_init_fail++;
+        rtt_ist8310_fail(RTT_IST8310_FAIL_ALLOC_OR_INIT);
+        return nullptr;
+    }
+    if (!sensor->init()) {
+        rtt_dbg_ist8310_probe_init_fail++;
         delete sensor;
         return nullptr;
     }
 
+    rtt_dbg_ist8310_probe_success++;
     return sensor;
 }
 
@@ -106,6 +162,7 @@ AP_Compass_IST8310::AP_Compass_IST8310(AP_HAL::OwnPtr<AP_HAL::Device> dev,
 
 bool AP_Compass_IST8310::init()
 {
+    rtt_dbg_ist8310_init_calls++;
     uint8_t reset_count = 0;
 
     _dev->get_semaphore()->take_blocking();
@@ -126,18 +183,44 @@ bool AP_Compass_IST8310::init()
       a real IST8310, but it is the best we can do given the bad
       hardware design of the sensor
      */
-    _dev->write_register(CNTL2_REG, CNTL2_VAL_SRST);
-    hal.scheduler->delay(10);
+    uint8_t whoami = 0;
+    bool whoami_read_ok = false;
+    for (uint8_t attempt = 0; attempt < 5; attempt++) {
+        rtt_dbg_ist8310_whoami_attempts = attempt + 1U;
+        rtt_dbg_ist8310_initial_reset_write_ok =
+            _dev->write_register(CNTL2_REG, CNTL2_VAL_SRST) ? 1U : 0U;
+        if (!rtt_dbg_ist8310_initial_reset_write_ok) {
+            rtt_dbg_ist8310_reset_write_fail++;
+            hal.scheduler->delay(20);
+            continue;
+        }
 
-    uint8_t whoami;
-    if (!_dev->read_registers(WAI_REG, &whoami, 1) ||
-        whoami != DEVICE_ID) {
+        hal.scheduler->delay(20);
+
+        whoami_read_ok = _dev->read_registers(WAI_REG, &whoami, 1);
+        rtt_dbg_ist8310_whoami_read_ok = whoami_read_ok ? 1U : 0U;
+        rtt_dbg_ist8310_last_whoami = whoami;
+        if (whoami_read_ok && whoami == DEVICE_ID) {
+            break;
+        }
+        hal.scheduler->delay(20);
+    }
+
+    // [Cybernetics Ch.9] Noise tolerance: early RTT I2C startup can miss the first WAI read.
+    if (!whoami_read_ok) {
+        rtt_ist8310_fail(RTT_IST8310_FAIL_WHOAMI_READ);
+        goto fail;
+    }
+    if (whoami != DEVICE_ID) {
         // not an IST8310
+        rtt_ist8310_fail(RTT_IST8310_FAIL_WHOAMI_MISMATCH);
         goto fail;
     }
 
     for (; reset_count < 5; reset_count++) {
+        rtt_dbg_ist8310_reset_attempts = reset_count + 1U;
         if (!_dev->write_register(CNTL2_REG, CNTL2_VAL_SRST)) {
+            rtt_dbg_ist8310_reset_write_fail++;
             hal.scheduler->delay(10);
             continue;
         }
@@ -145,19 +228,28 @@ bool AP_Compass_IST8310::init()
         hal.scheduler->delay(10);
 
         uint8_t cntl2 = 0xFF;
-        if (_dev->read_registers(CNTL2_REG, &cntl2, 1) &&
-            (cntl2 & 0x01) == 0) {
+        bool cntl2_read_ok = _dev->read_registers(CNTL2_REG, &cntl2, 1);
+        rtt_dbg_ist8310_last_cntl2 = cntl2;
+        if (cntl2_read_ok) {
+            rtt_dbg_ist8310_reset_read_ok++;
+        }
+        if (cntl2_read_ok && (cntl2 & 0x01) == 0) {
             break;
         }
     }
 
     if (reset_count == 5) {
+        rtt_ist8310_fail(RTT_IST8310_FAIL_RESET_STUCK);
         printf("IST8310: failed to reset device\n");
         goto fail;
     }
 
-    if (!_dev->write_register(AVGCNTL_REG, AVGCNTL_VAL_Y_16 | AVGCNTL_VAL_XZ_16) ||
-        !_dev->write_register(PDCNTL_REG, PDCNTL_VAL_PULSE_DURATION_NORMAL)) {
+    rtt_dbg_ist8310_setup_avgcntl_ok =
+        _dev->write_register(AVGCNTL_REG, AVGCNTL_VAL_Y_16 | AVGCNTL_VAL_XZ_16) ? 1U : 0U;
+    rtt_dbg_ist8310_setup_pdcntl_ok =
+        _dev->write_register(PDCNTL_REG, PDCNTL_VAL_PULSE_DURATION_NORMAL) ? 1U : 0U;
+    if (!rtt_dbg_ist8310_setup_avgcntl_ok || !rtt_dbg_ist8310_setup_pdcntl_ok) {
+        rtt_ist8310_fail(RTT_IST8310_FAIL_SETUP_WRITE);
         printf("IST8310: found device but could not set it up\n");
         goto fail;
     }
@@ -173,6 +265,7 @@ bool AP_Compass_IST8310::init()
     // register compass instance
     _dev->set_device_type(DEVTYPE_IST8310);
     if (!register_compass(_dev->get_bus_id(), _instance)) {
+        rtt_ist8310_fail(RTT_IST8310_FAIL_REGISTER_COMPASS);
         return false;
     }
     set_dev_id(_instance, _dev->get_bus_id());
@@ -189,6 +282,8 @@ bool AP_Compass_IST8310::init()
     _periodic_handle = _dev->register_periodic_callback(SAMPLING_PERIOD_USEC,
         FUNCTOR_BIND_MEMBER(&AP_Compass_IST8310::timer, void));
 
+    rtt_dbg_ist8310_init_success++;
+    rtt_ist8310_fail(RTT_IST8310_FAIL_NONE);
     return true;
 
 fail:
@@ -198,13 +293,16 @@ fail:
 
 void AP_Compass_IST8310::start_conversion()
 {
+    rtt_dbg_ist8310_start_conversion_calls++;
     if (!_dev->write_register(CNTL1_REG, CNTL1_VAL_SINGLE_MEASUREMENT_MODE)) {
+        rtt_dbg_ist8310_start_conversion_fail++;
         _ignore_next_sample = true;
     }
 }
 
 void AP_Compass_IST8310::timer()
 {
+    rtt_dbg_ist8310_timer_calls++;
     if (_ignore_next_sample) {
         _ignore_next_sample = false;
         start_conversion();
@@ -219,6 +317,7 @@ void AP_Compass_IST8310::timer()
 
     bool ret = _dev->read_registers(OUTPUT_X_L_REG, (uint8_t *) &buffer, sizeof(buffer));
     if (!ret) {
+        rtt_dbg_ist8310_timer_read_fail++;
         return;
     }
 
@@ -238,6 +337,7 @@ void AP_Compass_IST8310::timer()
     if (x > IST8310_MAX_VAL_XY || x < IST8310_MIN_VAL_XY ||
         y > IST8310_MAX_VAL_XY || y < IST8310_MIN_VAL_XY ||
         z > IST8310_MAX_VAL_Z  || z < IST8310_MIN_VAL_Z) {
+        rtt_dbg_ist8310_timer_outlier++;
         return;
     }
 
@@ -247,6 +347,7 @@ void AP_Compass_IST8310::timer()
     /* Resolution: 0.3 µT/LSB - already convert to milligauss */
     Vector3f field = Vector3f{x * 3.0f, y * 3.0f, z * 3.0f};
 
+    rtt_dbg_ist8310_timer_accumulate++;
     accumulate_sample(field, _instance);
 }
 

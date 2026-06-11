@@ -30,6 +30,32 @@
 
 extern const AP_HAL::HAL& hal;
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#define RTT_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+volatile uint32_t rtt_dbg_fs_param_read_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_read_last_fd RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_read_last_count RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_read_last_file_ofs_in RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_read_last_file_ofs_out RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_read_last_data_ofs RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_read_last_cursor RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_read_last_cursor_ofs_in RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_read_last_cursor_ofs_out RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_read_last_trailer_in RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_read_last_trailer_out RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_read_last_return RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_read_eof RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_read_token_seek_fail RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_read_pack_zero RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_read_last_pack_len RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_read_last_pack_idx RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_lseek_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_lseek_last_fd RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_lseek_last_offset RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_lseek_last_whence RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_fs_param_lseek_last_return RTT_DBG_DTCM_BSS;
+#endif
+
 // QURT HAL already has a declaration of errno in errno.h
 #if CONFIG_HAL_BOARD != HAL_BOARD_QURT
 extern int errno;
@@ -59,6 +85,10 @@ int AP_Filesystem_Param::open(const char *fname, int flags, bool allow_absolute_
             errno = ENOMEM;
             return -1;
         }
+        // [Cybernetics Ch.4] Closed-loop: first read uses cursor offsets.
+        // RTT heap memory is not guaranteed to be zeroed, so stale cursor
+        // state can make @PARAM/param.pck seek through the virtual file.
+        memset(r.cursors, 0, sizeof(cursor) * num_cursors);
     }
     r.file_ofs = 0;
     r.open = true;
@@ -322,12 +352,20 @@ bool AP_Filesystem_Param::token_seek(const struct rfile &r, const uint32_t data_
 
 int32_t AP_Filesystem_Param::read(int fd, void *buf, uint32_t count)
 {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_fs_param_read_calls++;
+    rtt_dbg_fs_param_read_last_fd = (uint32_t)fd;
+    rtt_dbg_fs_param_read_last_count = count;
+#endif
     if (fd < 0 || fd >= max_open_file || !file[fd].open) {
         errno = EBADF;
         return -1;
     }
 
     struct rfile &r = file[fd];
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_fs_param_read_last_file_ofs_in = r.file_ofs;
+#endif
     if (r.writebuf != nullptr) {
         // no read on upload
         errno = EINVAL;
@@ -379,6 +417,10 @@ int32_t AP_Filesystem_Param::read(int fd, void *buf, uint32_t count)
         r.file_ofs += n;
         buf = (void *)(n + (const uint8_t *)buf);
         if (count == 0) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_dbg_fs_param_read_last_file_ofs_out = r.file_ofs;
+            rtt_dbg_fs_param_read_last_return = header_total;
+#endif
             return header_total;
         }
     }
@@ -397,14 +439,33 @@ int32_t AP_Filesystem_Param::read(int fd, void *buf, uint32_t count)
         }
     }
     struct cursor &c = r.cursors[best_i];
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_fs_param_read_last_data_ofs = data_ofs;
+    rtt_dbg_fs_param_read_last_cursor = best_i;
+    rtt_dbg_fs_param_read_last_cursor_ofs_in = c.token_ofs;
+    rtt_dbg_fs_param_read_last_trailer_in = c.trailer_len;
+#endif
 
     if (data_ofs != c.token_ofs) {
         if (!token_seek(r, data_ofs, c)) {
             // must be EOF
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_dbg_fs_param_read_token_seek_fail++;
+            rtt_dbg_fs_param_read_last_cursor_ofs_out = c.token_ofs;
+            rtt_dbg_fs_param_read_last_trailer_out = c.trailer_len;
+            rtt_dbg_fs_param_read_last_file_ofs_out = r.file_ofs;
+            rtt_dbg_fs_param_read_last_return = header_total;
+#endif
             return header_total;
         }
     }
     if (count == 0) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_fs_param_read_last_cursor_ofs_out = c.token_ofs;
+        rtt_dbg_fs_param_read_last_trailer_out = c.trailer_len;
+        rtt_dbg_fs_param_read_last_file_ofs_out = r.file_ofs;
+        rtt_dbg_fs_param_read_last_return = header_total;
+#endif
         return header_total;
     }
     uint8_t *ubuf = (uint8_t *)buf;
@@ -425,6 +486,10 @@ int32_t AP_Filesystem_Param::read(int fd, void *buf, uint32_t count)
     while (count > 0) {
         uint8_t tbuf[max_pack_len];
         uint8_t len = pack_param(r, c, tbuf);
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_fs_param_read_last_pack_len = len;
+        rtt_dbg_fs_param_read_last_pack_idx = c.idx;
+#endif
         if (len == 0) {
             // no more params, use this to trigger EOF in later reads
             const uint32_t size = r.file_ofs + total;
@@ -433,6 +498,10 @@ int32_t AP_Filesystem_Param::read(int fd, void *buf, uint32_t count)
             } else {
                 r.file_size = MIN(size, r.file_size);
             }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_dbg_fs_param_read_pack_zero++;
+            rtt_dbg_fs_param_read_eof++;
+#endif
             break;
         }
         uint8_t n = MIN(len, count);
@@ -447,11 +516,23 @@ int32_t AP_Filesystem_Param::read(int fd, void *buf, uint32_t count)
         c.token_ofs += n;
     }
     r.file_ofs += total;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_fs_param_read_last_cursor_ofs_out = c.token_ofs;
+    rtt_dbg_fs_param_read_last_trailer_out = c.trailer_len;
+    rtt_dbg_fs_param_read_last_file_ofs_out = r.file_ofs;
+    rtt_dbg_fs_param_read_last_return = total + header_total;
+#endif
     return total + header_total;
 }
 
 int32_t AP_Filesystem_Param::lseek(int fd, int32_t offset, int seek_from)
 {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_fs_param_lseek_calls++;
+    rtt_dbg_fs_param_lseek_last_fd = (uint32_t)fd;
+    rtt_dbg_fs_param_lseek_last_offset = (uint32_t)offset;
+    rtt_dbg_fs_param_lseek_last_whence = (uint32_t)seek_from;
+#endif
     if (fd < 0 || fd >= max_open_file || !file[fd].open) {
         errno = EBADF;
         return -1;
@@ -468,6 +549,9 @@ int32_t AP_Filesystem_Param::lseek(int fd, int32_t offset, int seek_from)
         errno = EINVAL;
         return -1;
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_fs_param_lseek_last_return = r.file_ofs;
+#endif
     return r.file_ofs;
 }
 

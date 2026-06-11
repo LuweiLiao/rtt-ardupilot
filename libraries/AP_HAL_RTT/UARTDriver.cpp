@@ -24,6 +24,17 @@ extern "C" {
 
 #include "hal_usb_lld_rtt.h"
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#define RTT_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+extern volatile uint32_t rtt_dbg_mav_send_lock_depth_total __attribute__((weak));
+
+static bool rtt_uart_mavlink_send_locked()
+{
+    return (&rtt_dbg_mav_send_lock_depth_total != nullptr) &&
+           (rtt_dbg_mav_send_lock_depth_total > 0U);
+}
+#endif
+
 /* USB debug counters from DWC2 driver (non-invasive monitoring) */
 extern "C" {
 extern volatile uint32_t dbg_iepint_calls;
@@ -142,7 +153,7 @@ static USART_TypeDef *uart_from_name(const char *name)
  * Polled UART TX: write len bytes from buf by polling TXE and TC.
  * Returns number of bytes actually written.
  */
-static uint32_t uart_poll_write(USART_TypeDef *usart, const uint8_t *buf, uint32_t len)
+static uint32_t uart_poll_write(USART_TypeDef *usart, const uint8_t *buf, uint32_t len, bool wait_tc)
 {
     for (uint32_t i = 0; i < len; i++) {
         uint32_t timeout = 50000;
@@ -152,8 +163,10 @@ static uint32_t uart_poll_write(USART_TypeDef *usart, const uint8_t *buf, uint32
         }
         usart->TDR = buf[i];
     }
-    uint32_t timeout = 50000;
-    while (!(usart->ISR & USART_ISR_TC) && --timeout) { asm volatile("nop"); }
+    if (wait_tc) {
+        uint32_t timeout = 50000;
+        while (!(usart->ISR & USART_ISR_TC) && --timeout) { asm volatile("nop"); }
+    }
     return len;
 }
 
@@ -400,15 +413,27 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
      * USB CDC path — direct DWC2 register access, no RT-Thread device
      * ================================ */
     if (is_usb) {
-        if (txSpace < 8192) { txSpace = 8192; }
-        if (rxSpace < 2048) { rxSpace = 2048; }
+        /*
+         * [Cybernetics Ch.4] Closed-loop: keep the AP-side USB queue close to
+         * ChibiOS SerialUSB scale.  A very large pre-CDC queue hides endpoint
+         * backpressure from GCS, so PARAM_VALUE can sit behind ordinary
+         * telemetry even while DWC2/CherryUSB byte accounting is perfect.
+         */
+        if (txSpace < RTT_UART_USB_TX_BUF_SIZE) { txSpace = RTT_UART_USB_TX_BUF_SIZE; }
+        if (rxSpace < RTT_UART_USB_RX_BUF_SIZE) { rxSpace = RTT_UART_USB_RX_BUF_SIZE; }
 
         /* No rt_device needed — USB is handled by hal_usb_lld_rtt.c directly.
          * The DWC2 init is done by usb_lld_init_rtt() in HAL_RTT_Class.cpp */
 
         _baudrate = baud;
         _is_usb = true;
-        _flow_control = FLOW_CONTROL_ENABLE;
+        /*
+         * [Cybernetics Ch.4] Closed-loop: USB CDC has no host-visible hardware
+         * flow-control line.  ChibiOS leaves USB flow control disabled; doing
+         * the same here keeps MAVFTP burst pacing active instead of letting
+         * large ReadFile ACKs outrun CherryUSB/DWC2 completion feedback.
+         */
+        _flow_control = FLOW_CONTROL_DISABLE;
         _usb_console_driver = this;
         _deferred_open = false;
 
@@ -778,10 +803,56 @@ void UARTDriver::_drain_rx_to_readbuf()
 }
 
 /* Debug counters for UART drain path — read via GDB */
-volatile uint32_t rtt_uart_dbg_drain_calls = 0;
-volatile uint32_t rtt_uart_dbg_drain_writes = 0;
-volatile uint32_t rtt_uart_dbg_drain_zero = 0;
-volatile uint32_t rtt_uart_dbg_drain_bytes = 0;
+volatile uint32_t rtt_uart_dbg_drain_calls RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_drain_writes RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_drain_zero RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_drain_bytes RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_drain_usb_full RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_drain_usb_reentry RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_drain_usb_rounds RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_drain_usb_round_limit RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_drain_usb_pending_limit RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_drain_usb_last_pending RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_txspace_calls RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_txspace_last_writebuf_space RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_txspace_last_writebuf_available RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_txspace_last_lld_space RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_txspace_min_writebuf_space RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_txspace_min_lld_space RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_txspace_last_return RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_txspace_last_backlog_allowance RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_write_calls RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_write_short RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_write_drain_loops RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_write_last_size RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_write_last_written RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_write_last_space_before RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_write_last_space_after_drain RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_write_last_available_after_drain RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_write_post_drain_calls RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_write_no_space RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_write_wait_ms RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_write_max_wait_ms RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_poll_drain_calls RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_poll_drain_limited RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_poll_drain_bytes RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_poll_drain_zero RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_poll_drain_last_port RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_poll_drain_last_len RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_poll_drain_last_written RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_poll_drain_last_us RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_poll_drain_max_us RTT_DBG_DTCM_BSS = 0;
+#define RTT_UART_DBG_USB_TRACE_DEPTH 64U
+volatile uint32_t rtt_uart_dbg_usb_trace_head RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_trace_total RTT_DBG_DTCM_BSS = 0;
+volatile uint32_t rtt_uart_dbg_usb_trace_kind[RTT_UART_DBG_USB_TRACE_DEPTH] RTT_DBG_DTCM_BSS = {0};
+volatile uint32_t rtt_uart_dbg_usb_trace_len[RTT_UART_DBG_USB_TRACE_DEPTH] RTT_DBG_DTCM_BSS = {0};
+volatile uint32_t rtt_uart_dbg_usb_trace_available[RTT_UART_DBG_USB_TRACE_DEPTH] RTT_DBG_DTCM_BSS = {0};
+volatile uint32_t rtt_uart_dbg_usb_trace_lld_space[RTT_UART_DBG_USB_TRACE_DEPTH] RTT_DBG_DTCM_BSS = {0};
+volatile uint32_t rtt_uart_dbg_usb_trace_w0[RTT_UART_DBG_USB_TRACE_DEPTH] RTT_DBG_DTCM_BSS = {0};
+volatile uint32_t rtt_uart_dbg_usb_trace_w1[RTT_UART_DBG_USB_TRACE_DEPTH] RTT_DBG_DTCM_BSS = {0};
+volatile uint32_t rtt_uart_dbg_usb_trace_w2[RTT_UART_DBG_USB_TRACE_DEPTH] RTT_DBG_DTCM_BSS = {0};
+volatile uint32_t rtt_uart_dbg_usb_trace_w3[RTT_UART_DBG_USB_TRACE_DEPTH] RTT_DBG_DTCM_BSS = {0};
 volatile uint32_t rtt_uart_dbg_rx_dma_starts = 0;
 volatile uint32_t rtt_uart_dbg_rx_dma_start_fail = 0;
 volatile uint32_t rtt_uart_dbg_rx_dma_drains = 0;
@@ -792,16 +863,74 @@ volatile uint32_t rtt_uart_dbg_rx_dma_head = 0;
 volatile uint32_t rtt_uart_dbg_rx_dma_tail = 0;
 volatile uint32_t rtt_uart_dbg_rx_dma_ndtr = 0;
 
+static uint32_t rtt_uart_dbg_pack4(const uint8_t *buf, uint32_t len, uint32_t ofs)
+{
+    uint32_t v = 0;
+    for (uint32_t i = 0; i < 4; i++) {
+        const uint32_t p = ofs + i;
+        if (buf != nullptr && p < len) {
+            v |= uint32_t(buf[p]) << (i * 8U);
+        }
+    }
+    return v;
+}
+
+static void rtt_uart_dbg_usb_trace(uint32_t kind, const uint8_t *buf, uint32_t len,
+                                   uint32_t available, uint32_t lld_space)
+{
+    const uint32_t idx = rtt_uart_dbg_usb_trace_head & (RTT_UART_DBG_USB_TRACE_DEPTH - 1U);
+    rtt_uart_dbg_usb_trace_kind[idx] = kind;
+    rtt_uart_dbg_usb_trace_len[idx] = len;
+    rtt_uart_dbg_usb_trace_available[idx] = available;
+    rtt_uart_dbg_usb_trace_lld_space[idx] = lld_space;
+    rtt_uart_dbg_usb_trace_w0[idx] = rtt_uart_dbg_pack4(buf, len, 0);
+    rtt_uart_dbg_usb_trace_w1[idx] = rtt_uart_dbg_pack4(buf, len, 4);
+    rtt_uart_dbg_usb_trace_w2[idx] = rtt_uart_dbg_pack4(buf, len, 8);
+    rtt_uart_dbg_usb_trace_w3[idx] = rtt_uart_dbg_pack4(buf, len, 12);
+    rtt_uart_dbg_usb_trace_head++;
+    rtt_uart_dbg_usb_trace_total++;
+}
+
 void UARTDriver::_drain_writebuf_to_dev()
 {
     if (_is_usb) {
         /* USB path: write directly to DWC2 EP1 TX FIFO */
         /* Send data in FS bulk packets (max 64 bytes each) */
-        uint32_t n = _writebuf.peekbytes(_tx_bounce, sizeof(_tx_bounce));
+        rt_base_t level = rt_hw_interrupt_disable();
+        if (_tx_drain_active) {
+            rt_hw_interrupt_enable(level);
+            rtt_uart_dbg_drain_calls++;
+            rtt_uart_dbg_drain_usb_reentry++;
+            return;
+        }
+        _tx_drain_active = true;
+        rt_hw_interrupt_enable(level);
+
+        const uint32_t lld_space = usb_lld_txspace_rtt(1);
+        if (lld_space == 0) {
+            level = rt_hw_interrupt_disable();
+            _tx_drain_active = false;
+            rt_hw_interrupt_enable(level);
+            rtt_uart_dbg_drain_calls++;
+            rtt_uart_dbg_drain_usb_full++;
+            rtt_uart_dbg_drain_zero++;
+            _last_drain_wrote = false;
+            return;
+        }
+
+        level = rt_hw_interrupt_disable();
+        uint32_t n = _writebuf.peekbytes(_tx_bounce, MIN((uint32_t)sizeof(_tx_bounce), lld_space));
+        rt_hw_interrupt_enable(level);
         if (n == 0) {
+            level = rt_hw_interrupt_disable();
+            _tx_drain_active = false;
+            rt_hw_interrupt_enable(level);
             _last_drain_wrote = true;
             return;
         }
+        level = rt_hw_interrupt_disable();
+        const uint32_t available_before_send = _writebuf.available();
+        rt_hw_interrupt_enable(level);
         uint32_t sent = 0;
         while (sent < n) {
             uint32_t chunk = (n - sent);
@@ -809,19 +938,33 @@ void UARTDriver::_drain_writebuf_to_dev()
                 chunk = 64;
             }
             if (usb_lld_send_rtt(1, _tx_bounce + sent, chunk)) {
+                rtt_uart_dbg_usb_trace(2U, _tx_bounce + sent, chunk, available_before_send, lld_space);
                 sent += chunk;
                 rtt_uart_dbg_drain_bytes += chunk;
                 rtt_uart_dbg_drain_writes++;
+                rtt_uart_dbg_drain_usb_rounds++;
             } else {
                 /* FIFO full or timeout — stop and retry next tick */
+                rtt_uart_dbg_usb_trace(3U, _tx_bounce + sent, chunk, available_before_send, lld_space);
+                rtt_uart_dbg_drain_usb_full++;
                 break;
             }
         }
         rtt_uart_dbg_drain_calls++;
         if (sent > 0) {
+            level = rt_hw_interrupt_disable();
+            const uint32_t available = _writebuf.available();
+            if (sent >= sizeof(_tx_bounce) && available > sent) {
+                rtt_uart_dbg_drain_usb_round_limit++;
+            }
             _writebuf.advance(sent);
+            _tx_drain_active = false;
+            rt_hw_interrupt_enable(level);
             _last_drain_wrote = true;
         } else {
+            level = rt_hw_interrupt_disable();
+            _tx_drain_active = false;
+            rt_hw_interrupt_enable(level);
             rtt_uart_dbg_drain_zero++;
             _last_drain_wrote = false;
         }
@@ -912,20 +1055,43 @@ void UARTDriver::_drain_writebuf_to_dev()
         }
 
         /* --- Polling fallback --- */
-        uint32_t n = _writebuf.peekbytes(_tx_bounce, sizeof(_tx_bounce));
+        /*
+         * [Cybernetics Ch.4] Closed-loop: ChibiOS queues UART output below
+         * MAVLink, while this RTT fallback busy-waits in the caller context.
+         * Keep each polling drain short so non-USB telemetry cannot steal a
+         * long continuous slot from USB PARAM_VALUE production.
+         */
+        constexpr uint32_t poll_drain_limit = 16U;
+        uint32_t pending = _writebuf.available();
+        uint32_t n = _writebuf.peekbytes(_tx_bounce, MIN((uint32_t)sizeof(_tx_bounce), poll_drain_limit));
         if (n == 0) {
             _last_drain_wrote = true;
             return;
         }
-        uint32_t w = uart_poll_write(_uart_hw, _tx_bounce, n);
+        if (pending > n) {
+            rtt_uart_dbg_poll_drain_limited++;
+        }
+        const uint32_t poll_tstart_us = AP_HAL::micros();
+        uint32_t w = uart_poll_write(_uart_hw, _tx_bounce, n, false);
+        const uint32_t poll_elapsed_us = AP_HAL::micros() - poll_tstart_us;
+        rtt_uart_dbg_poll_drain_calls++;
+        rtt_uart_dbg_poll_drain_last_port = _port_num;
+        rtt_uart_dbg_poll_drain_last_len = n;
+        rtt_uart_dbg_poll_drain_last_written = w;
+        rtt_uart_dbg_poll_drain_last_us = poll_elapsed_us;
+        if (poll_elapsed_us > rtt_uart_dbg_poll_drain_max_us) {
+            rtt_uart_dbg_poll_drain_max_us = poll_elapsed_us;
+        }
         rtt_uart_dbg_drain_calls++;
         if (w > 0) {
             rtt_uart_dbg_drain_writes++;
             rtt_uart_dbg_drain_bytes += w;
+            rtt_uart_dbg_poll_drain_bytes += w;
             _writebuf.advance(w);
             _last_drain_wrote = (w == n);
         } else {
             rtt_uart_dbg_drain_zero++;
+            rtt_uart_dbg_poll_drain_zero++;
             _last_drain_wrote = false;
         }
 #else
@@ -1003,7 +1169,7 @@ size_t UARTDriver::_write(const uint8_t *buffer, size_t size)
         if (_uart_hw != nullptr) {
             // For IOMCU and other unbuffered UART users: write directly to
             // hardware via CMSIS polling, bypassing the ring buffer.
-            return uart_poll_write(_uart_hw, buffer, size);
+            return uart_poll_write(_uart_hw, buffer, size, true);
         }
 #endif
         // Fallback if no CMSIS UART available
@@ -1015,16 +1181,99 @@ size_t UARTDriver::_write(const uint8_t *buffer, size_t size)
      * that needs to be pushed to the CDC ringbuffer before we can
      * enqueue the caller's data (e.g. a PARAM_VALUE response).
      */
-    if (_writebuf.space() < size) {
+#if HAL_RTT_SERIAL0_OTG
+    if (_is_usb) {
+        rtt_uart_dbg_usb_write_calls++;
+        rtt_uart_dbg_usb_write_last_size = size;
+        rt_base_t level = rt_hw_interrupt_disable();
+        rtt_uart_dbg_usb_write_last_space_before = _writebuf.space();
+        rt_hw_interrupt_enable(level);
+    }
+#endif
+    rt_base_t level = rt_hw_interrupt_disable();
+    bool need_space = _writebuf.space() < size;
+    rt_hw_interrupt_enable(level);
+    if (need_space) {
         if (_is_usb) {
-            for (int i = 0; i < 100 && _writebuf.space() < size; i++) {
+            uint32_t waited_ms = 0;
+            for (int i = 0; i < 100; i++) {
+                level = rt_hw_interrupt_disable();
+                need_space = _writebuf.space() < size;
+                rt_hw_interrupt_enable(level);
+                if (!need_space) {
+                    break;
+                }
                 _drain_writebuf_to_dev();
+#if HAL_RTT_SERIAL0_OTG
+                rtt_uart_dbg_usb_write_drain_loops++;
+#endif
+                level = rt_hw_interrupt_disable();
+                need_space = _writebuf.space() < size;
+                const bool drain_active = _tx_drain_active;
+                rt_hw_interrupt_enable(level);
+                if (need_space && (drain_active || usb_lld_txspace_rtt(1) == 0U)) {
+                    /*
+                     * [Cybernetics Ch.4] Closed-loop: give the active drain or
+                     * USB IN completion chain one scheduler tick to free queue
+                     * space.  Falling through immediately can turn a MAVLink
+                     * fragment into a partial ByteBuffer write.
+                     */
+                    rt_thread_mdelay(1);
+                    waited_ms++;
+                }
             }
+#if HAL_RTT_SERIAL0_OTG
+            if (waited_ms > 0U) {
+                rtt_uart_dbg_usb_write_wait_ms += waited_ms;
+                if (waited_ms > rtt_uart_dbg_usb_write_max_wait_ms) {
+                    rtt_uart_dbg_usb_write_max_wait_ms = waited_ms;
+                }
+            }
+#endif
         } else {
             _drain_writebuf_to_dev();
         }
     }
-    return _writebuf.write(buffer, size);
+    level = rt_hw_interrupt_disable();
+    need_space = _writebuf.space() < size;
+    rt_hw_interrupt_enable(level);
+    if (_is_usb && need_space) {
+#if HAL_RTT_SERIAL0_OTG
+        rtt_uart_dbg_usb_write_no_space++;
+        rtt_uart_dbg_usb_write_short++;
+        rtt_uart_dbg_usb_write_last_written = 0;
+#endif
+        return 0;
+    }
+    level = rt_hw_interrupt_disable();
+    const size_t written = _writebuf.write(buffer, size);
+    const uint32_t available_after_write = _writebuf.available();
+    const uint32_t space_after_write = _writebuf.space();
+    rt_hw_interrupt_enable(level);
+#if HAL_RTT_SERIAL0_OTG
+    if (_is_usb) {
+        rtt_uart_dbg_usb_trace(1U, buffer, written, available_after_write, usb_lld_txspace_rtt(1));
+        rtt_uart_dbg_usb_write_last_written = written;
+        rtt_uart_dbg_usb_write_last_space_after_drain = space_after_write;
+        rtt_uart_dbg_usb_write_last_available_after_drain = available_after_write;
+        if (written < size) {
+            rtt_uart_dbg_usb_write_short++;
+        }
+    }
+#endif
+    if (_is_usb && written > 0 && !rtt_uart_mavlink_send_locked()) {
+        /*
+         * [Cybernetics Ch.4] Closed-loop: mirror ChibiOS SerialUSB obnotify().
+         * Newly queued MAVLink bytes should be offered to the CDC ring now,
+         * not wait up to one ap_uart 1 kHz tick before CherryUSB can start the
+         * next IN transfer.  The drain is bounded by usb_lld_txspace_rtt().
+         */
+#if HAL_RTT_SERIAL0_OTG
+        rtt_uart_dbg_usb_write_post_drain_calls++;
+#endif
+        _drain_writebuf_to_dev();
+    }
+    return written;
 }
 
 bool UARTDriver::_discard_input()
@@ -1061,7 +1310,10 @@ bool UARTDriver::is_initialized()
 
 bool UARTDriver::tx_pending()
 {
-    return _writebuf.available() > 0;
+    rt_base_t level = rt_hw_interrupt_disable();
+    const bool pending = _writebuf.available() > 0;
+    rt_hw_interrupt_enable(level);
+    return pending;
 }
 
 uint32_t UARTDriver::txspace()
@@ -1069,7 +1321,37 @@ uint32_t UARTDriver::txspace()
     if (!_initialized) {
         return 0;
     }
-    return _writebuf.space();
+    rt_base_t level = rt_hw_interrupt_disable();
+    const uint32_t space = _writebuf.space();
+    const uint32_t pending = _writebuf.available();
+    rt_hw_interrupt_enable(level);
+    if (_is_usb) {
+        const uint32_t lld_space = usb_lld_txspace_rtt(1);
+        rtt_uart_dbg_usb_txspace_calls++;
+        rtt_uart_dbg_usb_txspace_last_writebuf_space = space;
+        rtt_uart_dbg_usb_txspace_last_writebuf_available = pending;
+        rtt_uart_dbg_usb_txspace_last_lld_space = lld_space;
+        if (rtt_uart_dbg_usb_txspace_calls == 1U || space < rtt_uart_dbg_usb_txspace_min_writebuf_space) {
+            rtt_uart_dbg_usb_txspace_min_writebuf_space = space;
+        }
+        if (rtt_uart_dbg_usb_txspace_calls == 1U || lld_space < rtt_uart_dbg_usb_txspace_min_lld_space) {
+            rtt_uart_dbg_usb_txspace_min_lld_space = lld_space;
+        }
+        /*
+         * [Cybernetics Ch.15] Extremum seeking: match ChibiOS' scheduling
+         * contract.  ChibiOS SerialUSB reports the AP write-buffer space here;
+         * endpoint ownership is enforced later by obnotify()/SOF/completion.
+         * Keep the same split in RTT: MAVLink/PARAM scheduling sees the AP
+         * queue, while _drain_writebuf_to_dev() and CherryUSB/DWC2 enforce the
+         * real EP1 ring/EPENA/XFRC backpressure before bytes leave _writebuf.
+         */
+        const uint32_t backlog_allowance = space;
+        const uint32_t effective = space;
+        rtt_uart_dbg_usb_txspace_last_backlog_allowance = backlog_allowance;
+        rtt_uart_dbg_usb_txspace_last_return = effective;
+        return effective;
+    }
+    return space;
 }
 
 bool UARTDriver::_check_usb_connected() const
@@ -1084,6 +1366,7 @@ volatile uint32_t rtt_uart_dbg_crash_port = 0xFFFFFFFF;  /* set to port_num on c
 
 /* USB TX backpressure diagnostics (GDB / ctl telemetry; cumulative) */
 volatile uint32_t rtt_uart_usb_diag_clears = 0;
+volatile uint32_t rtt_uart_usb_diag_clear_deferred = 0;
 volatile uint32_t rtt_uart_usb_diag_write_fails = 0;
 volatile uint16_t rtt_uart_usb_diag_fail_streak = 0;
 
@@ -1109,9 +1392,13 @@ void UARTDriver::_timer_tick(void)
                         rt_snprintf(sem_name, sizeof(sem_name), "urx%u", (unsigned)_port_num);
                         _rx_sem = rt_sem_create(sem_name, 0, RT_IPC_FLAG_FIFO);
                     }
-                    if (_readbuf.get_size() < 2048) { _readbuf.set_size(2048); }
-                    if (_writebuf.get_size() < 8192) { _writebuf.set_size(8192); }
-                    _flow_control = FLOW_CONTROL_ENABLE;
+                    if (_readbuf.get_size() < RTT_UART_USB_RX_BUF_SIZE) {
+                        _readbuf.set_size(RTT_UART_USB_RX_BUF_SIZE);
+                    }
+                    if (_writebuf.get_size() < RTT_UART_USB_TX_BUF_SIZE) {
+                        _writebuf.set_size(RTT_UART_USB_TX_BUF_SIZE);
+                    }
+                    _flow_control = FLOW_CONTROL_DISABLE;
                     _initialized = true;
                     _deferred_open = false;
                 }
@@ -1123,11 +1410,23 @@ void UARTDriver::_timer_tick(void)
     if (_is_usb && !_check_usb_connected()) {
         /* Drop queued TX only when the link is truly down — not on brief
          * de-configure during bus reset while still connected. */
-        if (!usb_lld_get_connected_rtt() && _writebuf.available() > 0) {
-            _writebuf.clear();
-            _usb_write_fail_count = 0;
-            rtt_uart_usb_diag_fail_streak = 0;
-            rtt_uart_usb_diag_clears++;
+        rt_base_t level = rt_hw_interrupt_disable();
+        const bool have_pending_tx = _writebuf.available() > 0;
+        const bool drain_active = _tx_drain_active;
+        rt_hw_interrupt_enable(level);
+        if (!usb_lld_get_connected_rtt() && have_pending_tx) {
+            level = rt_hw_interrupt_disable();
+            if (!_tx_drain_active) {
+                _writebuf.clear();
+            } else {
+                rtt_uart_usb_diag_clear_deferred++;
+            }
+            rt_hw_interrupt_enable(level);
+            if (!drain_active) {
+                _usb_write_fail_count = 0;
+                rtt_uart_usb_diag_fail_streak = 0;
+                rtt_uart_usb_diag_clears++;
+            }
         }
         return;
     }
@@ -1139,7 +1438,10 @@ void UARTDriver::_timer_tick(void)
         /* Track consecutive write failures (endpoint backpressure). Never discard
          * queued MAVLink while the link is up — CherryUSB 64B packets can stall
          * for hundreds of ticks without indicating disconnect. */
-        if (_writebuf.available() == 0) {
+        rt_base_t level = rt_hw_interrupt_disable();
+        const bool writebuf_empty = _writebuf.available() == 0;
+        rt_hw_interrupt_enable(level);
+        if (writebuf_empty) {
             _usb_write_fail_count = 0;
             rtt_uart_usb_diag_fail_streak = 0;
         } else if (!_last_drain_wrote) {
@@ -1155,10 +1457,19 @@ void UARTDriver::_timer_tick(void)
              * under bursty load (MAVFTP), pushing end-to-end latency past the
              * client timeout and causing successive-round degradation. */
             if (!usb_lld_get_connected_rtt()) {
-                _writebuf.clear();
-                _usb_write_fail_count = 0;
-                rtt_uart_usb_diag_fail_streak = 0;
-                rtt_uart_usb_diag_clears++;
+                rt_base_t level = rt_hw_interrupt_disable();
+                if (!_tx_drain_active) {
+                    _writebuf.clear();
+                } else {
+                    rtt_uart_usb_diag_clear_deferred++;
+                }
+                const bool cleared = !_tx_drain_active;
+                rt_hw_interrupt_enable(level);
+                if (cleared) {
+                    _usb_write_fail_count = 0;
+                    rtt_uart_usb_diag_fail_streak = 0;
+                    rtt_uart_usb_diag_clears++;
+                }
             }
         } else {
             _usb_write_fail_count = 0;
@@ -1171,6 +1482,9 @@ void UARTDriver::_timer_tick(void)
 
 void UARTDriver::set_flow_control(enum flow_control flow)
 {
+    if (_is_usb) {
+        return;
+    }
     _flow_control = flow;
 }
 

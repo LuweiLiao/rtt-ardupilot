@@ -61,17 +61,41 @@ uint64_t Util::get_micros64() const
 {
     _dwt_init();
     const uint32_t tick_hz = RT_TICK_PER_SECOND ? RT_TICK_PER_SECOND : 1000U;
-    const uint32_t tick_period_us = 1000000U / tick_hz;
-    const uint32_t cpu_mhz = _cpu_freq_mhz ? _cpu_freq_mhz : 216U;
+    const uint32_t cpu_hz = SystemCoreClock ? SystemCoreClock : 216000000U;
 
     rt_base_t level = rt_hw_interrupt_disable();
-    rt_tick_t tick = rt_tick_get();
-    uint32_t cyc = DWT_CYCCNT;
-    rt_hw_interrupt_enable(level);
+    const uint32_t cyc = DWT_CYCCNT;
 
-    uint64_t tick_us = (uint64_t)tick * 1000000ULL / tick_hz;
-    uint32_t sub_us = (cyc / cpu_mhz) % tick_period_us;
-    return tick_us + sub_us;
+    /*
+     * [Cybernetics Ch.4] Closed-loop: DWT_CYCCNT is free-running and is not
+     * phase-locked to RT-Thread's tick.  Combining rt_tick_get() with
+     * (CYCCNT % tick_period) can move time backwards near a tick boundary,
+     * which corrupts AP_Scheduler and GCS/PARAM time-budget feedback.  Keep a
+     * DWT delta accumulator instead; this mirrors ChibiOS' monotonic hrt model
+     * and only uses rt_tick_get() to seed the boot-time epoch.
+     */
+    static bool dwt_time_valid;
+    static uint32_t last_cyc;
+    static uint64_t accumulated_us;
+    static uint64_t fractional_cycles;
+
+    if (!dwt_time_valid) {
+        last_cyc = cyc;
+        accumulated_us = (uint64_t)rt_tick_get() * 1000000ULL / tick_hz;
+        fractional_cycles = 0;
+        dwt_time_valid = true;
+        rt_hw_interrupt_enable(level);
+        return accumulated_us;
+    }
+
+    const uint32_t delta_cycles = cyc - last_cyc;
+    last_cyc = cyc;
+    const uint64_t scaled = fractional_cycles + (uint64_t)delta_cycles * 1000000ULL;
+    accumulated_us += scaled / cpu_hz;
+    fractional_cycles = scaled % cpu_hz;
+    const uint64_t now_us = accumulated_us;
+    rt_hw_interrupt_enable(level);
+    return now_us;
 }
 
 uint32_t Util::available_memory(void)

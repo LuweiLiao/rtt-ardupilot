@@ -27,6 +27,13 @@
 
 extern const AP_HAL::HAL& hal;
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#define RTT_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+volatile uint32_t rtt_dbg_gcs_out_of_space_count[MAVLINK_COMM_NUM_BUFFERS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_out_of_space_last_chan RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_out_of_space_last_txspace RTT_DBG_DTCM_BSS;
+#endif
+
 #ifndef MAV_SYSID_DEFAULT
 #if APM_BUILD_TYPE(APM_BUILD_AntennaTracker)
 #define MAV_SYSID_DEFAULT 2
@@ -509,6 +516,14 @@ void gcs_out_of_space_to_send(mavlink_channel_t chan)
     if (link == nullptr) {
         return;
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint8_t chan_idx = uint8_t(chan);
+    if (chan_idx < ARRAY_SIZE(rtt_dbg_gcs_out_of_space_count)) {
+        rtt_dbg_gcs_out_of_space_count[chan_idx]++;
+    }
+    rtt_dbg_gcs_out_of_space_last_chan = chan_idx;
+    rtt_dbg_gcs_out_of_space_last_txspace = link->txspace();
+#endif
     link->out_of_space_to_send();
 }
 

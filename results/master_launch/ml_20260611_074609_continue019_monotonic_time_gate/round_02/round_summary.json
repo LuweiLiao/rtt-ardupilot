@@ -1,0 +1,342 @@
+{
+  "ftp_sd": {
+    "checks": {
+      "list_apm": true,
+      "list_root": true,
+      "read_param": true,
+      "write_read_delete": true
+    },
+    "error": null,
+    "ok": true,
+    "probe_ok": true,
+    "rc": 0,
+    "read_param_bytes": 10229,
+    "read_param_size": 10944,
+    "stale_count": 0,
+    "write_read_match": true
+  },
+  "ftp_sd_cmd": {
+    "cmd": [
+      "/home/llw/venv-ardupilot/bin/python3",
+      "/data/firmare/pogo-apm/results/master_launch/ml_20260611_020000_continue019_multiround_usb_gate_retry/strict_mavftp_sd_probe.py",
+      "--port",
+      "/dev/ttyACM1",
+      "--out",
+      "/data/firmare/pogo-apm/results/master_launch/ml_20260611_074609_continue019_monotonic_time_gate/round_02/mavftp_strict_sd.json",
+      "--require-sd"
+    ],
+    "elapsed_s": 5.475,
+    "rc": 0,
+    "stderr": "results/master_launch/ml_20260611_074609_continue019_monotonic_time_gate/round_02/mavftp_strict_sd.stderr",
+    "stdout": "results/master_launch/ml_20260611_074609_continue019_monotonic_time_gate/round_02/mavftp_strict_sd.stdout",
+    "timed_out": false
+  },
+  "param": {
+    "duplicate_indexes": 0,
+    "duplicate_names": 0,
+    "duration_s": 1.196,
+    "expected_count": 912,
+    "large_gaps": {
+      ">1000ms": 0,
+      ">100ms": 0,
+      ">250ms": 0,
+      ">500ms": 0
+    },
+    "max_gap_s": 0.0294,
+    "missing_count": 0,
+    "ok": true,
+    "other_message_counts": {
+      "HEARTBEAT": 1,
+      "STATUSTEXT": 6,
+      "TIMESYNC": 1
+    },
+    "post_internal_errors": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "rc": 0,
+    "script_verdict": "GREEN",
+    "unique_indexes": 912
+  },
+  "param_cmd": {
+    "cmd": [
+      "/home/llw/venv-ardupilot/bin/python3",
+      "/data/firmare/pogo-apm/results/master_launch/ml_20260611_060000_continue019_param_active_iomcu_streak/param_download_perf_probe_safe.py",
+      "--port",
+      "/dev/ttyACM1",
+      "--rounds",
+      "1",
+      "--timeout",
+      "90",
+      "--quiet-timeout",
+      "3",
+      "--inter-round-delay",
+      "0",
+      "--background-stream-hz",
+      "0"
+    ],
+    "elapsed_s": 12.09,
+    "rc": 0,
+    "stderr": "results/master_launch/ml_20260611_074609_continue019_monotonic_time_gate/round_02/param.stderr",
+    "stdout": "results/master_launch/ml_20260611_074609_continue019_monotonic_time_gate/round_02/param.stdout",
+    "timed_out": false
+  },
+  "peripheral": {
+    "acks": [
+      {
+        "command": 511,
+        "mavpackettype": "COMMAND_ACK",
+        "progress": 0,
+        "result": 0,
+        "result_param2": 0,
+        "target_component": 0,
+        "target_system": 242
+      },
+      {
+        "command": 511,
+        "mavpackettype": "COMMAND_ACK",
+        "progress": 0,
+        "result": 0,
+        "result_param2": 0,
+        "target_component": 0,
+        "target_system": 242
+      },
+      {
+        "command": 511,
+        "mavpackettype": "COMMAND_ACK",
+        "progress": 0,
+        "result": 0,
+        "result_param2": 0,
+        "target_component": 0,
+        "target_system": 242
+      },
+      {
+        "command": 511,
+        "mavpackettype": "COMMAND_ACK",
+        "progress": 0,
+        "result": 0,
+        "result_param2": 0,
+        "target_component": 0,
+        "target_system": 242
+      },
+      {
+        "command": 511,
+        "mavpackettype": "COMMAND_ACK",
+        "progress": 0,
+        "result": 0,
+        "result_param2": 0,
+        "target_component": 0,
+        "target_system": 242
+      }
+    ],
+    "bad_data": 0,
+    "checks": {
+      "attitude_present": true,
+      "bad_data_zero": true,
+      "baro_present": true,
+      "ekf_present": true,
+      "imu_present": true,
+      "mag_fields_present": true,
+      "sys_status_errors_zero": true
+    },
+    "counts": {
+      "ATTITUDE": 59,
+      "EKF_STATUS_REPORT": 59,
+      "HEARTBEAT": 60,
+      "PARAM_VALUE": 1,
+      "RAW_IMU": 59,
+      "SCALED_PRESSURE": 59,
+      "STATUSTEXT": 10,
+      "SYS_STATUS": 88,
+      "TIMESYNC": 3
+    },
+    "duration_s": 30.0,
+    "last": {
+      "ATTITUDE": {
+        "mavpackettype": "ATTITUDE",
+        "pitch": 0.08270236104726791,
+        "pitchspeed": 0.0005079241236671805,
+        "roll": -0.1604863852262497,
+        "rollspeed": -0.0005689710378646851,
+        "time_boot_ms": 210033,
+        "yaw": 0.8765936493873596,
+        "yawspeed": 0.0005091644125059247
+      },
+      "EKF_STATUS_REPORT": {
+        "airspeed_variance": 0.0,
+        "compass_variance": 0.0018356405198574066,
+        "flags": 167,
+        "mavpackettype": "EKF_STATUS_REPORT",
+        "pos_horiz_variance": 0.0035891702864319086,
+        "pos_vert_variance": 0.10632890462875366,
+        "terrain_alt_variance": 0.0,
+        "velocity_variance": 0.0
+      },
+      "HEARTBEAT": {
+        "autopilot": 3,
+        "base_mode": 81,
+        "custom_mode": 0,
+        "mavlink_version": 3,
+        "mavpackettype": "HEARTBEAT",
+        "system_status": 3,
+        "type": 2
+      },
+      "RAW_IMU": {
+        "id": 0,
+        "mavpackettype": "RAW_IMU",
+        "temperature": 3942,
+        "time_usec": 210034495,
+        "xacc": 80,
+        "xgyro": 0,
+        "xmag": 222,
+        "yacc": 157,
+        "ygyro": 0,
+        "ymag": -315,
+        "zacc": -1017,
+        "zgyro": 0,
+        "zmag": 121
+      },
+      "SCALED_PRESSURE": {
+        "mavpackettype": "SCALED_PRESSURE",
+        "press_abs": 1008.31005859375,
+        "press_diff": 0.0,
+        "temperature": 3424,
+        "temperature_press_diff": 0,
+        "time_boot_ms": 210035
+      },
+      "SYS_STATUS": {
+        "battery_remaining": -1,
+        "current_battery": -1,
+        "drop_rate_comm": 0,
+        "errors_comm": 0,
+        "errors_count1": 0,
+        "errors_count2": 0,
+        "errors_count3": 0,
+        "errors_count4": 0,
+        "load": 611,
+        "mavpackettype": "SYS_STATUS",
+        "onboard_control_sensors_enabled": 1348475919,
+        "onboard_control_sensors_health": 1196465167,
+        "onboard_control_sensors_present": 1399913487,
+        "voltage_battery": 0
+      }
+    },
+    "ok": true,
+    "statustext": [
+      {
+        "chunk_seq": 0,
+        "id": 0,
+        "mavpackettype": "STATUSTEXT",
+        "severity": 2,
+        "text": "PreArm: RC not found"
+      },
+      {
+        "chunk_seq": 0,
+        "id": 0,
+        "mavpackettype": "STATUSTEXT",
+        "severity": 2,
+        "text": "PreArm: Hardware safety switch"
+      },
+      {
+        "chunk_seq": 0,
+        "id": 0,
+        "mavpackettype": "STATUSTEXT",
+        "severity": 2,
+        "text": "PreArm: 3D Accel calibration needed"
+      },
+      {
+        "chunk_seq": 0,
+        "id": 0,
+        "mavpackettype": "STATUSTEXT",
+        "severity": 2,
+        "text": "PreArm: Compass not calibrated"
+      },
+      {
+        "chunk_seq": 0,
+        "id": 0,
+        "mavpackettype": "STATUSTEXT",
+        "severity": 6,
+        "text": "Initialising ArduPilot"
+      },
+      {
+        "chunk_seq": 0,
+        "id": 0,
+        "mavpackettype": "STATUSTEXT",
+        "severity": 6,
+        "text": "Initialising ArduPilot"
+      },
+      {
+        "chunk_seq": 0,
+        "id": 0,
+        "mavpackettype": "STATUSTEXT",
+        "severity": 6,
+        "text": "Initialising ArduPilot"
+      },
+      {
+        "chunk_seq": 0,
+        "id": 0,
+        "mavpackettype": "STATUSTEXT",
+        "severity": 6,
+        "text": "Initialising ArduPilot"
+      },
+      {
+        "chunk_seq": 0,
+        "id": 0,
+        "mavpackettype": "STATUSTEXT",
+        "severity": 6,
+        "text": "Initialising ArduPilot"
+      },
+      {
+        "chunk_seq": 0,
+        "id": 0,
+        "mavpackettype": "STATUSTEXT",
+        "severity": 6,
+        "text": "Initialising ArduPilot"
+      }
+    ],
+    "sys_status_errors": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "raw_ftp": {
+    "bad_data": 0,
+    "bytes_read": 956,
+    "error": null,
+    "ok": true,
+    "payload_hex_prefixes": [
+      "c02a0000",
+      "1b679003900302d0464f524d41545f56455253494f4e780004d050494c4f545f5448525f46494c540000000004774b4f",
+      "0202904c414e445f53504545443200024a5f48494748000002d050494c4f545f53504545445f5550fa00026641434345",
+      "535f4954454d53000000000347434845434b0100000003674f5054494f4e530000000002874d41475448524553486400",
+      "4c4c000001844155544f5f4f4e4c59000153315f54595045000153325f545950450001e052454c4159315f46554e4354"
+    ],
+    "probe_ok": true,
+    "rc": 0
+  },
+  "raw_ftp_cmd": {
+    "cmd": [
+      "/home/llw/venv-ardupilot/bin/python3",
+      "/data/firmare/pogo-apm/results/master_launch/ml_20260610_190021_continue019_chibios_rtt_usb_systemic/param_ftp_raw_probe.py",
+      "--port",
+      "/dev/ttyACM1",
+      "--baud",
+      "115200",
+      "--out",
+      "/data/firmare/pogo-apm/results/master_launch/ml_20260611_074609_continue019_monotonic_time_gate/round_02/mavftp_param_raw.json",
+      "--read-timeout-s",
+      "5"
+    ],
+    "elapsed_s": 26.368,
+    "rc": 0,
+    "stderr": "results/master_launch/ml_20260611_074609_continue019_monotonic_time_gate/round_02/mavftp_param_raw.stderr",
+    "stdout": "results/master_launch/ml_20260611_074609_continue019_monotonic_time_gate/round_02/mavftp_param_raw.stdout",
+    "timed_out": false
+  },
+  "round": 2,
+  "timestamp_utc": "2026-06-10T23:49:48.549068+00:00"
+}

@@ -50,6 +50,15 @@
 
 extern const AP_HAL::HAL& hal;
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#define RTT_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+volatile uint32_t rtt_dbg_scheduler_wait_sample_max_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_wait_sample_last_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_wait_sample_large_count RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_run_time_available_min_us RTT_DBG_DTCM_BSS = UINT32_MAX;
+volatile uint32_t rtt_dbg_scheduler_run_time_available_last_us RTT_DBG_DTCM_BSS;
+#endif
+
 const AP_Param::GroupInfo AP_Scheduler::var_info[] = {
     // @Param: DEBUG
     // @DisplayName: Scheduler debug level
@@ -350,7 +359,20 @@ void AP_Scheduler::loop()
     // wait for an INS sample
     hal.util->persistent_data.scheduler_task = -3;
     _rsem.give();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_wait_sample_start_us = AP_HAL::micros();
+#endif
     AP::ins().wait_for_sample();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_wait_sample_us = AP_HAL::micros() - rtt_wait_sample_start_us;
+    rtt_dbg_scheduler_wait_sample_last_us = rtt_wait_sample_us;
+    if (rtt_wait_sample_us > rtt_dbg_scheduler_wait_sample_max_us) {
+        rtt_dbg_scheduler_wait_sample_max_us = rtt_wait_sample_us;
+    }
+    if (rtt_wait_sample_us > 250000U) {
+        rtt_dbg_scheduler_wait_sample_large_count++;
+    }
+#endif
     _rsem.take_blocking();
     hal.util->persistent_data.scheduler_task = -1;
 
@@ -394,6 +416,12 @@ void AP_Scheduler::loop()
 
     // add in extra loop time determined by not achieving scheduler tasks
     time_available += extra_loop_us;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_scheduler_run_time_available_last_us = time_available;
+    if (time_available < rtt_dbg_scheduler_run_time_available_min_us) {
+        rtt_dbg_scheduler_run_time_available_min_us = time_available;
+    }
+#endif
 
     // run the tasks
     run(time_available);

@@ -19,6 +19,8 @@
 #define RTT_UART_RX_BOUNCE_SIZE 512
 #define RTT_UART_TX_BOUNCE_SIZE 512
 #define RTT_UART_RX_DMA_BUF_SIZE 2048
+#define RTT_UART_USB_RX_BUF_SIZE 2048
+#define RTT_UART_USB_TX_BUF_SIZE 2048
 
 namespace RTT
 {
@@ -103,6 +105,7 @@ private:
 #endif
 
     bool _last_drain_wrote{true};
+    bool _tx_drain_active{false};
     bool _check_usb_connected() const;
 
     ByteBuffer _readbuf{0};

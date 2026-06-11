@@ -188,19 +188,28 @@ void Scheduler::_uart_thread_entry(void *arg)
 
     while (true) {
         rt_thread_mdelay(1);
-        for (uint8_t i = 0; i < 10; i++) {
-            auto *uart = (UARTDriver *)hal.serial(i);
-            if (uart) {
-                uart->_timer_tick();
-            }
-        }
 #if HAL_WITH_IO_MCU
-        /* The IOMCU UART driver is not in hal.serial(), tick it separately. */
+        /*
+         * [Cybernetics Ch.4] Closed-loop: service the IOMCU UART before the
+         * general serial scan.  Under USB parameter pressure, IOMCU health is a
+         * separate stability loop and must not wait behind CDC backlog work.
+         */
         auto *iomcu_uart = get_rtt_iomcu_uart();
         if (iomcu_uart) {
             iomcu_uart->_timer_tick();
         }
 #endif
+        for (uint8_t i = 0; i < 10; i++) {
+#if HAL_WITH_IO_MCU && defined(HAL_UART_IOMCU_IDX)
+            if (i == HAL_UART_IOMCU_IDX && get_rtt_iomcu_uart() != nullptr) {
+                continue;
+            }
+#endif
+            auto *uart = (UARTDriver *)hal.serial(i);
+            if (uart) {
+                uart->_timer_tick();
+            }
+        }
     }
 }
 
@@ -538,6 +547,14 @@ void Scheduler::delay_microseconds_boost(uint16_t us)
      */
     if (in_main_thread() && _priority_boosted) {
         rt_thread_delay(1);
+        /*
+         * [Cybernetics Ch.4] Closed-loop: wait_for_sample() can hold the main
+         * scheduler outside AP_Scheduler::run() for milliseconds while startup
+         * sensor threads catch up.  ChibiOS can keep already-queued SerialUSB
+         * buffers draining in that window; RTT also needs the MAVLink producer
+         * to get a short delay-callback slot so MSG_NEXT_PARAM can refill USB.
+         */
+        call_delay_cb();
         _called_boost = true;
         return;
     }

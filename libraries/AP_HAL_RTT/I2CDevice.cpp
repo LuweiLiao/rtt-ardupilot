@@ -21,6 +21,45 @@ extern const AP_HAL::HAL& hal;
 #define I2C_TIMEOUT_MAX    50000U
 #endif
 
+#define RTT_I2C_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+
+enum {
+    RTT_I2C_DBG_REASON_NONE = 0,
+    RTT_I2C_DBG_REASON_INVALID_BUS = 1,
+    RTT_I2C_DBG_REASON_NULL_REGS = 2,
+    RTT_I2C_DBG_REASON_BUSY_TIMEOUT = 3,
+    RTT_I2C_DBG_REASON_TXIS_TIMEOUT = 4,
+    RTT_I2C_DBG_REASON_TX_ERROR = 5,
+    RTT_I2C_DBG_REASON_TC_TIMEOUT = 6,
+    RTT_I2C_DBG_REASON_TC_ERROR = 7,
+    RTT_I2C_DBG_REASON_RXNE_TIMEOUT = 8,
+    RTT_I2C_DBG_REASON_RX_ERROR = 9,
+    RTT_I2C_DBG_REASON_STOPF_TIMEOUT = 10,
+    RTT_I2C_DBG_REASON_HW_NOT_INITED = 11,
+};
+
+volatile uint32_t rtt_dbg_i2c_ll_calls[RTT_I2C_BUS_COUNT] RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_ll_success[RTT_I2C_BUS_COUNT] RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_ll_fail[RTT_I2C_BUS_COUNT] RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_fail_reason_counts[16] RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_bus0_addr0e_calls RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_bus0_addr0e_success RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_bus0_addr0e_fail RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_last_bus RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_last_addr RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_last_send_len RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_last_recv_len RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_last_reason RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_last_isr RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_last_cr1 RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_last_cr2 RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_last_timingr RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_last_timeout_left RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_last_attempts RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_transfer_calls[RTT_I2C_BUS_COUNT] RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_transfer_fail[RTT_I2C_BUS_COUNT] RTT_I2C_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_i2c_transfer_last_retries RTT_I2C_DBG_DTCM_BSS;
+
 /*
  * Clear bus (toggle SCL) on I2C timeout when SDA is stuck low.
  * Normal NACK / BERR paths must not trigger clear — only poll timeout.
@@ -87,6 +126,41 @@ static I2CBusDescr _i2c_buses[] = {
 #define I2C_BUS_COUNT RTT_I2C_BUS_COUNT
 static_assert(sizeof(_i2c_buses) / sizeof(_i2c_buses[0]) == RTT_I2C_BUS_COUNT,
               "RTT_I2C_BUS_COUNT must match _i2c_buses[]");
+
+static void _i2c_dbg_record(uint8_t bus, uint8_t addr, uint32_t send_len,
+                            uint32_t recv_len, I2C_TypeDef *i2c,
+                            uint32_t reason, uint32_t timeout_left)
+{
+    rtt_dbg_i2c_last_bus = bus;
+    rtt_dbg_i2c_last_addr = addr;
+    rtt_dbg_i2c_last_send_len = send_len;
+    rtt_dbg_i2c_last_recv_len = recv_len;
+    rtt_dbg_i2c_last_reason = reason;
+    rtt_dbg_i2c_last_timeout_left = timeout_left;
+    if (reason < sizeof(rtt_dbg_i2c_fail_reason_counts) / sizeof(rtt_dbg_i2c_fail_reason_counts[0])) {
+        rtt_dbg_i2c_fail_reason_counts[reason]++;
+    }
+    if (i2c != nullptr) {
+        rtt_dbg_i2c_last_isr = i2c->ISR;
+        rtt_dbg_i2c_last_cr1 = i2c->CR1;
+        rtt_dbg_i2c_last_cr2 = i2c->CR2;
+        rtt_dbg_i2c_last_timingr = i2c->TIMINGR;
+    }
+    if (bus < I2C_BUS_COUNT) {
+        if (reason == RTT_I2C_DBG_REASON_NONE) {
+            rtt_dbg_i2c_ll_success[bus]++;
+        } else {
+            rtt_dbg_i2c_ll_fail[bus]++;
+        }
+    }
+    if (bus == 0 && addr == 0x0E) {
+        if (reason == RTT_I2C_DBG_REASON_NONE) {
+            rtt_dbg_i2c_bus0_addr0e_success++;
+        } else {
+            rtt_dbg_i2c_bus0_addr0e_fail++;
+        }
+    }
+}
 
 /* ------------------------------------------------------------------ */
 /*  GPIO helper — set pin to AF mode with open-drain + pull-up         */
@@ -190,6 +264,15 @@ static bool _i2c_master_xfer_ll(uint8_t bus, I2C_TypeDef *i2c, uint8_t addr,
 {
     uint32_t timeout;
 
+    if (bus < I2C_BUS_COUNT) {
+        rtt_dbg_i2c_ll_calls[bus]++;
+    }
+    if (bus == 0 && addr == 0x0E) {
+        rtt_dbg_i2c_bus0_addr0e_calls++;
+    }
+    _i2c_dbg_record(bus, addr, send_len, recv_len, i2c,
+                    RTT_I2C_DBG_REASON_NONE, I2C_TIMEOUT_MAX);
+
     /* Clear sticky error flags */
     i2c->ICR = I2C_ICR_NACKCF | I2C_ICR_STOPCF |
                I2C_ICR_BERRCF | I2C_ICR_ARLOCF | I2C_ICR_OVRCF;
@@ -198,6 +281,8 @@ static bool _i2c_master_xfer_ll(uint8_t bus, I2C_TypeDef *i2c, uint8_t addr,
     timeout = I2C_TIMEOUT_MAX;
     while ((i2c->ISR & I2C_ISR_BUSY) && --timeout) { __NOP(); }
     if (timeout == 0) {
+        _i2c_dbg_record(bus, addr, send_len, recv_len, i2c,
+                        RTT_I2C_DBG_REASON_BUSY_TIMEOUT, timeout);
 #if HAL_I2C_CLEAR_ON_TIMEOUT
         return _i2c_xfer_timeout(bus, i2c);
 #else
@@ -232,6 +317,8 @@ static bool _i2c_master_xfer_ll(uint8_t bus, I2C_TypeDef *i2c, uint8_t addr,
                                  I2C_ISR_BERR | I2C_ISR_OVR |
                                  I2C_ISR_ARLO)) && --timeout) { __NOP(); }
             if (timeout == 0) {
+                _i2c_dbg_record(bus, addr, send_len, recv_len, i2c,
+                                RTT_I2C_DBG_REASON_TXIS_TIMEOUT, timeout);
 #if HAL_I2C_CLEAR_ON_TIMEOUT
                 return _i2c_xfer_timeout(bus, i2c);
 #else
@@ -241,6 +328,8 @@ static bool _i2c_master_xfer_ll(uint8_t bus, I2C_TypeDef *i2c, uint8_t addr,
             }
             if (i2c->ISR & (I2C_ISR_NACKF | I2C_ISR_BERR |
                             I2C_ISR_OVR | I2C_ISR_ARLO)) {
+                _i2c_dbg_record(bus, addr, send_len, recv_len, i2c,
+                                RTT_I2C_DBG_REASON_TX_ERROR, timeout);
                 i2c->ICR = I2C_ICR_NACKCF | I2C_ICR_BERRCF |
                            I2C_ICR_OVRCF | I2C_ICR_ARLOCF;
                 i2c->CR2 |= I2C_CR2_STOP;
@@ -258,6 +347,8 @@ static bool _i2c_master_xfer_ll(uint8_t bus, I2C_TypeDef *i2c, uint8_t addr,
                                  I2C_ISR_BERR | I2C_ISR_OVR |
                                  I2C_ISR_ARLO)) && --timeout) { __NOP(); }
             if (timeout == 0) {
+                _i2c_dbg_record(bus, addr, send_len, recv_len, i2c,
+                                RTT_I2C_DBG_REASON_TC_TIMEOUT, timeout);
 #if HAL_I2C_CLEAR_ON_TIMEOUT
                 return _i2c_xfer_timeout(bus, i2c);
 #else
@@ -267,6 +358,8 @@ static bool _i2c_master_xfer_ll(uint8_t bus, I2C_TypeDef *i2c, uint8_t addr,
             }
             if (i2c->ISR & (I2C_ISR_NACKF | I2C_ISR_BERR |
                             I2C_ISR_OVR | I2C_ISR_ARLO)) {
+                _i2c_dbg_record(bus, addr, send_len, recv_len, i2c,
+                                RTT_I2C_DBG_REASON_TC_ERROR, timeout);
                 i2c->ICR = I2C_ICR_NACKCF | I2C_ICR_BERRCF |
                            I2C_ICR_OVRCF | I2C_ICR_ARLOCF;
                 i2c->CR2 |= I2C_CR2_STOP;
@@ -295,6 +388,8 @@ static bool _i2c_master_xfer_ll(uint8_t bus, I2C_TypeDef *i2c, uint8_t addr,
                                  I2C_ISR_BERR | I2C_ISR_OVR |
                                  I2C_ISR_ARLO)) && --timeout) { __NOP(); }
             if (timeout == 0) {
+                _i2c_dbg_record(bus, addr, send_len, recv_len, i2c,
+                                RTT_I2C_DBG_REASON_RXNE_TIMEOUT, timeout);
 #if HAL_I2C_CLEAR_ON_TIMEOUT
                 return _i2c_xfer_timeout(bus, i2c);
 #else
@@ -304,6 +399,8 @@ static bool _i2c_master_xfer_ll(uint8_t bus, I2C_TypeDef *i2c, uint8_t addr,
             }
             if (i2c->ISR & (I2C_ISR_NACKF | I2C_ISR_BERR |
                             I2C_ISR_OVR | I2C_ISR_ARLO)) {
+                _i2c_dbg_record(bus, addr, send_len, recv_len, i2c,
+                                RTT_I2C_DBG_REASON_RX_ERROR, timeout);
                 i2c->ICR = I2C_ICR_NACKCF | I2C_ICR_BERRCF |
                            I2C_ICR_OVRCF | I2C_ICR_ARLOCF;
                 i2c->CR2 |= I2C_CR2_STOP;
@@ -320,6 +417,8 @@ static bool _i2c_master_xfer_ll(uint8_t bus, I2C_TypeDef *i2c, uint8_t addr,
         timeout = I2C_TIMEOUT_MAX;
         while (!(i2c->ISR & I2C_ISR_STOPF) && --timeout) { __NOP(); }
         if (timeout == 0) {
+            _i2c_dbg_record(bus, addr, send_len, recv_len, i2c,
+                            RTT_I2C_DBG_REASON_STOPF_TIMEOUT, timeout);
 #if HAL_I2C_CLEAR_ON_TIMEOUT
             return _i2c_xfer_timeout(bus, i2c);
 #else
@@ -329,6 +428,8 @@ static bool _i2c_master_xfer_ll(uint8_t bus, I2C_TypeDef *i2c, uint8_t addr,
         i2c->ICR = I2C_ICR_STOPCF;
     }
 
+    _i2c_dbg_record(bus, addr, send_len, recv_len, i2c,
+                    RTT_I2C_DBG_REASON_NONE, timeout);
     return true;
 }
 
@@ -409,17 +510,25 @@ bool I2CDevice::_do_transfer(const uint8_t *send, uint32_t send_len,
                             uint8_t *recv, uint32_t recv_len)
 {
     if (_busnum >= I2C_BUS_COUNT) {
+        _i2c_dbg_record(_busnum, _address, send_len, recv_len, nullptr,
+                        RTT_I2C_DBG_REASON_INVALID_BUS, 0);
         return false;
     }
 
     I2CBusDescr *bd = &_i2c_buses[_busnum];
     if (bd->regs == NULL) {
+        _i2c_dbg_record(_busnum, _address, send_len, recv_len, nullptr,
+                        RTT_I2C_DBG_REASON_NULL_REGS, 0);
         return false;
     }
 
     /* Ensure hardware is initialised */
     if (!bd->hw_inited) {
         _i2c_hw_init(_busnum);
+        if (!bd->hw_inited) {
+            _i2c_dbg_record(_busnum, _address, send_len, recv_len, bd->regs,
+                            RTT_I2C_DBG_REASON_HW_NOT_INITED, 0);
+        }
     }
 
     return _i2c_master_xfer_ll(_busnum, bd->regs, _address,
@@ -432,8 +541,14 @@ bool I2CDevice::transfer(const uint8_t *send, uint32_t send_len,
     if (_bus_dev == nullptr) return false;
     if (!_bus_dev->semaphore.take(HAL_SEMAPHORE_BLOCK_FOREVER)) return false;
 
+    if (_busnum < I2C_BUS_COUNT) {
+        rtt_dbg_i2c_transfer_calls[_busnum]++;
+    }
+
     bool ok = false;
+    uint8_t used_attempt = 0;
     for (uint8_t attempt = 0; attempt <= _retries; attempt++) {
+        used_attempt = attempt;
         if (_split) {
             /* Split transfer: separate write and read transactions.
              * Avoids a stop condition with SCL low which some devices
@@ -461,6 +576,11 @@ bool I2CDevice::transfer(const uint8_t *send, uint32_t send_len,
         }
     }
 
+    rtt_dbg_i2c_transfer_last_retries = used_attempt;
+    rtt_dbg_i2c_last_attempts = used_attempt + 1U;
+    if (!ok && _busnum < I2C_BUS_COUNT) {
+        rtt_dbg_i2c_transfer_fail[_busnum]++;
+    }
     _bus_dev->semaphore.give();
     return ok;
 }

@@ -60,6 +60,50 @@ extern uint32_t rtt_boot_rcc_csr;
 
 extern "C" void rt_hw_board_init(void);
 
+static void rtt_gpio_write_pin_value(uint8_t pin, bool high)
+{
+    const uint8_t port = pin >> 4;
+    const uint8_t bit = pin & 0x0F;
+    if (port > 8) {
+        return;
+    }
+    GPIO_TypeDef *gpio = (GPIO_TypeDef *)(GPIOA_BASE + ((uint32_t)port << 10U));
+    RCC->AHB1ENR |= (1U << port);
+    (void)RCC->AHB1ENR;
+    gpio->MODER = (gpio->MODER & ~(3UL << (bit * 2))) | (1UL << (bit * 2));
+    gpio->OTYPER &= ~(1UL << bit);
+    gpio->OSPEEDR = (gpio->OSPEEDR & ~(3UL << (bit * 2))) | (2UL << (bit * 2));
+    if (high) {
+        gpio->BSRR = 1UL << bit;
+    } else {
+        gpio->BSRR = 1UL << (bit + 16U);
+    }
+    __DSB();
+}
+
+static void rtt_enable_peripheral_power_rails(const AP_HAL::HAL& hal_ref)
+{
+    /*
+     * [Cybernetics Ch.4] Closed-loop alignment with ChibiOS
+     * peripheral_power_enable(): nVDD_* rails are active-low and must be
+     * driven LOW after the initial bootloader/radio settle delay.
+     */
+    hal_ref.scheduler->delay(100);
+#ifdef HAL_GPIO_nVDD_5V_PERIPH_EN_VALUE
+    rtt_gpio_write_pin_value(HAL_GPIO_nVDD_5V_PERIPH_EN_VALUE, false);
+#endif
+#ifdef HAL_GPIO_nVDD_5V_HIPOWER_EN_VALUE
+    rtt_gpio_write_pin_value(HAL_GPIO_nVDD_5V_HIPOWER_EN_VALUE, false);
+#endif
+#ifdef HAL_GPIO_VDD_5V_PERIPH_EN_VALUE
+    rtt_gpio_write_pin_value(HAL_GPIO_VDD_5V_PERIPH_EN_VALUE, true);
+#endif
+#ifdef HAL_GPIO_VDD_5V_HIPOWER_EN_VALUE
+    rtt_gpio_write_pin_value(HAL_GPIO_VDD_5V_HIPOWER_EN_VALUE, true);
+#endif
+    hal_ref.scheduler->delay(20);
+}
+
 namespace RTT
 {
 class OpticalFlowStub : public AP_HAL::OpticalFlow
@@ -105,7 +149,7 @@ static RTT::DSP dspDriver;
 // not a second driver instance with the same HAL index.
 AP_IOMCU iomcu(serial8Driver);
 
-RTT::UARTDriver *get_rtt_iomcu_uart(void) { return nullptr; }
+RTT::UARTDriver *get_rtt_iomcu_uart(void) { return &serial8Driver; }
 #endif
 #if AP_SIM_ENABLED && CONFIG_HAL_BOARD != HAL_BOARD_SITL
 static AP_HAL::SIMState xsimstate;
@@ -342,6 +386,7 @@ void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
      * and other rails so IMU/Baro/USD card etc. respond on the bus.
      */
     hal.gpio->init();
+    rtt_enable_peripheral_power_rails(hal);
 
     /* SPI1 GPIO MODER — gpio->init() may clobber PG11/PA6/PD7 AF mode.
      * PG11=SCK, PA6=MISO, PD7=MOSI (fmuv5/CUAV V5 reference). */

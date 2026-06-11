@@ -278,6 +278,7 @@ void usb_setup_transfer(void *usbp, const void *buf, size_t len,
 /* ========================================================================== */
 
 bool usb_lld_send_rtt(uint8_t ep, const uint8_t *data, uint32_t len);
+uint32_t usb_lld_txspace_rtt(uint8_t ep);
 void usb_lld_set_rx_callback(usb_rx_callback_t cb, void *arg);
 void usb_lld_rearm_cdc_out(void);
 bool usb_lld_is_configured_rtt(void);

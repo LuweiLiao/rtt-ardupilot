@@ -93,6 +93,30 @@ Reset_Handler:
     cmp   r2, r4
     bcc   .L_FillDtcmBss
 
+    /* Zero-fill GDB-visible diagnostics now placed outside .dtcm_bss. */
+    ldr   r2, =_srtt_dbg_bss
+    ldr   r4, =_ertt_dbg_bss
+    movs  r3, #0
+    b     .L_LoopFillRttDbgBss
+.L_FillRttDbgBss:
+    str   r3, [r2]
+    adds  r2, r2, #4
+.L_LoopFillRttDbgBss:
+    cmp   r2, r4
+    bcc   .L_FillRttDbgBss
+
+    /* Zero-fill non-cacheable DMA BSS so SDIO/USB DMA state is deterministic. */
+    ldr   r2, =_sram1_bss_start
+    ldr   r4, =_sram1_bss_end
+    movs  r3, #0
+    b     .L_LoopFillSram1Bss
+.L_FillSram1Bss:
+    str   r3, [r2]
+    adds  r2, r2, #4
+.L_LoopFillSram1Bss:
+    cmp   r2, r4
+    bcc   .L_FillSram1Bss
+
     /* __libc_init_array is deferred to rt_board_init.c via INIT_COMPONENT_EXPORT,
        so C++ ctors run AFTER RTT heap is initialized. */
 
