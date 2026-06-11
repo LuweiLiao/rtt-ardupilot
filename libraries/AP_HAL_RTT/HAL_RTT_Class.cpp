@@ -226,6 +226,10 @@ volatile uint32_t rtt_dbg_run_tasks_us = 0;
 volatile uint32_t rtt_dbg_extra_loop = 0;
 extern "C" volatile uint32_t rtt_cpu_idle_pct;
 
+#ifndef HAL_RTT_UART7_PERIODIC_TELEMETRY
+#define HAL_RTT_UART7_PERIODIC_TELEMETRY 0
+#endif
+
 #if defined(RT_USING_FINSH) && defined(MSH_USING_BUILT_IN_COMMANDS)
 static void ap_rate(void)
 {
@@ -328,7 +332,9 @@ static void _main_loop_entry(void* arg)
         if (dt < rtt_dbg_loop_time_min_us && dt > 0) rtt_dbg_loop_time_min_us = dt;
         if (dt < 1500) rtt_dbg_fast_loop_count++;
         rtt_dbg_main_loop_iterations++;
+#if HAL_RTT_UART7_PERIODIC_TELEMETRY
         rtt_ctl_telemetry_tick(1000);
+#endif
     }
 }
 
