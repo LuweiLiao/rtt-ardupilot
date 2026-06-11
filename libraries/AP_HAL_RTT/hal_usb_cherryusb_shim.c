@@ -444,66 +444,12 @@ static void cherry_tx_ring_discard_n(uint8_t n)
     }
 }
 
-static void cherry_tx_complete_if_dtr_closed_done(void)
-{
-    const uint32_t diepctl = CHERRY_DIEPCTL(CHERRY_CDC_IN_EP_IDX);
-    const uint32_t diepint = CHERRY_DIEPINT(CHERRY_CDC_IN_EP_IDX);
-    const uint32_t dieptsiz = CHERRY_DIEPTSIZ(CHERRY_CDC_IN_EP_IDX);
-    const uint32_t dtxfsts = CHERRY_DTXFSTS(CHERRY_CDC_IN_EP_IDX);
-
-    const bool transfer_drained =
-        ((diepint & CHERRY_DIEPINT_TXFE) != 0U) &&
-        ((dieptsiz & CHERRY_DIEPTSIZ_XFRSIZ) == 0U) &&
-        ((dieptsiz & CHERRY_DIEPTSIZ_PKTCNT) != 0U);
-
-    if (!transfer_drained) {
-        return;
-    }
-
-    rtt_dbg_cherry_dtr_closed_last_diepctl = diepctl;
-    rtt_dbg_cherry_dtr_closed_last_diepint = diepint;
-    rtt_dbg_cherry_dtr_closed_last_dieptsiz = dieptsiz;
-    rtt_dbg_cherry_dtr_closed_last_dtxfsts = dtxfsts;
-
-    if (cherry_tx_busy && cherry_tx_inflight_slots > 0U) {
-        rtt_dbg_cherry_dtr_closed_complete++;
-        rtt_dbg_cherry_dtr_closed_complete_slots += cherry_tx_inflight_slots;
-        rtt_dbg_cherry_tx_complete_discards += cherry_tx_inflight_slots;
-        cherry_tx_ring_discard_n(cherry_tx_inflight_slots);
-    } else if (!cherry_tx_busy && cherry_tx_inflight_slots == 0U &&
-               ((diepctl & CHERRY_DIEPCTL_EPENA) != 0U)) {
-        rtt_dbg_cherry_dtr_closed_orphan_epena++;
-        CHERRY_DIEPEMPMSK &= ~(1UL << CHERRY_CDC_IN_EP_IDX);
-        CHERRY_DIEPCTL(CHERRY_CDC_IN_EP_IDX) |= (CHERRY_DIEPCTL_SNAK | CHERRY_DIEPCTL_EPDIS);
-        uint32_t timeout = 50000U;
-        while ((CHERRY_DIEPINT(CHERRY_CDC_IN_EP_IDX) & CHERRY_DIEPINT_EPDISD) == 0U) {
-            if (--timeout == 0U) {
-                break;
-            }
-        }
-        CHERRY_DIEPINT(CHERRY_CDC_IN_EP_IDX) =
-            (CHERRY_DIEPINT_EPDISD | CHERRY_DIEPINT_XFRC | CHERRY_DIEPINT_TXFE);
-        CHERRY_GRSTCTL = CHERRY_GRSTCTL_TXFFLSH | CHERRY_GRSTCTL_TXFNUM1;
-        timeout = 50000U;
-        while ((CHERRY_GRSTCTL & CHERRY_GRSTCTL_TXFFLSH) != 0U) {
-            if (--timeout == 0U) {
-                break;
-            }
-        }
-    }
-
-    cherry_tx_inflight_slots = 0U;
-    rtt_dbg_cherry_tx_inflight_slots_state = 0U;
-    cherry_tx_busy = 0;
-    cherry_dbg_sync_tx_busy();
-    cherry_tx_busy_since_ms = 0U;
-}
-
 static void cherry_tx_kick(void)
 {
     rtt_dbg_cherry_tx_kick_calls++;
 
-    if (!cherry_dtr) {
+    /* Match ChibiOS SerialUSB: DTR is advisory; configured USB may carry MAVLink. */
+    if (!cherry_configured) {
         return;
     }
 
@@ -732,9 +678,7 @@ static void cherry_tx_epdis_recovery(uint32_t reason, uint32_t elapsed_ms)
         rtt_dbg_cherry_tx_inflight_slots_state = 0U;
     }
     rtt_dbg_cherry_epdis_recovery_count++;
-    if (cherry_dtr) {
-        cherry_tx_kick();
-    }
+    cherry_tx_kick();
 }
 
 static void cherry_usbd_event_handler(uint8_t busid, uint8_t event)
@@ -825,9 +769,9 @@ void usbd_cdc_acm_bulk_in(uint8_t busid, uint8_t ep, uint32_t nbytes)
     if (nbytes == 0U) {
         rtt_dbg_cherry_tx_zlp_complete++;
     }
-    if (cherry_tx_ring_count > 0U && cherry_dtr) {
+    if (cherry_tx_ring_count > 0U) {
         cherry_tx_kick();
-    } else if (completed_full_packet && cherry_dtr) {
+    } else if (completed_full_packet) {
         /*
          * [Cybernetics Ch.4] Closed-loop: mirror ChibiOS sduDataTransmitted().
          * A final full-size bulk packet needs a ZLP so the host-side CDC/TTY
@@ -953,11 +897,7 @@ void usb_lld_poll_rtt(void)
     rt_base_t level = rt_hw_interrupt_disable();
     const uint32_t now_ms = cherry_now_ms();
 
-    if (cherry_configured && !cherry_dtr) {
-        cherry_tx_complete_if_dtr_closed_done();
-        cherry_epena_stuck_since_ms = 0U;
-        rtt_dbg_cherry_recovery_paused_dtr++;
-    } else if (cherry_configured && !cherry_tx_busy &&
+    if (cherry_configured && !cherry_tx_busy &&
         cherry_tx_ring_count > 0U &&
         (CHERRY_DIEPCTL(CHERRY_CDC_IN_EP_IDX) & CHERRY_DIEPCTL_EPENA)) {
         if (cherry_epena_stuck_since_ms == 0U) {
@@ -971,7 +911,7 @@ void usb_lld_poll_rtt(void)
         cherry_epena_stuck_since_ms = 0U;
     }
 
-    if (cherry_configured && cherry_dtr && cherry_tx_busy && cherry_tx_busy_since_ms != 0U) {
+    if (cherry_configured && cherry_tx_busy && cherry_tx_busy_since_ms != 0U) {
         cherry_tx_track_busy_max(now_ms);
         const uint32_t elapsed = now_ms - cherry_tx_busy_since_ms;
         if (elapsed > CHERRY_TX_BUSY_TIMEOUT_MS &&
@@ -980,7 +920,7 @@ void usb_lld_poll_rtt(void)
         }
     }
 
-    if (cherry_dtr && cherry_tx_ring_count > 0 && !cherry_tx_busy) {
+    if (cherry_tx_ring_count > 0 && !cherry_tx_busy) {
         cherry_tx_kick();
     }
 
@@ -989,7 +929,7 @@ void usb_lld_poll_rtt(void)
 
 bool usb_lld_send_rtt(uint8_t ep, const uint8_t *data, uint32_t len)
 {
-    if (!cherry_configured || !cherry_dtr || ep != 1 || data == NULL || len == 0) {
+    if (!cherry_configured || ep != 1 || data == NULL || len == 0) {
         return false;
     }
     if (len > CDC_MAX_MPS) {
@@ -1012,7 +952,7 @@ bool usb_lld_send_rtt(uint8_t ep, const uint8_t *data, uint32_t len)
 
 uint32_t usb_lld_txspace_rtt(uint8_t ep)
 {
-    if (!cherry_configured || !cherry_dtr || ep != 1) {
+    if (!cherry_configured || ep != 1) {
         return 0;
     }
 
