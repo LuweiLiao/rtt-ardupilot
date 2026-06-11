@@ -284,6 +284,36 @@ The decisive change is that the underflowed PARAM elapsed-time counter
 disappeared and the max PARAM send gap dropped from 322 ms to 56 ms while
 CherryUSB/DWC2 byte conservation stayed intact.
 
+## Code-Level ChibiOS vs RTT Matrix
+
+The important differences are visible in source, not just in the runtime
+numbers:
+
+| Concern | ChibiOS implementation | RTT/CherryUSB implementation | Why it matters |
+|---|---|---|---|
+| Timebase | `libraries/AP_HAL_ChibiOS/hwdef/common/hrt.c`: `hrt_micros64()` reads `chVTGetTimeStampI()` under system/ISR lock. | `libraries/AP_HAL_RTT/Util.cpp`: `get_micros64()` now uses a DWT delta accumulator under `rt_hw_interrupt_disable()`. | ArduPilot scheduler and GCS budget math require monotonic time.  This was the active missing invariant in RTT. |
+| AP transmit backpressure | `libraries/AP_HAL_ChibiOS/UARTDriver.cpp`: `txspace()` returns `_writebuf.space()`. | `libraries/AP_HAL_RTT/UARTDriver.cpp`: RTT also reports AP `_writebuf` space for USB. | GCS should see AP queue capacity, not raw endpoint FIFO capacity. |
+| USB service entry | ChibiOS `_flush()` calls `sduSOFHookI()` for USB; SOF handler also calls `sduSOFHookI()`. | RTT `_flush()` / timer paths drain AP `_writebuf` into the CherryUSB ring and kick EP1 when safe. | ChibiOS hides endpoint timing below SerialUSB queues; RTT has to rebuild the same decoupling explicitly. |
+| Nonblocking USB write | ChibiOS `write_pending_bytes_NODMA()` calls `chnWriteTimeout(..., TIME_IMMEDIATE)`. | RTT USB write path records wait/short/no-space counters and avoids host-completion waits; GREEN shows wait/short/no-space stayed zero. | The MAVLink producer must not block on host-side USB completion. |
+| IN completion ownership | `libraries/AP_HAL_ChibiOS/hwdef/common/usbcfg.c`: EP1 bulk-IN completion uses `sduDataTransmitted`. | `libraries/AP_HAL_RTT/hal_usb_cherryusb_shim.c`: `usbd_cdc_acm_bulk_in()` releases inflight CherryUSB ring slots and allows `cdc_tx_buf` reuse. | A buffer is reusable only after the USB completion callback owns the release decision. |
+| Endpoint-idle guard | SerialUSB/ChibiOS driver owns endpoint state internally. | RTT checks EPENA before copying the next aggregate into `cdc_tx_buf` or calling `usbd_ep_start_write()`. | Prevents overwriting the shared aggregate buffer while DWC2 still owns it. |
+| Transfer completion edge | ChibiOS OTG/SerialUSB treats XFRC as the completion edge for the class queue. | RTT DWC2 code tracks EP1 `start_write`, `XFRC`, and `complete`; it has defensive handling for early/residue cases. | Final GREEN counters show start/XFRC/complete were conserved, so this layer was safe but not the final active root cause. |
+| Packet scale | ChibiOS SerialUSB effectively provides a multi-buffer queue below AP `_writebuf`. | RTT keeps 64-byte ring slots and aggregates up to 256 bytes before arming EP1. | Reduces re-arm churn for PARAM/FTP bursts and makes RTT closer to ChibiOS queue scale. |
+
+The mistake in earlier reasoning was treating these USB queue differences as
+the only possible core issue.  They were real and worth fixing, but the final
+RED evidence separated the layers:
+
+```text
+USB transport conservation: good
+UART producer wait/short paths: inactive
+PARAM elapsed-time arithmetic: underflowed
+```
+
+That combination means the last visible symptom was caused by broken time
+feedback above the USB transport, not by an active CherryUSB/DWC2 byte-transfer
+failure.
+
 ## What Is Proven vs Not Proven
 
 Proven by the current evidence:
