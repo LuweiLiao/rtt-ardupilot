@@ -15,6 +15,25 @@
 
 #include "RCOutput.h"
 
+#if HAL_WITH_IO_MCU
+#include <AP_IOMCU/AP_IOMCU.h>
+extern AP_IOMCU iomcu;
+#endif
+
+using namespace RTT;
+
+void RCOutput::set_bidir_dshot_mask(uint32_t mask)
+{
+#if HAL_WITH_IO_MCU_BIDIR_DSHOT
+    const uint32_t iomcu_mask = ((1U << chan_offset) - 1U);
+    if (iomcu_dshot && (mask & iomcu_mask)) {
+        iomcu.set_bidir_dshot_mask(mask & iomcu_mask);
+    }
+#else
+    (void)mask;
+#endif
+}
+
 #if defined(HAL_WITH_BIDIR_DSHOT) && !HAL_WITH_IO_MCU
 #error "FMU bidirectional DShot on RTT is not implemented — extend RCOutput_bdshot.cpp"
 #endif

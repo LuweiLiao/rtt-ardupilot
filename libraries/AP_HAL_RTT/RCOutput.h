@@ -79,9 +79,7 @@ public:
     void set_active_escs_mask(uint32_t chanmask) override {
         _active_escs_mask |= (chanmask >> chan_offset);
     }
-    void set_dshot_esc_type(DshotEscType esc_type) override {
-        _dshot_esc_type = esc_type;
-    }
+    void set_dshot_esc_type(DshotEscType esc_type) override;
     DshotEscType get_dshot_esc_type() const override {
         return _dshot_esc_type;
     }
@@ -97,6 +95,9 @@ public:
     void enable_channel_mask_updates() override {
         _disable_channel_mask_updates = false;
     }
+    void set_telem_request_mask(uint32_t mask) override;
+    void set_bidir_dshot_mask(uint32_t mask) override;
+    uint32_t get_disabled_channels(uint32_t digital_mask) override;
 
     // Safety switch state (read by Util::safety_switch_state)
     uint8_t safety_state = 0;  // AP_HAL::Util::SAFETY_DISARMED

@@ -132,6 +132,36 @@ void RCOutput::set_reversible_mask(uint32_t chanmask)
 }
 
 /*
+  Set/get the dshot esc_type.
+
+  Reference: ChibiOS RCOutput.cpp L579-604
+ */
+void RCOutput::set_dshot_esc_type(DshotEscType dshot_esc_type)
+{
+    _dshot_esc_type = dshot_esc_type;
+#if HAL_WITH_IO_MCU
+    if (iomcu_dshot) {
+        iomcu.set_dshot_esc_type(dshot_esc_type);
+    }
+#endif
+}
+
+/*
+  Enable telemetry request for a mask of channels. This is used with DShot to
+  get telemetry feedback. The mask uses servo channel numbering.
+
+  Reference: ChibiOS RCOutput.cpp L1242-1255
+ */
+void RCOutput::set_telem_request_mask(uint32_t mask)
+{
+#if HAL_WITH_IO_MCU
+    if (iomcu_dshot && (mask & ((1U << chan_offset) - 1U))) {
+        iomcu.set_telem_request_mask(mask);
+    }
+#endif
+}
+
+/*
   Update the dshot outputs that should be reversible/3D at 1Hz.
 
   Reference: ChibiOS RCOutput_serial.cpp L154-186

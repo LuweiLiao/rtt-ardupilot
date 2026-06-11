@@ -329,6 +329,14 @@ void RCOutput::set_freq(uint32_t chmask, uint16_t freq_hz)
 
 uint16_t RCOutput::get_freq(uint8_t chan)
 {
+#if HAL_WITH_IO_MCU
+    if (chan < chan_offset && iomcu_enabled) {
+        return iomcu.get_freq(chan);
+    }
+#endif
+    if (chan >= chan_offset) {
+        chan -= chan_offset;
+    }
     if (chan < RTT_RCOUT_MAX_CHANNELS) {
         return _freq_hz[chan];
     }
@@ -337,6 +345,15 @@ uint16_t RCOutput::get_freq(uint8_t chan)
 
 void RCOutput::enable_ch(uint8_t chan)
 {
+#if HAL_WITH_IO_MCU
+    if (chan < chan_offset && iomcu_enabled) {
+        iomcu.enable_ch(chan);
+        return;
+    }
+#endif
+    if (chan >= chan_offset) {
+        chan -= chan_offset;
+    }
     if (chan < RTT_RCOUT_MAX_CHANNELS) {
         _enabled_mask |= (1U << chan);
         if (chan >= _num_channels) {
@@ -347,6 +364,15 @@ void RCOutput::enable_ch(uint8_t chan)
 
 void RCOutput::disable_ch(uint8_t chan)
 {
+#if HAL_WITH_IO_MCU
+    if (chan < chan_offset && iomcu_enabled) {
+        iomcu.disable_ch(chan);
+        return;
+    }
+#endif
+    if (chan >= chan_offset) {
+        chan -= chan_offset;
+    }
     if (chan >= RTT_RCOUT_MAX_CHANNELS) {
         return;
     }
@@ -469,6 +495,14 @@ void RCOutput::push()
 
 uint16_t RCOutput::read(uint8_t chan)
 {
+#if HAL_WITH_IO_MCU
+    if (chan < chan_offset && iomcu_enabled) {
+        return iomcu.read_channel(chan);
+    }
+#endif
+    if (chan >= chan_offset) {
+        chan -= chan_offset;
+    }
     if (chan < RTT_RCOUT_MAX_CHANNELS) {
         return _period_us[chan];
     }
@@ -477,8 +511,15 @@ uint16_t RCOutput::read(uint8_t chan)
 
 void RCOutput::read(uint16_t* period_us, uint8_t len)
 {
-    for (uint8_t i = 0; i < len && i < RTT_RCOUT_MAX_CHANNELS; i++) {
-        period_us[i] = _period_us[i];
+    for (uint8_t i = 0; i < len; i++) {
+#if HAL_WITH_IO_MCU
+        if (i < chan_offset && iomcu_enabled) {
+            period_us[i] = iomcu.read_channel(i);
+            continue;
+        }
+#endif
+        const uint8_t local_chan = (i >= chan_offset) ? i - chan_offset : i;
+        period_us[i] = (local_chan < RTT_RCOUT_MAX_CHANNELS) ? _period_us[local_chan] : 0;
     }
 }
 
@@ -571,14 +612,34 @@ void RCOutput::set_default_rate(uint16_t rate_hz)
 
 void RCOutput::set_output_mode(uint32_t mask, enum output_mode mode)
 {
-    (void)mask;
     _output_mode = mode;
+
+#if HAL_WITH_IO_MCU
+    const uint16_t iomcu_mask = mask & ((1U << chan_offset) - 1U);
+    if (iomcu_enabled && iomcu_mask &&
+        (mode == MODE_PWM_ONESHOT ||
+         mode == MODE_PWM_ONESHOT125 ||
+         mode == MODE_PWM_BRUSHED ||
+         (mode >= MODE_PWM_DSHOT150 && mode <= MODE_PWM_DSHOT600))) {
+        iomcu.set_output_mode(iomcu_mask, mode);
+    }
+#endif
 }
 
 AP_HAL::RCOutput::output_mode RCOutput::get_output_mode(uint32_t &mask)
 {
     mask = _enabled_mask;
     return _output_mode;
+}
+
+uint32_t RCOutput::get_disabled_channels(uint32_t digital_mask)
+{
+#if HAL_WITH_IO_MCU
+    if (iomcu_dshot) {
+        return iomcu.get_disabled_channels(digital_mask);
+    }
+#endif
+    return 0;
 }
 
 void RCOutput::safety_update(void)
