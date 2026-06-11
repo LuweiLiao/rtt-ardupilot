@@ -57,6 +57,7 @@ private:
     StorageBackend _initialisedType = StorageBackend::None;
 
     void _storage_open(void);
+    void _publish_backend_debug(void);
     void _mark_dirty(uint16_t loc, uint16_t length);
     void _flash_load(void);
     bool _flash_write(uint16_t line);

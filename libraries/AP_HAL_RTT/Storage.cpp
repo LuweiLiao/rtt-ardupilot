@@ -17,10 +17,11 @@
 #endif
 
 extern volatile uint32_t rtt_dbg_setup_stage;
-volatile uint32_t rtt_dbg_storage_backend;
-volatile uint32_t rtt_dbg_fram_probe; /* 1=init ok, 2=read ok, 3=init fail, 4=read fail */
-volatile uint32_t rtt_dbg_fram_tick_ok;
-volatile uint32_t rtt_dbg_fram_tick_fail;
+#define RTT_STORAGE_DBG_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+volatile uint32_t rtt_dbg_storage_backend RTT_STORAGE_DBG_BSS;
+volatile uint32_t rtt_dbg_fram_probe RTT_STORAGE_DBG_BSS; /* 1=init ok, 2=read ok, 3=init fail, 4=read fail */
+volatile uint32_t rtt_dbg_fram_tick_ok RTT_STORAGE_DBG_BSS;
+volatile uint32_t rtt_dbg_fram_tick_fail RTT_STORAGE_DBG_BSS;
 
 extern const AP_HAL::HAL& hal;
 
@@ -108,9 +109,20 @@ static inline void _storage_flash_lock(void)
 namespace RTT
 {
 
+void Storage::_publish_backend_debug(void)
+{
+    rtt_dbg_storage_backend = (uint32_t)_initialisedType;
+#if HAL_WITH_RAMTRON
+    if (_initialisedType == StorageBackend::FRAM && rtt_dbg_fram_probe == 0) {
+        rtt_dbg_fram_probe = 2;
+    }
+#endif
+}
+
 void Storage::_storage_open(void)
 {
     if (_initialisedType != StorageBackend::None) {
+        _publish_backend_debug();
         return;
     }
 
@@ -126,7 +138,7 @@ void Storage::_storage_open(void)
         if (_fram.read(0, _buffer, RTT_STORAGE_SIZE)) {
             rtt_dbg_fram_probe = 2;
             _initialisedType = StorageBackend::FRAM;
-            rtt_dbg_storage_backend = (uint32_t)_initialisedType;
+            _publish_backend_debug();
             _last_empty_ms = AP_HAL::millis();
             rtt_dbg_setup_stage = 504;  // FRAM ok
             hal.console->printf("Initialised Storage type=%u\n",
@@ -144,7 +156,7 @@ void Storage::_storage_open(void)
     rtt_dbg_setup_stage = 502;  // trying Flash
     _flash_load();
     if (_initialisedType == StorageBackend::Flash) {
-        rtt_dbg_storage_backend = (uint32_t)_initialisedType;
+        _publish_backend_debug();
         _last_empty_ms = AP_HAL::millis();
         rtt_dbg_setup_stage = 505;  // Flash ok
         hal.console->printf("Initialised Storage type=%u\n",
@@ -156,7 +168,7 @@ void Storage::_storage_open(void)
     rtt_dbg_setup_stage = 503;  // using stub
     memset(_buffer, 0xFF, RTT_STORAGE_SIZE);
     _initialisedType = StorageBackend::Stub;
-    rtt_dbg_storage_backend = (uint32_t)_initialisedType;
+    _publish_backend_debug();
     hal.console->printf("Initialised Storage type=%u\n", (unsigned)_initialisedType);
 }
 
