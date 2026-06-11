@@ -547,14 +547,17 @@ void Scheduler::delay_microseconds_boost(uint16_t us)
      */
     if (in_main_thread() && _priority_boosted) {
         rt_thread_delay(1);
-        /*
-         * [Cybernetics Ch.4] Closed-loop: wait_for_sample() can hold the main
-         * scheduler outside AP_Scheduler::run() for milliseconds while startup
-         * sensor threads catch up.  ChibiOS can keep already-queued SerialUSB
-         * buffers draining in that window; RTT also needs the MAVLink producer
-         * to get a short delay-callback slot so MSG_NEXT_PARAM can refill USB.
-         */
-        call_delay_cb();
+        if (!_initialized) {
+            /*
+             * [Cybernetics Ch.4] Closed-loop: during setup, long sensor waits
+             * still need the registered delay callback to publish boot/status
+             * traffic and service active RTT parameter windows.  Once the main
+             * scheduler is initialized, match ChibiOS boost semantics: yield to
+             * worker threads, but do not run the startup delay callback from the
+             * normal wait_for_sample() path.
+             */
+            call_delay_cb();
+        }
         _called_boost = true;
         return;
     }
