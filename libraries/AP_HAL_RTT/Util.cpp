@@ -35,6 +35,18 @@ using namespace RTT;
 static bool _dwt_initialized = false;
 static uint32_t _cpu_freq_mhz = 216;
 
+#define RTT_TIME_DBG_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+extern "C" {
+volatile uint32_t rtt_dbg_timebase_rt_tick_hz RTT_TIME_DBG_BSS;
+volatile uint32_t rtt_dbg_timebase_cpu_hz RTT_TIME_DBG_BSS;
+volatile uint32_t rtt_dbg_timebase_units_per_sec RTT_TIME_DBG_BSS;
+volatile uint32_t rtt_dbg_timebase_millis_source RTT_TIME_DBG_BSS;
+volatile uint32_t rtt_dbg_timebase_dwt_enabled RTT_TIME_DBG_BSS;
+volatile uint32_t rtt_dbg_timebase_micros_delta_max RTT_TIME_DBG_BSS;
+volatile uint32_t rtt_dbg_timebase_micros_backwards RTT_TIME_DBG_BSS;
+volatile uint32_t rtt_dbg_timebase_millis_backwards RTT_TIME_DBG_BSS;
+}
+
 static void _dwt_init(void)
 {
     if (_dwt_initialized) return;
@@ -46,15 +58,23 @@ static void _dwt_init(void)
     extern uint32_t SystemCoreClock;
     _cpu_freq_mhz = SystemCoreClock / 1000000;
     if (_cpu_freq_mhz == 0) _cpu_freq_mhz = 216;
+    rtt_dbg_timebase_rt_tick_hz = RT_TICK_PER_SECOND;
+    rtt_dbg_timebase_cpu_hz = SystemCoreClock;
+    rtt_dbg_timebase_units_per_sec = 1000000U;
+    rtt_dbg_timebase_dwt_enabled = (DWT_CTRL & 1U) ? 1U : 0U;
 }
 
 uint32_t Util::get_millis() const
 {
-    // Use 64-bit intermediate to avoid uint32_t overflow when
-    // RT_TICK_PER_SECOND > 1000.  With 10kHz ticks the naive
-    // (tick * 1000) overflows after ~429 seconds.
-    const rt_tick_t tick = rt_tick_get();
-    return (uint32_t)((uint64_t)tick * 1000ULL / RT_TICK_PER_SECOND);
+    /*
+     * ChibiOS derives millis() from the same high-resolution timer used by
+     * micros64() (hrt_millis32()).  Keep RTT on one AP_HAL timebase too:
+     * RT_TICK_PER_SECOND remains the RT-Thread scheduler tick, while ArduPilot
+     * time is the DWT-backed 1 MHz hrt-equivalent.
+     */
+    const uint32_t now_ms = (uint32_t)(get_micros64() / 1000ULL);
+    rtt_dbg_timebase_millis_source = 1U; /* 1=DWT hrt, not rt_tick_get */
+    return now_ms;
 }
 
 uint64_t Util::get_micros64() const
@@ -78,11 +98,13 @@ uint64_t Util::get_micros64() const
     static uint32_t last_cyc;
     static uint64_t accumulated_us;
     static uint64_t fractional_cycles;
+    static uint64_t last_returned_us;
 
     if (!dwt_time_valid) {
         last_cyc = cyc;
         accumulated_us = (uint64_t)rt_tick_get() * 1000000ULL / tick_hz;
         fractional_cycles = 0;
+        last_returned_us = accumulated_us;
         dwt_time_valid = true;
         rt_hw_interrupt_enable(level);
         return accumulated_us;
@@ -91,9 +113,18 @@ uint64_t Util::get_micros64() const
     const uint32_t delta_cycles = cyc - last_cyc;
     last_cyc = cyc;
     const uint64_t scaled = fractional_cycles + (uint64_t)delta_cycles * 1000000ULL;
-    accumulated_us += scaled / cpu_hz;
+    const uint32_t delta_us = (uint32_t)(scaled / cpu_hz);
+    if (delta_us > rtt_dbg_timebase_micros_delta_max) {
+        rtt_dbg_timebase_micros_delta_max = delta_us;
+    }
+    accumulated_us += delta_us;
     fractional_cycles = scaled % cpu_hz;
     const uint64_t now_us = accumulated_us;
+    if (now_us < last_returned_us) {
+        rtt_dbg_timebase_micros_backwards++;
+        rtt_dbg_timebase_millis_backwards = rtt_dbg_timebase_micros_backwards;
+    }
+    last_returned_us = now_us;
     rt_hw_interrupt_enable(level);
     return now_us;
 }

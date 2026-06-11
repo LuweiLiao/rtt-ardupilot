@@ -511,11 +511,10 @@ void Scheduler::delay_microseconds(uint16_t us)
     }
 
     _poll_usb_if_active();
-    /* ≥200 µs: yield CPU.  us < tick_us (i.e. 201-999µs) rounds up to 1
-     * tick (1000 µs), which is a necessary compromise given RTT's coarse
-     * 1 kHz system timer.  The caller always has a micros64-based backup
-     * for precise elapsed-time checks. */
-    rt_thread_delay(MAX(1U, us / tick_us));
+    /* ≥200 µs: yield CPU.  Round up to avoid returning before the requested
+     * delay has elapsed; ChibiOS' 1 MHz system timer can represent these waits
+     * directly, while RTT's 1 kHz scheduler tick needs a conservative ceil. */
+    rt_thread_delay(MAX(1U, (us + tick_us - 1U) / tick_us));
 }
 
 /* ----------------------------------------------------------------
