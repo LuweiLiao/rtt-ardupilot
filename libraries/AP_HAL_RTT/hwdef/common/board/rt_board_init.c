@@ -453,6 +453,10 @@ INIT_COMPONENT_EXPORT(rtt_run_cpp_ctors);
 #define SD_POWER_PIN    GET_PIN(G, 7)   /* fallback default */
 #endif
 #define SD_MOUNT_POINT  "/"
+#define SD_MOUNT_FAST_RETRY_ROUNDS 20
+#define SD_MOUNT_FAST_RETRY_MS     100
+#define SD_MOUNT_SLOW_RETRY_MS     500
+#define SD_MOUNT_THREAD_PRIORITY   8
 
 volatile int rtt_sd_mount_stage = 0;
 volatile int rtt_sd_mount_result = -99;
@@ -506,7 +510,13 @@ static void _sd_mount_thread(void *arg)
         if (rtt_sd_mount_result == 0) break;
         _sd_try_mount_once();
         if (rtt_sd_mount_result == 0) break;
-        rt_thread_mdelay(500);
+        /*
+         * [Cybernetics Ch.4] Closed-loop: MAVFTP can answer requests before
+         * the background mount completes.  Retry quickly during early boot,
+         * then fall back to a slower cadence for missing-card cases.
+         */
+        rt_thread_mdelay(round < SD_MOUNT_FAST_RETRY_ROUNDS ?
+                         SD_MOUNT_FAST_RETRY_MS : SD_MOUNT_SLOW_RETRY_MS);
         ap_rtt_iwdg_kick();
     }
     if (rtt_sd_mount_result != 0) {
@@ -524,7 +534,7 @@ static int sd_card_mount_init(void)
 {
     rt_thread_t th = rt_thread_create("sdmnt", _sd_mount_thread,
                                       RT_NULL, 2048,
-                                      RT_THREAD_PRIORITY_MAX - 2, 20);
+                                      SD_MOUNT_THREAD_PRIORITY, 20);
     if (th) rt_thread_startup(th);
     return 0;
 }

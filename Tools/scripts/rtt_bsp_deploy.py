@@ -209,11 +209,22 @@ def _copy_hwdef_board_overrides(ap_root, tinfo, deploy_dir):
         ports_src = os.path.join(ap_root, _norm(ports_rel))
         ports_dst = os.path.join(deploy_dir, 'board', 'ports')
         if os.path.isdir(ports_src):
+            for stale in ('sdcard_port.c', 'sdcard_port.o', 'sdcard_port.d', 'sdcard_port.cmd'):
+                try:
+                    os.remove(os.path.join(ports_dst, stale))
+                except FileNotFoundError:
+                    pass
             for root, dirs, files in os.walk(ports_src):
                 rel = os.path.relpath(root, ports_src)
                 for f in files:
                     # Skip .o and other build artifacts
                     if f.endswith(('.o', '.d', '.cmd')):
+                        continue
+                    # The hwdef/common board owns SD mounting at "/" and
+                    # creates /APM.  The legacy CUAV V5 ports overlay still
+                    # contains an INIT_APP_EXPORT sdcard_port.c that mounts
+                    # the same card at /sdcard and can race DFS readiness.
+                    if rel == '.' and f in ('SConscript', 'sdcard_port.c'):
                         continue
                     src_file = os.path.join(root, f)
                     dst_file = os.path.join(ports_dst, rel, f) if rel != '.' else os.path.join(ports_dst, f)
