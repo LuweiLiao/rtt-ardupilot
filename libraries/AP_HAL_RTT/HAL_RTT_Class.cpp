@@ -345,13 +345,6 @@ void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
      * the next SysTick fires. */
     *(volatile uint32_t *)0x40003000 = 0xAAAA;
 
-    /* 🔥 HACK: Force SPI1 clock enable — _spi1_gpio_init() in SPIDevice.cpp
-     * writes APB2ENR but is never reached because the virtual dispatch of
-     * transfer() takes a different code path.  Enable SPI1 clock here to
-     * ensure SPI1 register writes have effect regardless of which transfer
-     * path is taken.  SPI4 clock also enabled for MS5611 baro. */
-    RCC->APB2ENR |= RCC_APB2ENR_SPI1EN | RCC_APB2ENR_SPI4EN;
-
     /* Save reset reason before RMVF clear — mirrors ChibiOS board.c
      * stm32_watchdog_save_reason() / stm32_watchdog_clear_reason(). */
     rtt_boot_rcc_csr = RCC->CSR;

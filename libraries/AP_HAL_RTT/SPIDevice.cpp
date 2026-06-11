@@ -153,13 +153,22 @@ static void _spi2_gpio_init(void)
     _spi2_gpio_init_done = true;
 }
 
+static void _spi_gpio_init_for_bus(uint8_t bus)
+{
+    if (bus == 4) {
+        _spi4_gpio_init();
+    } else if (bus == 2) {
+        _spi2_gpio_init();
+    } else if (bus == 1) {
+        _spi1_gpio_init();
+    }
+}
+
 void RTT::spi_cmsis_prepare_bus(uint8_t bus)
 {
 #ifdef SOC_SERIES_STM32F7
     _cmsis_spi_bus_mtx_ensure(bus);
-    if (bus == 2) {
-        _spi2_gpio_init();
-    }
+    _spi_gpio_init_for_bus(bus);
 #else
     (void)bus;
 #endif
@@ -970,6 +979,7 @@ SPIDevice::SPIDevice(RTT_SPIDesc &desc)
      * See _spi1_gpio_init() and spi1_poll_transfer() for the polling path. */
 #ifndef FORCE_RTT_SPI_FRAMEWORK
     if (_desc.bus == 1 || _desc.bus == 2 || _desc.bus == 4) {
+        _spi_gpio_init_for_bus(_desc.bus);
         _dev = nullptr;
         return;
     }
@@ -1092,13 +1102,7 @@ bool SPIDevice::transfer(const uint8_t *send, uint32_t send_len,
          * inadvertently release CS mid-transaction, causing the
          * IMU slave to abort the burst and return all-zero data. */
         if (!_cs_held) {
-            if (_desc.bus == 4) {
-                _spi4_gpio_init();
-            } else if (_desc.bus == 2) {
-                _spi2_gpio_init();
-            } else {
-                _spi1_gpio_init();
-            }
+            _spi_gpio_init_for_bus(_desc.bus);
         }
         if (send_len > 0 || recv_len > 0) {
             if (!_cs_held && !_lock_bus()) {
@@ -1253,6 +1257,7 @@ bool SPIDevice::set_chip_select(bool set)
             if (!_lock_bus()) {
                 return false;
             }
+            _spi_gpio_init_for_bus(_desc.bus);
             /* Configure SPI registers (CR1/CR2/SPE) BEFORE asserting CS.
              * When cs_take=false, spi1_poll_transfer() skips SPI config
              * entirely, relying on the caller to have configured it via
@@ -1279,13 +1284,6 @@ bool SPIDevice::set_chip_select(bool set)
              * transfer_fullduplex() calls with cs_take=false happen while
              * CS is asserted, enabling multi-byte burst reads (e.g.
              * ICM20689 112-byte FIFO read). */
-            if (_desc.bus == 4) {
-                _spi4_gpio_init();
-            } else if (_desc.bus == 2) {
-                _spi2_gpio_init();
-            } else {
-                _spi1_gpio_init();
-            }
             rt_base_t cs = (_cs_pin != 0) ? _cs_pin : 0;
             if (cs != 0) {
                 uint32_t port_idx = cs >> 4;
@@ -1343,13 +1341,7 @@ bool SPIDevice::transfer_fullduplex(const uint8_t *send, uint8_t *recv, uint32_t
         /* Skip GPIO re-init during CS-held burst reads.
          * See transfer() for detailed rationale. */
         if (!_cs_held) {
-            if (_desc.bus == 4) {
-                _spi4_gpio_init();
-            } else if (_desc.bus == 2) {
-                _spi2_gpio_init();
-            } else {
-                _spi1_gpio_init();
-            }
+            _spi_gpio_init_for_bus(_desc.bus);
         }
         if (len > 0) {
             if (!_cs_held && !_lock_bus()) {
