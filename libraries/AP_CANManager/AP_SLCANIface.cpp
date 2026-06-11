@@ -274,6 +274,23 @@ bool SLCAN::CANIface::init_passthrough(uint8_t i)
     return true;
 }
 
+void SLCAN::CANIface::poll()
+{
+    update_slcan_port();
+    if (!is_enabled()) {
+        return;
+    }
+
+    AP_HAL::CANFrame frame;
+    uint64_t rx_time;
+    AP_HAL::CANIface::CanIOFlags flags {};
+    for (uint8_t i = 0; i < 8; i++) {
+        if (receive(frame, rx_time, flags) <= 0) {
+            break;
+        }
+    }
+}
+
 /**
  * General frame format:
  *  <type> <id> <dlc> <data> [timestamp msec] [flags]

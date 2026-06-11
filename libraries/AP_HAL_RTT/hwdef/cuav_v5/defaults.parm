@@ -1,0 +1,4 @@
+# ChibiOS-style second logical USB CDC port for CAN SLCAN passthrough.
+SERIAL7_PROTOCOL 22
+CAN_P1_DRIVER 1
+CAN_SLCAN_CPORT 1

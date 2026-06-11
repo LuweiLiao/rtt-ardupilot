@@ -37,6 +37,8 @@
 #elif CONFIG_HAL_BOARD == HAL_BOARD_CHIBIOS
 #include <hal.h>
 #include <AP_HAL_ChibiOS/CANIface.h>
+#elif CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#include <AP_HAL_RTT/CANIface.h>
 #endif
 
 #include <AP_Common/ExpandingString.h>
@@ -265,6 +267,9 @@ void AP_CANManager::init()
 #if AP_CAN_LOGGING_ENABLED
     hal.scheduler->register_io_process(FUNCTOR_BIND_MEMBER(&AP_CANManager::check_logging_enable, void));
 #endif
+#if AP_CAN_SLCAN_ENABLED && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    hal.scheduler->register_io_process(FUNCTOR_BIND_MEMBER(&AP_CANManager::update_slcan, void));
+#endif
 }
 #else
 void AP_CANManager::init()
@@ -479,10 +484,16 @@ void AP_CANManager::check_logging_enable(void)
 
 #endif // AP_CAN_LOGGING_ENABLED
 
+#if AP_CAN_SLCAN_ENABLED && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+void AP_CANManager::update_slcan(void)
+{
+    _slcan_interface.poll();
+}
+#endif
+
 AP_CANManager& AP::can()
 {
     return *AP_CANManager::get_singleton();
 }
 
 #endif
-

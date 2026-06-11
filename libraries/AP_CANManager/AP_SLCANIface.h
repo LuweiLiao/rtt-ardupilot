@@ -62,12 +62,12 @@ class CANIface: public AP_HAL::CANIface
     // track changes to slcan serial port
     void update_slcan_port();
 
-    bool initialized_;
+    bool initialized_ = false;
 
     char buf_[SLCAN_BUFFER_SIZE + 1]; // buffer to record raw frame nibbles before parsing
     int16_t pos_ = 0; // position in the buffer recording nibble frames before parsing
-    AP_HAL::UARTDriver* _port; // UART interface port reference to be used for SLCAN iface
-    bool _enabled; // Flag to check whether we are allowed to use _port
+    AP_HAL::UARTDriver* _port = nullptr; // UART interface port reference to be used for SLCAN iface
+    bool _enabled = false; // Flag to check whether we are allowed to use _port
 
     ObjectBuffer<AP_HAL::CANIface::CanRxItem> rx_queue_; // Parsed Rx Frame queue
 
@@ -78,15 +78,15 @@ class CANIface: public AP_HAL::CANIface
     AP_Int8 _slcan_timeout;
     AP_Int8 _slcan_start_delay;
 
-    bool _slcan_start_req;
-    uint32_t _slcan_start_req_time;
-    int8_t _prev_ser_port;
+    bool _slcan_start_req = false;
+    uint32_t _slcan_start_req_time = 0;
+    int8_t _prev_ser_port = -1;
     int8_t _iface_num = -1;
-    uint32_t _last_had_activity;
-    uint8_t num_tries;
-    AP_HAL::CANIface* _can_iface; // Can interface to be used for interaction by SLCAN interface
+    uint32_t _last_had_activity = 0;
+    uint8_t num_tries = 0;
+    AP_HAL::CANIface* _can_iface = nullptr; // Can interface to be used for interaction by SLCAN interface
     HAL_Semaphore port_sem;
-    bool _set_by_sermgr;
+    bool _set_by_sermgr = false;
 public:
     CANIface():
         rx_queue_(HAL_CAN_RX_QUEUE_SIZE)
@@ -95,6 +95,7 @@ public:
     }
 
     static const struct AP_Param::GroupInfo var_info[];
+    using AP_HAL::CANIface::init;
 
     bool init(const uint32_t bitrate, const OperatingMode mode) override
     {
@@ -103,6 +104,9 @@ public:
 
     // Initialisation of SLCAN Passthrough method of operation
     bool init_passthrough(uint8_t i);
+
+    // Poll serial SLCAN traffic when no CAN protocol driver owns this iface.
+    void poll();
 
     void set_can_iface(AP_HAL::CANIface* can_iface)
     {

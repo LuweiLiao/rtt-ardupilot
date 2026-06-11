@@ -99,13 +99,13 @@ static uint32_t uart_pclk(USART_TypeDef *usart)
 
 extern const AP_HAL::HAL &hal;
 
-// Global pointer to the USB console UARTDriver instance
-static RTT::UARTDriver *_usb_console_driver = nullptr;
+// ChibiOS-style dual CDC: OTG1/SERIAL0 -> usb-acm0, OTG2/SERIAL7 -> usb-acm1.
+static RTT::UARTDriver *_usb_drivers[2] = {};
 
 extern "C" void uart_usb_rx_bridge(const uint8_t *data, uint32_t len)
 {
-    if (_usb_console_driver != nullptr) {
-        RTT::UARTDriver::usb_rx_bridge(data, len);
+    if (_usb_drivers[0] != nullptr) {
+        _usb_drivers[0]->usb_rx_bridge(data, len);
     }
 }
 
@@ -118,9 +118,10 @@ using namespace RTT;
  */
 static void _usb_cdc_rx_cb(const uint8_t *data, uint32_t len, void *arg)
 {
-    (void)arg;
-    /* usb_rx_bridge() writes to _readbuf and releases the RX semaphore */
-    ::uart_usb_rx_bridge(data, len);
+    auto *driver = static_cast<RTT::UARTDriver *>(arg);
+    if (driver != nullptr) {
+        driver->usb_rx_bridge(data, len);
+    }
 }
 
 #if defined(SOC_SERIES_STM32F7)
@@ -427,6 +428,11 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
 
         _baudrate = baud;
         _is_usb = true;
+        _usb_index = 0;
+        if (std::strncmp(name, "usb-acm", 7) == 0 && name[7] >= '0' && name[7] <= '1') {
+            _usb_index = uint8_t(name[7] - '0');
+        }
+        _usb_in_ep = (_usb_index == 0) ? 1 : 4;
         /*
          * [Cybernetics Ch.4] Closed-loop: USB CDC has no host-visible hardware
          * flow-control line.  ChibiOS leaves USB flow control disabled; doing
@@ -434,7 +440,7 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
          * large ReadFile ACKs outrun CherryUSB/DWC2 completion feedback.
          */
         _flow_control = FLOW_CONTROL_DISABLE;
-        _usb_console_driver = this;
+        _usb_drivers[_usb_index] = this;
         _deferred_open = false;
 
         if (_rx_sem == nullptr) {
@@ -452,7 +458,7 @@ void UARTDriver::_begin(uint32_t baud, uint16_t rxSpace, uint16_t txSpace)
         if (_writebuf.get_size() != txS) { _writebuf.set_size(txS); }
 
         /* Register CDC data RX callback */
-        usb_lld_set_rx_callback(_usb_cdc_rx_cb, this);
+        usb_lld_set_rx_callback_idx(_usb_index, _usb_cdc_rx_cb, this);
 
         _initialized = true;
 
@@ -548,6 +554,10 @@ void UARTDriver::_end()
     _initialized = false;
 
     if (_is_usb) {
+        if (_usb_index < ARRAY_SIZE(_usb_drivers) && _usb_drivers[_usb_index] == this) {
+            _usb_drivers[_usb_index] = nullptr;
+            usb_lld_set_rx_callback_idx(_usb_index, nullptr, nullptr);
+        }
         /* USB path: close RT-Thread device and delete semaphore */
         if (_dev != nullptr) {
             rt_device_close(_dev);
@@ -906,7 +916,7 @@ void UARTDriver::_drain_writebuf_to_dev()
         _tx_drain_active = true;
         rt_hw_interrupt_enable(level);
 
-        const uint32_t lld_space = usb_lld_txspace_rtt(1);
+        const uint32_t lld_space = usb_lld_txspace_rtt(_usb_in_ep);
         if (lld_space == 0) {
             level = rt_hw_interrupt_disable();
             _tx_drain_active = false;
@@ -937,7 +947,7 @@ void UARTDriver::_drain_writebuf_to_dev()
             if (chunk > 64) {
                 chunk = 64;
             }
-            if (usb_lld_send_rtt(1, _tx_bounce + sent, chunk)) {
+            if (usb_lld_send_rtt(_usb_in_ep, _tx_bounce + sent, chunk)) {
                 rtt_uart_dbg_usb_trace(2U, _tx_bounce + sent, chunk, available_before_send, lld_space);
                 sent += chunk;
                 rtt_uart_dbg_drain_bytes += chunk;
@@ -1211,7 +1221,7 @@ size_t UARTDriver::_write(const uint8_t *buffer, size_t size)
                 need_space = _writebuf.space() < size;
                 const bool drain_active = _tx_drain_active;
                 rt_hw_interrupt_enable(level);
-                if (need_space && (drain_active || usb_lld_txspace_rtt(1) == 0U)) {
+                if (need_space && (drain_active || usb_lld_txspace_rtt(_usb_in_ep) == 0U)) {
                     /*
                      * [Cybernetics Ch.4] Closed-loop: give the active drain or
                      * USB IN completion chain one scheduler tick to free queue
@@ -1252,7 +1262,7 @@ size_t UARTDriver::_write(const uint8_t *buffer, size_t size)
     rt_hw_interrupt_enable(level);
 #if HAL_RTT_SERIAL0_OTG
     if (_is_usb) {
-        rtt_uart_dbg_usb_trace(1U, buffer, written, available_after_write, usb_lld_txspace_rtt(1));
+        rtt_uart_dbg_usb_trace(1U, buffer, written, available_after_write, usb_lld_txspace_rtt(_usb_in_ep));
         rtt_uart_dbg_usb_write_last_written = written;
         rtt_uart_dbg_usb_write_last_space_after_drain = space_after_write;
         rtt_uart_dbg_usb_write_last_available_after_drain = available_after_write;
@@ -1326,7 +1336,7 @@ uint32_t UARTDriver::txspace()
     const uint32_t pending = _writebuf.available();
     rt_hw_interrupt_enable(level);
     if (_is_usb) {
-        const uint32_t lld_space = usb_lld_txspace_rtt(1);
+        const uint32_t lld_space = usb_lld_txspace_rtt(_usb_in_ep);
         rtt_uart_dbg_usb_txspace_calls++;
         rtt_uart_dbg_usb_txspace_last_writebuf_space = space;
         rtt_uart_dbg_usb_txspace_last_writebuf_available = pending;
@@ -1580,11 +1590,9 @@ uint64_t UARTDriver::receive_time_constraint_us(uint16_t nbytes)
 
 void RTT::UARTDriver::usb_rx_bridge(const uint8_t *data, size_t len)
 {
-    if (::_usb_console_driver != nullptr) {
-        ::_usb_console_driver->_readbuf.write(data, len);
-        /* Release the RX semaphore to wake wait_timeout() */
-        if (::_usb_console_driver->_rx_sem != nullptr) {
-            rt_sem_release(::_usb_console_driver->_rx_sem);
-        }
+    _readbuf.write(data, len);
+    /* Release the RX semaphore to wake wait_timeout() */
+    if (_rx_sem != nullptr) {
+        rt_sem_release(_rx_sem);
     }
 }

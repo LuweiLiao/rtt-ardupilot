@@ -383,7 +383,9 @@ class RTTHWDef(HWDef):
         device_names = []
         for name in serial_order:
             if name.upper().startswith('OTG'):
-                device_names.append('"usb-acm0"')
+                m = re.search(r'(\d+)', name)
+                otg_idx = max(0, int(m.group(1)) - 1) if m else 0
+                device_names.append('"usb-acm%s"' % otg_idx)
             elif 'UART' in name.upper() or 'USART' in name.upper():
                 m = re.search(r'(\d+)', name)
                 device_names.append('"uart%s"' % (m.group(1) if m else '1'))
@@ -425,6 +427,9 @@ class RTTHWDef(HWDef):
                 f.write('#define HAL_RTT_SERIAL0_OTG 0\n')
         else:
             f.write('#define HAL_RTT_SERIAL0_OTG 0\n')
+        if any(name.upper() == 'OTG2' for name in serial_order):
+            f.write('#define HAL_OTG2_CONFIG 1\n')
+            f.write('#define HAL_HAVE_DUAL_USB_CDC 1\n')
 
         f.write('#define HAL_RTT_UART_DEVICE_LIST %s\n' % ', '.join(device_names))
 

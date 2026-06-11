@@ -25,6 +25,10 @@
 #include <stm32f7xx.h>
 #include <string.h>
 
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
+#endif
+
 /* Debug counters (referenced by rtt_ctl_telemetry.c) */
 volatile uint32_t rtt_dbg_usb_init       = 0;
 volatile uint32_t rtt_dbg_usb_usbrst     = 0;
@@ -2213,7 +2217,8 @@ bool usb_lld_send_rtt(uint8_t ep, const uint8_t *data, uint32_t len)
     RT_USBDriver *drv = &rtt_usb;
     stm32_otg_t *otgp;
 
-    if (!_usb_driver_inited || ep > 3 || ep == 0 || ep == 2)
+    if (!_usb_driver_inited || ep == 0 || ep >= ARRAY_SIZE(drv->epc) ||
+        drv->epc[ep] == NULL || drv->epc[ep]->in_state == NULL)
         return false;
 
     if (data == NULL || len == 0)
@@ -2223,7 +2228,7 @@ bool usb_lld_send_rtt(uint8_t ep, const uint8_t *data, uint32_t len)
 
     /* Clamp to max packet size. */
     {
-        uint16_t mps = (ep == 1) ? EP1_MAX_PACKET : 8;
+        uint16_t mps = drv->epc[ep]->in_maxsize;
         if (len > mps)
             len = mps;
     }
@@ -2268,7 +2273,8 @@ bool usb_lld_send_rtt(uint8_t ep, const uint8_t *data, uint32_t len)
 
 uint32_t usb_lld_txspace_rtt(uint8_t ep)
 {
-    if (!_usb_driver_inited || ep > 3 || ep == 0 || ep == 2) {
+    if (!_usb_driver_inited || ep == 0 || ep >= ARRAY_SIZE(rtt_usb.epc) ||
+        rtt_usb.epc[ep] == NULL || rtt_usb.epc[ep]->in_state == NULL) {
         return 0;
     }
     if (rtt_usb.state != USB_STATE_ACTIVE) {
@@ -2282,7 +2288,7 @@ uint32_t usb_lld_txspace_rtt(uint8_t ep)
 
     const uint32_t fifo_words = otgp->ie[ep].DTXFSTS & DTXFSTS_INEPTFSAV_MASK;
     const uint32_t fifo_bytes = fifo_words * 4U;
-    const uint32_t mps = (ep == 1) ? EP1_MAX_PACKET : 8U;
+    const uint32_t mps = rtt_usb.epc[ep]->in_maxsize;
     return fifo_bytes > mps ? mps : fifo_bytes;
 }
 
@@ -2292,7 +2298,12 @@ uint32_t usb_lld_txspace_rtt(uint8_t ep)
 
 void usb_lld_set_rx_callback(usb_rx_callback_t cb, void *arg)
 {
-    usb_cdc_set_rx_callback(cb, arg);
+    usb_cdc_set_rx_callback_idx(0, cb, arg);
+}
+
+void usb_lld_set_rx_callback_idx(uint8_t idx, usb_rx_callback_t cb, void *arg)
+{
+    usb_cdc_set_rx_callback_idx(idx, cb, arg);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -2301,7 +2312,12 @@ void usb_lld_set_rx_callback(usb_rx_callback_t cb, void *arg)
 
 void usb_lld_rearm_cdc_out(void)
 {
-    usb_cdc_rearm_out();
+    usb_cdc_rearm_out_idx(0);
+}
+
+void usb_lld_rearm_cdc_out_idx(uint8_t idx)
+{
+    usb_cdc_rearm_out_idx(idx);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -2313,9 +2329,19 @@ bool usb_lld_is_configured_rtt(void)
     return rtt_usb.state == USB_STATE_ACTIVE;
 }
 
+bool usb_lld_is_configured_idx_rtt(uint8_t idx)
+{
+    return rtt_usb.state == USB_STATE_ACTIVE && usb_cdc_is_configured_idx(idx);
+}
+
 bool usb_lld_get_connected_rtt(void)
 {
     return rtt_usb.state >= USB_STATE_SELECTED;
+}
+
+bool usb_lld_get_connected_idx_rtt(uint8_t idx)
+{
+    return rtt_usb.state >= USB_STATE_SELECTED && usb_cdc_is_connected_idx(idx);
 }
 
 /* -------------------------------------------------------------------------- */

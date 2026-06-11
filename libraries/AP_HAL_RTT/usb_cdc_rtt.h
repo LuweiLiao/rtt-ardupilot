@@ -4,7 +4,7 @@
  * Provides the CDC-ACM abstraction for the RTT USB stack:
  *  - Descriptor set (device, configuration, string descriptors)
  *  - Class request handling (line coding, control line state, break)
- *  - EP1/EP2/EP3 management for CDC data and notification
+ *  - Two CDC ACM functions for ChibiOS-style OTG1/OTG2 logical ports
  *
  * The CDC layer integrates with the USB stack by registering its
  * callbacks into RTT_USBConfig (accessed via the rtt_usb global driver).
@@ -62,6 +62,7 @@ bool usb_cdc_init(void);
  * @return              true if the transfer was started
  */
 bool usb_cdc_send_data(const uint8_t *data, uint32_t len);
+bool usb_cdc_send_data_idx(uint8_t idx, const uint8_t *data, uint32_t len);
 
 /**
  * @brief   Register a receive callback for CDC data (EP2 OUT).
@@ -70,6 +71,7 @@ bool usb_cdc_send_data(const uint8_t *data, uint32_t len);
  * @param[in] arg       opaque argument passed to the callback
  */
 void usb_cdc_set_rx_callback(usb_rx_callback_t cb, void *arg);
+void usb_cdc_set_rx_callback_idx(uint8_t idx, usb_rx_callback_t cb, void *arg);
 
 /**
  * @brief   Re-arm EP2 OUT for the next CDC data reception.
@@ -77,6 +79,7 @@ void usb_cdc_set_rx_callback(usb_rx_callback_t cb, void *arg);
  * Must be called after the receive callback has consumed the data.
  */
 void usb_cdc_rearm_out(void);
+void usb_cdc_rearm_out_idx(uint8_t idx);
 
 /**
  * @brief   Send a CDC SERIAL_STATE notification on EP3 (interrupt).
@@ -85,18 +88,24 @@ void usb_cdc_rearm_out(void);
  * @return              true if the notification was queued
  */
 bool usb_cdc_send_notification(uint16_t serial_state);
+bool usb_cdc_send_notification_idx(uint8_t idx, uint16_t serial_state);
 
 /**
  * @brief   Check whether the USB device is configured (SET_CONFIGURATION
  *          received).
  */
 bool usb_cdc_is_configured(void);
+bool usb_cdc_is_configured_idx(uint8_t idx);
 
 /**
  * @brief   Check whether a USB host is connected (device selected
  *          or active).
  */
 bool usb_cdc_is_connected(void);
+bool usb_cdc_is_connected_idx(uint8_t idx);
+
+uint8_t usb_cdc_data_in_ep(uint8_t idx);
+uint8_t usb_cdc_data_out_ep(uint8_t idx);
 
 #ifdef __cplusplus
 }

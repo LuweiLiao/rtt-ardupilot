@@ -89,7 +89,7 @@ extern const AP_HAL::HAL& hal;
 
 using namespace RTT;
 
-constexpr bxcan::CanType* const CANIface::Can[];
+bxcan::CanType* const CANIface::Can[HAL_NUM_CAN_IFACES] = { HAL_CAN_BASE_LIST };
 
 static RTT::CANIface* can_ifaces[HAL_NUM_CAN_IFACES];
 

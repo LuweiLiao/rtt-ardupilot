@@ -1222,13 +1222,14 @@ int usbd_ep_start_write(uint8_t busid, const uint8_t ep, const uint8_t *data, ui
         uint32_t primask = dwc2_irq_save();
         USB_OTG_DEV->DIEPEMPMSK |= 1UL << (ep_idx & 0x0f);
         dwc2_irq_restore(primask);
-        if (ep_idx == 1U) {
+        if (ep_idx != 0U) {
             /*
              * [Cybernetics Ch.4] Closed-loop: ChibiOS' OTG transmit path fills
              * the endpoint FIFO promptly after arming the transfer.  Do one
-             * immediate EP1 service pass so RTT/CherryUSB does not depend on a
-             * later TXFE interrupt before the first bytes of a PARAM/MAVFTP
-             * reply reach DWC2.
+             * immediate non-control IN service pass so RTT/CherryUSB does not
+             * depend on a later TXFE interrupt before the first bytes of a
+             * MAVLink/PARAM/MAVFTP reply reach DWC2.  Dual CDC uses EP2/EP4
+             * for data IN, while the older single CDC path used EP1.
              */
             const uint32_t before = g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len;
             rtt_dbg_dwc2_ep1_immediate_prime_calls++;

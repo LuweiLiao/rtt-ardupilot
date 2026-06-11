@@ -9,3 +9,8 @@
 
 #include <AP_HAL/AP_HAL.h>
 #include "HAL_RTT_Class.h"
+
+#if HAL_NUM_CAN_IFACES
+#include "CANIface.h"
+typedef RTT::CANIface HAL_CANIface;
+#endif

@@ -60,7 +60,7 @@
 #endif
 
 #ifndef HAL_CAN_BASE_LIST
-#define HAL_CAN_BASE_LIST reinterpret_cast<RTT::bxcan::CanType*>(CAN1_BASE), reinterpret_cast<RTT::bxcan::CanType*>(CAN2_BASE)
+#define HAL_CAN_BASE_LIST ((RTT::bxcan::CanType*)CAN1_BASE), ((RTT::bxcan::CanType*)CAN2_BASE)
 #endif
 
 #ifndef HAL_CAN_INTERFACE_LIST
@@ -179,6 +179,7 @@ public:
     CANIface(uint8_t index);
     CANIface();
     static uint8_t next_interface;
+    using AP_HAL::CANIface::init;
 
     // Initialise CAN Peripheral
     bool init(const uint32_t bitrate, const OperatingMode mode) override;
@@ -261,7 +262,7 @@ public:
     void pollErrorFlagsFromISR(void);
 
     // CAN Peripheral register structure
-    static constexpr bxcan::CanType* const Can[HAL_NUM_CAN_IFACES] = { HAL_CAN_BASE_LIST };
+    static bxcan::CanType* const Can[HAL_NUM_CAN_IFACES];
 
 protected:
     bool add_to_rx_queue(const CanRxItem &rx_item) override {

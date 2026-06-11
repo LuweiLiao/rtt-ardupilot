@@ -65,7 +65,7 @@ public:
     enum flow_control get_flow_control() override { return _flow_control; }
 
     // Bridge for USB CDC bulk_out to write directly into readbuf
-    static void usb_rx_bridge(const uint8_t *data, size_t len);
+    void usb_rx_bridge(const uint8_t *data, size_t len);
 
 #if HAL_UART_STATS_ENABLED
     void uart_info(ExpandingString &str, StatsTracker &stats, const uint32_t dt_ms) override;
@@ -90,6 +90,8 @@ private:
     bool _initialized;
     bool _deferred_open;
     bool _is_usb{false};
+    uint8_t _usb_index{0};
+    uint8_t _usb_in_ep{1};
 
     bool _unbuffered_writes{false};
     uint16_t _usb_write_fail_count{0};

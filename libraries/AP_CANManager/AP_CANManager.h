@@ -200,9 +200,12 @@ private:
 #if AP_CAN_LOGGING_ENABLED && HAL_LOGGING_ENABLED
     /*
       handler for CAN frames for logging
-    */
+     */
     void can_logging_callback(uint8_t bus, const AP_HAL::CANFrame &frame, AP_HAL::CANIface::CanIOFlags flags);
     void check_logging_enable(void);
+#endif
+#if AP_CAN_SLCAN_ENABLED && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    void update_slcan(void);
 #endif
 };
 

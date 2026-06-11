@@ -2,7 +2,7 @@
  * CherryUSB CDC ACM shim — implements hal_usb_lld_rtt.h compatibility API for UARTDriver.
  *
  * Single OTG_FS_IRQHandler lives in cherryusb_board/usb_dc_glue.c.
- * Production VID/PID 0x1209:0x5741 (matches usb_cdc_rtt.c). No MSC / composite.
+ * Production VID/PID 0x1209:0x5741 (matches usb_cdc_rtt.c). Dual CDC only.
  */
 #include "hal_usb_lld_rtt.h"
 #include "usb_dc_glue.h"
@@ -22,9 +22,6 @@
 #define RTT_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
 
 #define CHERRY_USB_OTG_FS_BASE  0x50000000UL
-
-/* DWC2 device-mode register access (CDC bulk IN = physical ep 1). */
-#define CHERRY_CDC_IN_EP_IDX    1U
 
 #define CHERRY_OTG_REG32(off) \
     (*(volatile uint32_t *)(CHERRY_USB_OTG_FS_BASE + (off)))
@@ -50,20 +47,44 @@
 #define CHERRY_DIEPTSIZ_XFRSIZ  0x7FFFFUL
 #define CHERRY_DIEPTSIZ_PKTCNT  (0x3FFUL << 19)
 #define CHERRY_GRSTCTL_TXFFLSH  (1UL << 5)
-#define CHERRY_GRSTCTL_TXFNUM1  (1UL << 6)
+#define CHERRY_GRSTCTL_TXFNUM(ep) (((uint32_t)(ep) & 0x1FU) << 6)
 
 #define CHERRY_TX_BUSY_TIMEOUT_MS  73U
 
-#define CDC_IN_EP   0x81
+/* Match ChibiOS dual CDC endpoint layout: CDC0 int EP1/data EP2, CDC1 int EP3/data EP4. */
+#define CDC_IN_EP   0x82
 #define CDC_OUT_EP  0x02
-#define CDC_INT_EP  0x83
+#define CDC_INT_EP  0x81
+#define CDC2_IN_EP  0x84
+#define CDC2_OUT_EP 0x04
+#define CDC2_INT_EP 0x83
+#define CHERRY_CDC_LOGICAL_IN_EP   1U
+#define CHERRY_CDC2_LOGICAL_IN_EP  4U
+#define CHERRY_CDC_IN_EP_IDX       (CDC_IN_EP & 0x0FU)
+#define CHERRY_CDC2_IN_EP_IDX      (CDC2_IN_EP & 0x0FU)
+
+#define CDC_ACM_CHIBIOS_DESCRIPTOR_LEN CDC_ACM_DESCRIPTOR_LEN
+#define CDC_ACM_CHIBIOS_DESCRIPTOR_INIT(bFirstInterface, int_ep, out_ep, in_ep, wMaxPacketSize) \
+    0x08, USB_DESCRIPTOR_TYPE_INTERFACE_ASSOCIATION, (bFirstInterface), 0x02, \
+    USB_DEVICE_CLASS_CDC, CDC_ABSTRACT_CONTROL_MODEL, 0x01, 0x00, \
+    0x09, USB_DESCRIPTOR_TYPE_INTERFACE, (bFirstInterface), 0x00, 0x01, \
+    USB_DEVICE_CLASS_CDC, CDC_ABSTRACT_CONTROL_MODEL, 0x01, 0x00, \
+    0x05, CDC_CS_INTERFACE, CDC_FUNC_DESC_HEADER, WBVAL(CDC_V1_10), \
+    0x05, CDC_CS_INTERFACE, CDC_FUNC_DESC_CALL_MANAGEMENT, 0x03, (uint8_t)((bFirstInterface) + 1U), \
+    0x04, CDC_CS_INTERFACE, CDC_FUNC_DESC_ABSTRACT_CONTROL_MANAGEMENT, 0x02, \
+    0x05, CDC_CS_INTERFACE, CDC_FUNC_DESC_UNION, (bFirstInterface), (uint8_t)((bFirstInterface) + 1U), \
+    0x07, USB_DESCRIPTOR_TYPE_ENDPOINT, (int_ep), 0x03, 0x08, 0x00, 0x01, \
+    0x09, USB_DESCRIPTOR_TYPE_INTERFACE, (uint8_t)((bFirstInterface) + 1U), 0x00, 0x02, \
+    CDC_DATA_INTERFACE_CLASS, 0x00, 0x00, 0x00, \
+    0x07, USB_DESCRIPTOR_TYPE_ENDPOINT, (out_ep), 0x02, WBVAL(wMaxPacketSize), 0x00, \
+    0x07, USB_DESCRIPTOR_TYPE_ENDPOINT, (in_ep), 0x02, WBVAL(wMaxPacketSize), 0x00
 
 #define USBD_VID           0x1209
 #define USBD_PID           0x5741
 #define USBD_MAX_POWER     50
 #define USBD_LANGID_STRING 0x0409
 
-#define USB_CONFIG_SIZE (9 + CDC_ACM_DESCRIPTOR_LEN)
+#define USB_CONFIG_SIZE (9 + CDC_ACM_CHIBIOS_DESCRIPTOR_LEN * 2)
 #define CDC_MAX_MPS     64
 /*
  * [Cybernetics Ch.15] Extremum seeking: ChibiOS SerialUSB gives CUAV V5 a
@@ -79,8 +100,9 @@
 
 static const uint8_t cherry_cdc_descriptor[] = {
     USB_DEVICE_DESCRIPTOR_INIT(USB_2_0, 0xEF, 0x02, 0x01, USBD_VID, USBD_PID, 0x0200, 0x01),
-    USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, 0x02, 0x01, USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
-    CDC_ACM_DESCRIPTOR_INIT(0x00, CDC_INT_EP, CDC_OUT_EP, CDC_IN_EP, CDC_MAX_MPS, 0x02),
+    USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, 0x04, 0x01, USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
+    CDC_ACM_CHIBIOS_DESCRIPTOR_INIT(0x00, CDC_INT_EP, CDC_OUT_EP, CDC_IN_EP, CDC_MAX_MPS),
+    CDC_ACM_CHIBIOS_DESCRIPTOR_INIT(0x02, CDC2_INT_EP, CDC2_OUT_EP, CDC2_IN_EP, CDC_MAX_MPS),
     USB_LANGID_INIT(USBD_LANGID_STRING),
     0x08, USB_DESCRIPTOR_TYPE_STRING,
     'A', 0x00, 'P', 0x00, 'M', 0x00,
@@ -93,8 +115,11 @@ static const uint8_t cherry_cdc_descriptor[] = {
 };
 
 USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX static uint8_t cdc_read_buf[CDC_MAX_MPS];
+USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX static uint8_t cdc2_read_buf[CDC_MAX_MPS];
 USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX static uint8_t cdc_tx_buf[CDC_TX_CHUNK_MAX];
+USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX static uint8_t cdc2_tx_buf[CDC_MAX_MPS];
 static uint8_t cherry_rx_queue[CDC_RX_QUEUE_DEPTH][CDC_MAX_MPS];
+static uint8_t cherry2_rx_queue[CDC_RX_QUEUE_DEPTH][CDC_MAX_MPS];
 static uint8_t cherry_tx_ring[CDC_TX_RING_DEPTH][CDC_MAX_MPS];
 static volatile uint8_t cherry_tx_ring_len[CDC_TX_RING_DEPTH];
 static volatile uint8_t cherry_tx_ring_head;
@@ -102,13 +127,20 @@ static volatile uint8_t cherry_tx_ring_tail;
 static volatile uint8_t cherry_tx_ring_count;
 static volatile uint8_t cherry_tx_inflight_slots;
 static volatile uint8_t cherry_rx_len[CDC_RX_QUEUE_DEPTH];
+static volatile uint8_t cherry2_rx_len[CDC_RX_QUEUE_DEPTH];
 static volatile uint8_t cherry_rx_head;
 static volatile uint8_t cherry_rx_tail;
 static volatile uint8_t cherry_rx_count;
+static volatile uint8_t cherry2_rx_head;
+static volatile uint8_t cherry2_rx_tail;
+static volatile uint8_t cherry2_rx_count;
 
 static volatile bool cherry_configured;
 static volatile bool cherry_dtr;
+static volatile bool cherry2_dtr;
 static volatile uint8_t cherry_tx_busy;
+static volatile uint8_t cherry2_tx_busy;
+static volatile bool cherry2_tx_needs_zlp;
 
 volatile uint32_t rtt_dbg_usb_init RTT_DBG_DTCM_BSS       = 0;
 volatile uint32_t rtt_dbg_usb_usbrst RTT_DBG_DTCM_BSS     = 0;
@@ -295,22 +327,37 @@ static void cherry_tx_epdis_recovery(uint32_t reason, uint32_t elapsed_ms);
 
 static usb_rx_callback_t cherry_rx_cb;
 static void *cherry_rx_arg;
+static usb_rx_callback_t cherry2_rx_cb;
+static void *cherry2_rx_arg;
 
-static struct cdc_line_coding cherry_line_coding = {
-    .dwDTERate = 921600,
-    .bCharFormat = 0,
-    .bParityType = 0,
-    .bDataBits = 8,
+static struct cdc_line_coding cherry_line_coding[2] = {
+    {
+        .dwDTERate = 921600,
+        .bCharFormat = 0,
+        .bParityType = 0,
+        .bDataBits = 8,
+    },
+    {
+        .dwDTERate = 115200,
+        .bCharFormat = 0,
+        .bParityType = 0,
+        .bDataBits = 8,
+    },
 };
 
 static struct usbd_interface cherry_intf0;
 static struct usbd_interface cherry_intf1;
+static struct usbd_interface cherry_intf2;
+static struct usbd_interface cherry_intf3;
 
 static void cherry_rx_queue_reset(void)
 {
     cherry_rx_head = 0;
     cherry_rx_tail = 0;
     cherry_rx_count = 0;
+    cherry2_rx_head = 0;
+    cherry2_rx_tail = 0;
+    cherry2_rx_count = 0;
 }
 
 static void cherry_tx_ring_reset(void)
@@ -512,6 +559,25 @@ static void cherry_rx_enqueue_from_isr(const uint8_t *data, uint32_t len)
     rtt_dbg_cherry_rx_enqueued++;
 }
 
+static void cherry2_rx_enqueue_from_isr(const uint8_t *data, uint32_t len)
+{
+    if (len == 0 || len > CDC_MAX_MPS || data == NULL) {
+        return;
+    }
+
+    if (cherry2_rx_count >= CDC_RX_QUEUE_DEPTH) {
+        rtt_dbg_cherry_rx_dropped++;
+        return;
+    }
+
+    const uint8_t slot = cherry2_rx_head;
+    memcpy(cherry2_rx_queue[slot], data, len);
+    cherry2_rx_len[slot] = (uint8_t)len;
+    cherry2_rx_head = (uint8_t)((slot + 1U) % CDC_RX_QUEUE_DEPTH);
+    cherry2_rx_count++;
+    rtt_dbg_cherry_rx_enqueued++;
+}
+
 static bool cherry_rx_dequeue(uint8_t *data, uint32_t *len)
 {
     if (data == NULL || len == NULL || cherry_rx_count == 0) {
@@ -531,6 +597,30 @@ static bool cherry_rx_dequeue(uint8_t *data, uint32_t *len)
     cherry_rx_len[slot] = 0;
     cherry_rx_tail = (uint8_t)((slot + 1U) % CDC_RX_QUEUE_DEPTH);
     cherry_rx_count--;
+    *len = n;
+    rtt_dbg_cherry_rx_drained++;
+    return true;
+}
+
+static bool cherry2_rx_dequeue(uint8_t *data, uint32_t *len)
+{
+    if (data == NULL || len == NULL || cherry2_rx_count == 0) {
+        return false;
+    }
+
+    const uint8_t slot = cherry2_rx_tail;
+    const uint8_t n = cherry2_rx_len[slot];
+    if (n == 0 || n > CDC_MAX_MPS) {
+        cherry2_rx_tail = (uint8_t)((slot + 1U) % CDC_RX_QUEUE_DEPTH);
+        cherry2_rx_count--;
+        *len = 0;
+        return true;
+    }
+
+    memcpy(data, cherry2_rx_queue[slot], n);
+    cherry2_rx_len[slot] = 0;
+    cherry2_rx_tail = (uint8_t)((slot + 1U) % CDC_RX_QUEUE_DEPTH);
+    cherry2_rx_count--;
     *len = n;
     rtt_dbg_cherry_rx_drained++;
     return true;
@@ -602,6 +692,41 @@ static bool cherry_tx_start_zlp(void)
     return true;
 }
 
+static bool cherry2_tx_start_write(const uint8_t *data, uint32_t len)
+{
+    if (!cherry_configured || data == NULL || len == 0U || len > CDC_MAX_MPS ||
+        cherry2_tx_busy ||
+        (CHERRY_DIEPCTL(CHERRY_CDC2_IN_EP_IDX) & CHERRY_DIEPCTL_EPENA)) {
+        return false;
+    }
+
+    memcpy(cdc2_tx_buf, data, len);
+    cherry2_tx_busy = 1U;
+    cherry2_tx_needs_zlp = ((len & (CDC_MAX_MPS - 1U)) == 0U);
+
+    if (usbd_ep_start_write(0, CDC2_IN_EP, cdc2_tx_buf, len) != 0) {
+        cherry2_tx_busy = 0U;
+        cherry2_tx_needs_zlp = false;
+        return false;
+    }
+    return true;
+}
+
+static void cherry2_tx_complete(uint32_t nbytes)
+{
+    (void)nbytes;
+    cherry2_tx_busy = 0U;
+    if (cherry2_tx_needs_zlp) {
+        cherry2_tx_needs_zlp = false;
+        if ((CHERRY_DIEPCTL(CHERRY_CDC2_IN_EP_IDX) & CHERRY_DIEPCTL_EPENA) == 0U) {
+            cherry2_tx_busy = 1U;
+            if (usbd_ep_start_write(0, CDC2_IN_EP, NULL, 0) != 0) {
+                cherry2_tx_busy = 0U;
+            }
+        }
+    }
+}
+
 static void cherry_tx_epdis_recovery(uint32_t reason, uint32_t elapsed_ms)
 {
     rtt_dbg_cherry_recovery_last_reason = reason;
@@ -643,7 +768,7 @@ static void cherry_tx_epdis_recovery(uint32_t reason, uint32_t elapsed_ms)
     }
 
     CHERRY_DIEPINT(CHERRY_CDC_IN_EP_IDX) = (CHERRY_DIEPINT_EPDISD | CHERRY_DIEPINT_XFRC);
-    CHERRY_GRSTCTL = CHERRY_GRSTCTL_TXFFLSH | CHERRY_GRSTCTL_TXFNUM1;
+    CHERRY_GRSTCTL = CHERRY_GRSTCTL_TXFFLSH | CHERRY_GRSTCTL_TXFNUM(CHERRY_CDC_IN_EP_IDX);
     timeout = 50000U;
     while ((CHERRY_GRSTCTL & CHERRY_GRSTCTL_TXFFLSH) != 0U) {
         if (--timeout == 0U) {
@@ -693,10 +818,13 @@ static void cherry_usbd_event_handler(uint8_t busid, uint8_t event)
         cherry_rx_queue_reset();
         cherry_tx_ring_reset();
         cherry_tx_busy = 0;
+        cherry2_tx_busy = 0;
+        cherry2_tx_needs_zlp = false;
         cherry_dbg_sync_tx_busy();
         cherry_tx_busy_since_ms = 0U;
         cherry_epena_stuck_since_ms = 0U;
         usbd_ep_start_read(busid, CDC_OUT_EP, cdc_read_buf, sizeof(cdc_read_buf));
+        usbd_ep_start_read(busid, CDC2_OUT_EP, cdc2_read_buf, sizeof(cdc2_read_buf));
         break;
     case USBD_EVENT_RESET:
         rtt_dbg_usb_usbrst++;
@@ -705,10 +833,13 @@ static void cherry_usbd_event_handler(uint8_t busid, uint8_t event)
         cherry_configured = false;
         cherry_dbg_sync_configured();
         cherry_dtr = false;
+        cherry2_dtr = false;
         rtt_dbg_cherry_dtr_state = 0U;
         cherry_rx_queue_reset();
         cherry_tx_ring_reset();
         cherry_tx_busy = 0;
+        cherry2_tx_busy = 0;
+        cherry2_tx_needs_zlp = false;
         cherry_dbg_sync_tx_busy();
         cherry_tx_busy_since_ms = 0U;
         cherry_epena_stuck_since_ms = 0U;
@@ -718,10 +849,13 @@ static void cherry_usbd_event_handler(uint8_t busid, uint8_t event)
         cherry_configured = false;
         cherry_dbg_sync_configured();
         cherry_dtr = false;
+        cherry2_dtr = false;
         rtt_dbg_cherry_dtr_state = 0U;
         cherry_rx_queue_reset();
         cherry_tx_ring_reset();
         cherry_tx_busy = 0;
+        cherry2_tx_busy = 0;
+        cherry2_tx_needs_zlp = false;
         cherry_dbg_sync_tx_busy();
         cherry_tx_busy_since_ms = 0U;
         cherry_epena_stuck_since_ms = 0U;
@@ -733,18 +867,24 @@ static void cherry_usbd_event_handler(uint8_t busid, uint8_t event)
 
 void usbd_cdc_acm_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
 {
-    (void)ep;
-
     /* Defer MAVLink parsing to usb_lld_poll_rtt() (main loop, IRQ masked there). */
     rtt_dbg_cherry_last_out_ms = cherry_now_ms();
-    cherry_rx_enqueue_from_isr(cdc_read_buf, nbytes);
-    usbd_ep_start_read(busid, CDC_OUT_EP, cdc_read_buf, sizeof(cdc_read_buf));
+    if (ep == CDC_OUT_EP) {
+        cherry_rx_enqueue_from_isr(cdc_read_buf, nbytes);
+        usbd_ep_start_read(busid, CDC_OUT_EP, cdc_read_buf, sizeof(cdc_read_buf));
+    } else if (ep == CDC2_OUT_EP) {
+        cherry2_rx_enqueue_from_isr(cdc2_read_buf, nbytes);
+        usbd_ep_start_read(busid, CDC2_OUT_EP, cdc2_read_buf, sizeof(cdc2_read_buf));
+    }
 }
 
 void usbd_cdc_acm_bulk_in(uint8_t busid, uint8_t ep, uint32_t nbytes)
 {
     (void)busid;
-    (void)ep;
+    if (ep == CDC2_IN_EP) {
+        cherry2_tx_complete(nbytes);
+        return;
+    }
     rtt_dbg_cherry_bulk_in_calls++;
     rtt_dbg_cherry_last_bulk_in_ms = cherry_now_ms();
     rtt_dbg_cherry_tx_last_complete_len = nbytes;
@@ -792,23 +932,31 @@ static struct usbd_endpoint cherry_ep_in = {
     .ep_cb = usbd_cdc_acm_bulk_in,
 };
 
+static struct usbd_endpoint cherry2_ep_out = {
+    .ep_addr = CDC2_OUT_EP,
+    .ep_cb = usbd_cdc_acm_bulk_out,
+};
+
+static struct usbd_endpoint cherry2_ep_in = {
+    .ep_addr = CDC2_IN_EP,
+    .ep_cb = usbd_cdc_acm_bulk_in,
+};
+
 void usbd_cdc_acm_set_line_coding(uint8_t busid, uint8_t intf, struct cdc_line_coding *line_coding)
 {
     (void)busid;
-    (void)intf;
     rtt_dbg_usb_setup_stup++;
     if (line_coding != NULL) {
-        cherry_line_coding = *line_coding;
+        cherry_line_coding[(intf >= 2U) ? 1U : 0U] = *line_coding;
     }
 }
 
 void usbd_cdc_acm_get_line_coding(uint8_t busid, uint8_t intf, struct cdc_line_coding *line_coding)
 {
     (void)busid;
-    (void)intf;
     rtt_dbg_usb_setup_stup++;
     if (line_coding != NULL) {
-        *line_coding = cherry_line_coding;
+        *line_coding = cherry_line_coding[(intf >= 2U) ? 1U : 0U];
     }
 }
 
@@ -817,6 +965,11 @@ void usbd_cdc_acm_set_dtr(uint8_t busid, uint8_t intf, bool dtr)
     (void)busid;
     (void)intf;
     rtt_dbg_usb_setup_stup++;
+    const uint8_t idx = (intf >= 2U) ? 1U : 0U;
+    if (idx == 1U) {
+        cherry2_dtr = dtr;
+        return;
+    }
     const bool was_dtr = cherry_dtr;
     cherry_dtr = dtr;
     rtt_dbg_cherry_dtr_state = dtr ? 1U : 0U;
@@ -844,8 +997,12 @@ static void cherry_cdc_stack_init(void)
     usbd_desc_register(0, cherry_cdc_descriptor);
     usbd_add_interface(0, usbd_cdc_acm_init_intf(0, &cherry_intf0));
     usbd_add_interface(0, usbd_cdc_acm_init_intf(0, &cherry_intf1));
+    usbd_add_interface(0, usbd_cdc_acm_init_intf(0, &cherry_intf2));
+    usbd_add_interface(0, usbd_cdc_acm_init_intf(0, &cherry_intf3));
     usbd_add_endpoint(0, &cherry_ep_out);
     usbd_add_endpoint(0, &cherry_ep_in);
+    usbd_add_endpoint(0, &cherry2_ep_out);
+    usbd_add_endpoint(0, &cherry2_ep_in);
     usbd_initialize(0, CHERRY_USB_OTG_FS_BASE, cherry_usbd_event_handler);
 }
 
@@ -894,6 +1051,22 @@ void usb_lld_poll_rtt(void)
         }
     }
 
+    while (cherry2_rx_cb != NULL) {
+        uint8_t local[CDC_MAX_MPS];
+        uint32_t len = 0;
+
+        rt_base_t level = rt_hw_interrupt_disable();
+        const bool have_rx = cherry2_rx_dequeue(local, &len);
+        rt_hw_interrupt_enable(level);
+
+        if (!have_rx) {
+            break;
+        }
+        if (len > 0) {
+            cherry2_rx_cb(local, len, cherry2_rx_arg);
+        }
+    }
+
     rt_base_t level = rt_hw_interrupt_disable();
     const uint32_t now_ms = cherry_now_ms();
 
@@ -929,11 +1102,20 @@ void usb_lld_poll_rtt(void)
 
 bool usb_lld_send_rtt(uint8_t ep, const uint8_t *data, uint32_t len)
 {
-    if (!cherry_configured || ep != 1 || data == NULL || len == 0) {
+    if (!cherry_configured || data == NULL || len == 0) {
         return false;
     }
     if (len > CDC_MAX_MPS) {
         len = CDC_MAX_MPS;
+    }
+    if (ep == CHERRY_CDC2_LOGICAL_IN_EP) {
+        rt_base_t level = rt_hw_interrupt_disable();
+        const bool ok = cherry2_tx_start_write(data, len);
+        rt_hw_interrupt_enable(level);
+        return ok;
+    }
+    if (ep != CHERRY_CDC_LOGICAL_IN_EP) {
+        return false;
     }
 
     rt_base_t level = rt_hw_interrupt_disable();
@@ -952,7 +1134,13 @@ bool usb_lld_send_rtt(uint8_t ep, const uint8_t *data, uint32_t len)
 
 uint32_t usb_lld_txspace_rtt(uint8_t ep)
 {
-    if (!cherry_configured || ep != 1) {
+    if (!cherry_configured) {
+        return 0;
+    }
+    if (ep == CHERRY_CDC2_LOGICAL_IN_EP) {
+        return cherry2_tx_busy ? 0U : CDC_MAX_MPS;
+    }
+    if (ep != CHERRY_CDC_LOGICAL_IN_EP) {
         return 0;
     }
 
@@ -972,10 +1160,33 @@ void usb_lld_set_rx_callback(usb_rx_callback_t cb, void *arg)
     cherry_rx_arg = arg;
 }
 
+void usb_lld_set_rx_callback_idx(uint8_t idx, usb_rx_callback_t cb, void *arg)
+{
+    if (idx == 0U) {
+        cherry_rx_cb = cb;
+        cherry_rx_arg = arg;
+    } else if (idx == 1U) {
+        cherry2_rx_cb = cb;
+        cherry2_rx_arg = arg;
+    }
+}
+
 void usb_lld_rearm_cdc_out(void)
 {
     if (cherry_configured) {
         usbd_ep_start_read(0, CDC_OUT_EP, cdc_read_buf, sizeof(cdc_read_buf));
+    }
+}
+
+void usb_lld_rearm_cdc_out_idx(uint8_t idx)
+{
+    if (!cherry_configured) {
+        return;
+    }
+    if (idx == 0U) {
+        usbd_ep_start_read(0, CDC_OUT_EP, cdc_read_buf, sizeof(cdc_read_buf));
+    } else if (idx == 1U) {
+        usbd_ep_start_read(0, CDC2_OUT_EP, cdc2_read_buf, sizeof(cdc2_read_buf));
     }
 }
 
@@ -984,9 +1195,21 @@ bool usb_lld_is_configured_rtt(void)
     return cherry_configured;
 }
 
+bool usb_lld_is_configured_idx_rtt(uint8_t idx)
+{
+    (void)idx;
+    return cherry_configured;
+}
+
 bool usb_lld_get_connected_rtt(void)
 {
     /* Match native stack: enumerated/configured, not gated on DTR (DTR tracked for class requests). */
+    return cherry_configured;
+}
+
+bool usb_lld_get_connected_idx_rtt(uint8_t idx)
+{
+    (void)idx;
     return cherry_configured;
 }
 
