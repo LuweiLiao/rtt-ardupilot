@@ -295,18 +295,61 @@ const AP_Param::Info AP_Periph_FW::var_info[] = {
 #endif
 
 #ifdef AP_PERIPH_NEOPIXEL_POGO_CANRGB_ENABLED
+    // @Param: LED_TYPE
+    // @DisplayName: Pogo CAN RGB LED control mode
+    // @Description: Selects the Pogo CAN RGB LED control source. LightsCommand uses DroneCAN light commands, Static drives the configured RGB color continuously, and Blink alternates the configured RGB color with off.
+    // @Values: 0:LightsCommand, 1:Static, 2:Blink
+    // @User: Standard
     GSCALAR(led_type, "LED_TYPE", 0),
 
+    // @Param: LED_BLUE
+    // @DisplayName: Pogo CAN RGB LED blue channel
+    // @Description: Blue channel value used when LED_TYPE selects Static or Blink mode.
+    // @Range: 0 255
+    // @Increment: 1
+    // @User: Standard
     GSCALAR(led_blue, "LED_BLUE", 0),
 
+    // @Param: LED_GREEN
+    // @DisplayName: Pogo CAN RGB LED green channel
+    // @Description: Green channel value used when LED_TYPE selects Static or Blink mode.
+    // @Range: 0 255
+    // @Increment: 1
+    // @User: Standard
     GSCALAR(led_green, "LED_GREEN", 0),
- 
+
+    // @Param: LED_RED
+    // @DisplayName: Pogo CAN RGB LED red channel
+    // @Description: Red channel value used when LED_TYPE selects Static or Blink mode.
+    // @Range: 0 255
+    // @Increment: 1
+    // @User: Standard
     GSCALAR(led_red, "LED_RED", 0),
 
+    // @Param: LED_ID
+    // @DisplayName: Pogo CAN RGB LED light ID
+    // @Description: DroneCAN light ID accepted from LightsCommand when LED_TYPE selects LightsCommand mode.
+    // @Range: 0 255
+    // @Increment: 1
+    // @User: Standard
     GSCALAR(led_id, "LED_ID", 0),
 
+    // @Param: LED_HIGH_MS
+    // @DisplayName: Pogo CAN RGB LED blink on time
+    // @Description: Time in milliseconds that the LED stays on in Blink mode.
+    // @Units: ms
+    // @Range: 1 60000
+    // @Increment: 1
+    // @User: Standard
     GSCALAR(led_high_ms, "LED_HIGH_MS", 500),
 
+    // @Param: LED_LOW_MS
+    // @DisplayName: Pogo CAN RGB LED blink off time
+    // @Description: Time in milliseconds that the LED stays off in Blink mode.
+    // @Units: ms
+    // @Range: 1 60000
+    // @Increment: 1
+    // @User: Standard
     GSCALAR(led_low_ms, "LED_LOW_MS", 500),
 #endif
 
