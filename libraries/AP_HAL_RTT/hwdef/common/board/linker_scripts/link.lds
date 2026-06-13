@@ -139,8 +139,10 @@ SECTIONS
 
     /*
      * CPU-only static BSS.  These large objects are not used by DMA and do
-     * not need to live in SRAM1_APP; keeping them in DTCM preserves SRAM1_APP
-     * for RT-Thread dynamic thread stacks and ArduPilot runtime heap.
+     * not need to live in SRAM1_APP; keeping the core HAL and vehicle objects
+     * in DTCM preserves SRAM1_APP for RT-Thread dynamic thread stacks and
+     * ArduPilot runtime heap.  SITL-on-hardware frame tables are intentionally
+     * left in normal .bss because they can exceed the F7 DTCM window.
      */
     .dtcm_bss (NOLOAD) :
     {
@@ -150,7 +152,6 @@ SECTIONS
         *(.dtcm_bss.*)
         *(.bss.copter)
         *(.bss._ZL13storageDriver)
-        *(.bss._ZL16supported_frames)
         . = ALIGN(8);
         _edtcm_bss = .;
     } > RAM_STACK
