@@ -56,6 +56,34 @@
 
 extern const AP_HAL::HAL& hal;
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+extern volatile uint32_t rtt_dbg_wait_sample_us;
+extern volatile uint32_t rtt_dbg_ins_stage;
+extern volatile uint32_t rtt_dbg_ins_loop_rate;
+extern volatile uint32_t rtt_dbg_ins_backend_count;
+extern volatile uint32_t rtt_dbg_ins_gyro_count;
+extern volatile uint32_t rtt_dbg_ins_accel_count;
+extern volatile uint32_t rtt_dbg_ins_wait_calls;
+extern volatile uint32_t rtt_dbg_ins_wait_counter;
+extern volatile uint32_t rtt_dbg_ins_wait_limit;
+extern volatile uint32_t rtt_dbg_ins_gyro_avail_mask;
+extern volatile uint32_t rtt_dbg_ins_accel_avail_mask;
+extern volatile uint32_t rtt_dbg_ins_gyro_wait_mask;
+extern volatile uint32_t rtt_dbg_ins_accel_wait_mask;
+extern volatile uint32_t rtt_dbg_ins_new_gyro_mask;
+extern volatile uint32_t rtt_dbg_ins_new_accel_mask;
+extern volatile uint32_t rtt_dbg_ins_cal_j;
+extern volatile uint32_t rtt_dbg_ins_cal_i;
+extern volatile uint32_t rtt_dbg_ins_cal_converged;
+
+static void rtt_dbg_ins_counts(uint8_t backend_count, uint8_t gyro_count, uint8_t accel_count)
+{
+    rtt_dbg_ins_backend_count = backend_count;
+    rtt_dbg_ins_gyro_count = gyro_count;
+    rtt_dbg_ins_accel_count = accel_count;
+}
+#endif
+
 
 
 #if APM_BUILD_COPTER_OR_HELI
@@ -944,6 +972,12 @@ bool AP_InertialSensor::has_fft_notch() const
 void
 AP_InertialSensor::init(uint16_t loop_rate)
 {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_ins_stage = 10;
+    rtt_dbg_ins_loop_rate = loop_rate;
+    rtt_dbg_ins_counts(_backend_count, _gyro_count, _accel_count);
+#endif
+
     // remember the sample rate
     _loop_rate = loop_rate;
     _loop_delta_t = 1.0f / loop_rate;
@@ -962,11 +996,22 @@ AP_InertialSensor::init(uint16_t loop_rate)
 
     if (_gyro_count == 0 && _accel_count == 0) {
         _start_backends();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_ins_stage = 11;
+        rtt_dbg_ins_counts(_backend_count, _gyro_count, _accel_count);
+#endif
     }
 
     // calibrate gyros unless gyro calibration has been disabled
     if (gyro_calibration_timing() != GYRO_CAL_NEVER && _gyro_count > 0) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_ins_stage = 20;
+#endif
         init_gyro();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_ins_stage = 24;
+        rtt_dbg_ins_counts(_backend_count, _gyro_count, _accel_count);
+#endif
     }
 
     _sample_period_usec = 1000*1000UL / _loop_rate;
@@ -1106,6 +1151,10 @@ AP_InertialSensor::init(uint16_t loop_rate)
     if (temperature_cal_running()) {
         tcal_learning = true;
     }
+#endif
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_ins_stage = 60;
+    rtt_dbg_ins_counts(_backend_count, _gyro_count, _accel_count);
 #endif
 }
 
@@ -1696,6 +1745,14 @@ AP_InertialSensor::_init_gyro()
     float start_temperature[INS_MAX_INSTANCES] {};
 #endif
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_ins_stage = 21;
+    rtt_dbg_ins_cal_j = 0;
+    rtt_dbg_ins_cal_i = 0;
+    rtt_dbg_ins_cal_converged = 0;
+    rtt_dbg_ins_counts(_backend_count, _gyro_count, _accel_count);
+#endif
+
     // exit immediately if calibration is already in progress
     if (calibrating()) {
         return;
@@ -1727,6 +1784,10 @@ AP_InertialSensor::_init_gyro()
     }
 
     for(int8_t c = 0; c < 5; c++) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_ins_stage = 22;
+        rtt_dbg_ins_cal_i = (uint32_t)c;
+#endif
         hal.scheduler->delay(5);
         update();
     }
@@ -1750,6 +1811,11 @@ AP_InertialSensor::_init_gyro()
     // we try to get a good calibration estimate for up to 30 seconds
     // if the gyros are stable, we should get it in 1 second
     for (int16_t j = 0; j <= 30*4 && num_converged < num_gyros; j++) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_ins_stage = 23;
+        rtt_dbg_ins_cal_j = (uint32_t)j;
+        rtt_dbg_ins_cal_converged = num_converged;
+#endif
         Vector3f gyro_sum[INS_MAX_INSTANCES], gyro_avg[INS_MAX_INSTANCES], gyro_diff[INS_MAX_INSTANCES];
         Vector3f accel_start;
         float diff_norm[INS_MAX_INSTANCES];
@@ -1766,6 +1832,10 @@ AP_InertialSensor::_init_gyro()
         }
         accel_start = get_accel(0);
         for (i=0; i<50; i++) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_dbg_ins_stage = 24;
+            rtt_dbg_ins_cal_i = i;
+#endif
             update();
             for (uint8_t k=0; k<num_gyros; k++) {
                 gyro_sum[k] += get_gyro(k);
@@ -1836,6 +1906,10 @@ AP_InertialSensor::_init_gyro()
 
     // record calibration complete
     _calibrating_gyro = false;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_ins_stage = 29;
+    rtt_dbg_ins_cal_converged = num_converged;
+#endif
 
     // stop flashing leds
     AP_Notify::flags.initialising = false;
@@ -2012,6 +2086,12 @@ void AP_InertialSensor::update(void)
  */
 void AP_InertialSensor::wait_for_sample(void)
 {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_wait_start_us = AP_HAL::micros();
+    rtt_dbg_ins_stage = 30;
+    rtt_dbg_ins_wait_calls++;
+    rtt_dbg_ins_counts(_backend_count, _gyro_count, _accel_count);
+#endif
 #if CONFIG_HAL_BOARD == HAL_BOARD_SITL
     auto *sitl = AP::sitl();
     if (sitl == nullptr) {
@@ -2070,8 +2150,15 @@ check_sample:
         // IMUs to come in
         const uint8_t wait_per_loop = 100;
         const uint8_t wait_counter_limit = uint32_t(_loop_delta_t * 1.0e6) / (3*wait_per_loop);
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_ins_wait_limit = wait_counter_limit;
+#endif
 
         while (true) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            uint8_t rtt_new_gyro_mask = 0;
+            uint8_t rtt_new_accel_mask = 0;
+#endif
             for (uint8_t i=0; i<_backend_count; i++) {
                 // this is normally a nop, but can be used by backends
                 // that don't accumulate samples on a timer
@@ -2080,6 +2167,9 @@ check_sample:
 
             for (uint8_t i=0; i<_gyro_count; i++) {
                 if (_new_gyro_data[i]) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                    rtt_new_gyro_mask |= (1U<<i);
+#endif
                     const uint8_t imask = (1U<<i);
                     gyro_available_mask |= imask;
                     if (_use(i)) {
@@ -2091,6 +2181,9 @@ check_sample:
             }
             for (uint8_t i=0; i<_accel_count; i++) {
                 if (_new_accel_data[i]) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                    rtt_new_accel_mask |= (1U<<i);
+#endif
                     const uint8_t imask = (1U<<i);
                     accel_available_mask |= imask;
                     if (_use(i)) {
@@ -2100,6 +2193,16 @@ check_sample:
                     }
                 }
             }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_dbg_ins_stage = 31;
+            rtt_dbg_ins_wait_counter = wait_counter;
+            rtt_dbg_ins_gyro_avail_mask = gyro_available_mask;
+            rtt_dbg_ins_accel_avail_mask = accel_available_mask;
+            rtt_dbg_ins_gyro_wait_mask = _gyro_wait_mask;
+            rtt_dbg_ins_accel_wait_mask = _accel_wait_mask;
+            rtt_dbg_ins_new_gyro_mask = rtt_new_gyro_mask;
+            rtt_dbg_ins_new_accel_mask = rtt_new_accel_mask;
+#endif
 
             // we wait for up to 1/3 of the loop time to get all of the required
             // accel and gyro samples. After that we accept at least
@@ -2109,6 +2212,9 @@ check_sample:
                     ((gyro_available_mask & _gyro_wait_mask) == _gyro_wait_mask) &&
                     accel_available_mask &&
                     ((accel_available_mask & _accel_wait_mask) == _accel_wait_mask)) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                    rtt_dbg_ins_stage = 32;
+#endif
                     break;
                 }
             } else {
@@ -2118,6 +2224,9 @@ check_sample:
                     // comes back we will start waiting on it again
                     _gyro_wait_mask &= gyro_available_mask;
                     _accel_wait_mask &= accel_available_mask;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                    rtt_dbg_ins_stage = 33;
+#endif
                     break;
                 }
             }
@@ -2129,6 +2238,10 @@ check_sample:
     now = AP_HAL::micros();
     _delta_time = (now - _last_sample_usec) * 1.0e-6f;
     _last_sample_usec = now;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_wait_sample_us = now - rtt_wait_start_us;
+    rtt_dbg_ins_stage = 34;
+#endif
 
 #if 0
     {

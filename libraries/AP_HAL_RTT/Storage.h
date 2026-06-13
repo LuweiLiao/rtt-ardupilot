@@ -44,6 +44,7 @@ public:
     void read_block(void *dst, uint16_t src, size_t n) override;
     void write_block(uint16_t dst, const void* src, size_t n) override;
     void _timer_tick(void) override;
+    bool flush(uint32_t timeout_ms);
     bool erase() override;
     bool get_storage_ptr(void *&ptr, size_t &size) override;
 

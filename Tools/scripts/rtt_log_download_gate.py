@@ -101,7 +101,7 @@ def param_name(msg: Any) -> str:
     return str(pid).rstrip("\x00")
 
 
-def read_param(conn: Any, name: str, timeout_s: float = 8.0) -> float:
+def request_param_direct(conn: Any, name: str, timeout_s: float = 8.0) -> float:
     drain(conn, 0.2)
     conn.mav.param_request_read_send(
         conn.target_system,
@@ -115,6 +115,32 @@ def read_param(conn: Any, name: str, timeout_s: float = 8.0) -> float:
         if msg is not None and param_name(msg) == name:
             return float(msg.param_value)
     raise RuntimeError(f"param_read_timeout:{name}")
+
+
+def request_param_from_list(conn: Any, name: str, timeout_s: float = 45.0) -> float:
+    drain(conn, 0.5)
+    conn.mav.param_request_list_send(conn.target_system, conn.target_component)
+    deadline = time.monotonic() + timeout_s
+    seen = 0
+    reported_count: int | None = None
+    while time.monotonic() < deadline:
+        msg = conn.recv_match(type="PARAM_VALUE", blocking=True, timeout=1.0)
+        if msg is None:
+            continue
+        seen += 1
+        reported_count = int(msg.param_count)
+        if param_name(msg) == name:
+            return float(msg.param_value)
+        if reported_count > 0 and seen >= reported_count:
+            break
+    raise RuntimeError(f"param_list_timeout:{name}:seen={seen}:count={reported_count}")
+
+
+def read_param(conn: Any, name: str, timeout_s: float = 8.0) -> float:
+    try:
+        return request_param_direct(conn, name, timeout_s=timeout_s)
+    except Exception:
+        return request_param_from_list(conn, name)
 
 
 def set_param(conn: Any, name: str, value: float, timeout_s: float = 10.0) -> float:

@@ -114,7 +114,7 @@ bool GCS_MAVLINK::ftp_init(void) {
     }
 
     if (!hal.scheduler->thread_create(FUNCTOR_BIND_MEMBER(&GCS_MAVLINK::ftp_worker, void),
-                                      "FTP", 16384, AP_HAL::Scheduler::PRIORITY_IO, 0)) {
+                                      "FTP", 16384, AP_HAL::Scheduler::PRIORITY_UART, 0)) {
         goto failed;
     }
 
@@ -228,8 +228,9 @@ void GCS_MAVLINK::ftp_error(struct pending_ftp &response, FTP_ERROR error) {
 
     // FIXME: errno's are not thread-local as they should be on ChibiOS
     if (error == FTP_ERROR::FailErrno) {
+        const int err = errno < 0 ? -errno : errno;
         // translate the errno's that we have useful messages for
-        switch (errno) {
+        switch (err) {
             case EEXIST:
                 response.data[0] = static_cast<uint8_t>(FTP_ERROR::FileExists);
                 break;
@@ -237,7 +238,7 @@ void GCS_MAVLINK::ftp_error(struct pending_ftp &response, FTP_ERROR error) {
                 response.data[0] = static_cast<uint8_t>(FTP_ERROR::FileNotFound);
                 break;
             default:
-                response.data[1] = static_cast<uint8_t>(errno);
+                response.data[1] = static_cast<uint8_t>(err);
                 response.size = 2;
                 break;
         }
@@ -261,7 +262,8 @@ void GCS_MAVLINK::ftp_push_replies(pending_ftp &reply)
         hal.scheduler->delay(2);
     }
 #if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-    if (reply.req_opcode == FTP_OP::ReadFile &&
+    if ((reply.req_opcode == FTP_OP::ReadFile ||
+         reply.req_opcode == FTP_OP::BurstReadFile) &&
         reply.opcode == FTP_OP::Ack &&
         reply.size > 64U) {
         /*
@@ -734,6 +736,18 @@ void GCS_MAVLINK::ftp_worker(void) {
                                 }
                             }
                         }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                        if (request.chan == MAVLINK_COMM_0 && burst_delay_ms == 0) {
+                            /*
+                             * [Cybernetics Ch.4] Closed-loop: CherryUSB accepts
+                             * FILE_TRANSFER_PROTOCOL frames into the CDC queue
+                             * faster than the endpoint completion chain drains
+                             * them. A 1 ms floor keeps MAVFTP burst reads
+                             * reliable while adding only ~150 ms to param.pck.
+                             */
+                            burst_delay_ms = 1;
+                        }
+#endif
 
                         // this transfer size is enough for a full parameter file with max parameters
                         const uint32_t transfer_size = 500;

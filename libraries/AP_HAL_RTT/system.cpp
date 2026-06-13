@@ -157,55 +157,24 @@ extern "C" void ap_rtt_iwdg_kick(void)
 }
 
 /* ----------------------------------------------------------------
- *  IWDG initialization — STM32F767 Independent Watchdog
- *  Uses LSI (~32 kHz). Prescaler /256, reload 1250 → ~10s timeout.
- *  Once started, IWDG cannot be stopped until next reset.
- *  Called from Scheduler::init() after threads are created.
+ *  IWDG initialization — STM32F767 Independent Watchdog.
+ *  CUAV V5 enables IWDG in hardware option-byte mode.  The watchdog starts
+ *  from reset with PR=0/RLR=0xFFF (~512ms at 32kHz LSI) and PR/RLR writes do
+ *  not take effect.  This function only refreshes the counter and ensures LSI
+ *  is ready; periodic feeding is handled by SysTick and Scheduler paths.
  * ---------------------------------------------------------------- */
 extern "C" void ap_rtt_iwdg_init(void)
 {
 #define IWDG_KR    (*(volatile uint32_t *)0x40003000)
-#define IWDG_PR    (*(volatile uint32_t *)0x40003004)
-#define IWDG_RLR   (*(volatile uint32_t *)0x40003008)
-#define IWDG_SR    (*(volatile uint32_t *)0x4000300C)
 
-    /* 🚨 FEED IMMEDIATELY — hardware IWDG starts from reset with default
-     * ~512ms timeout (PR=0=div4, RLR=4095).  The bootloader may take
-     * 100-300ms to validate the app, so only ~200-400ms remain by the
-     * time we reach here.  LSI enable can take up to ~100ms, and PR/RLR
-     * sync adds more delay.  Feed first to extend the counter NOW, then
-     * reconfigure to a longer timeout. */
+    /* Feed immediately; the bootloader and early RT-Thread init have already
+     * spent part of the fixed hardware-IWDG window. */
     IWDG_KR = 0xAAAA;  /* Feed to prevent imminent reset */
 
-    /* Enable LSI */
     RCC->CSR |= RCC_CSR_LSION;
-    while (!(RCC->CSR & RCC_CSR_LSIRDY)) {}
-
-    /* Enable write access to IWDG_PR and IWDG_RLR */
-    IWDG_KR = 0x5555;
-
-    /* Prescaler: /256 (PR=6, bits 110) */
-    IWDG_PR = 6;
-
-    /* Reload value: 1250 → timeout = (256 * 1250) / 32000 ≈ 10s */
-    IWDG_RLR = 1250;
-
-    /* Wait for register update with timeout (~10ms at 32kHz LSI) */
-    {
-        volatile uint32_t iwdg_timeout = 1000000;
-        while (IWDG_SR & (IWDG_SR_PVU | IWDG_SR_RVU)) {
-            if (--iwdg_timeout == 0) {
-                rt_kprintf("IWDG: SR sync timeout (SR=0x%08lx), continuing\n",
-                           (unsigned long)IWDG_SR);
-                break;
-            }
-            __NOP();
-        }
+    while (!(RCC->CSR & RCC_CSR_LSIRDY)) {
+        IWDG_KR = 0xAAAA;
     }
 
-    /* Final feed with the new timeout configuration active */
     IWDG_KR = 0xAAAA;
-
-    /* Start the watchdog (no-op if already running from hardware IWDG) */
-    IWDG_KR = 0xCCCC;
 }

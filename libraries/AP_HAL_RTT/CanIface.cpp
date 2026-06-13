@@ -423,7 +423,9 @@ int16_t CANIface::send(const AP_HAL::CANFrame& frame, uint64_t tx_deadline,
         txi.frame          = frame;
         txi.loopback       = (flags & Loopback) != 0;
         txi.abort_on_error = (flags & AbortOnError) != 0;
-        // setup frame initial state
+        // [Cybernetics Ch.4] Closed-loop: mark mailbox state so timeout recovery can abort failed TX.
+        txi.aborted        = false;
+        txi.setup          = true;
         txi.pushed         = false;
     }
 

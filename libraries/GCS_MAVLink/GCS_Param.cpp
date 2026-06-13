@@ -25,6 +25,10 @@
 #include <AP_Logger/AP_Logger.h>
 #include <AP_BoardConfig/AP_BoardConfig.h>
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#include <AP_HAL_RTT/Storage.h>
+#endif
+
 extern const AP_HAL::HAL& hal;
 
 #if CONFIG_HAL_BOARD == HAL_BOARD_RTT
@@ -541,12 +545,36 @@ void GCS_MAVLINK::handle_param_set(const mavlink_message_t &msg)
      */
     bool force_save = !is_equal(packet.param_value, old_value);
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    /*
+     * [Cybernetics Ch.4] Closed-loop: RTT USB can acknowledge PARAM_SET much
+     * faster than the IO/storage threads can make it durable. Keep full
+     * parameter download asynchronous, but make single writes durable before
+     * confirming them on the same link.
+     */
+    vp->save_sync(force_save, false);
+    bool storage_flush_ok = true;
+    if (hal.storage != nullptr) {
+        auto *rtt_storage = static_cast<RTT::Storage *>(hal.storage);
+        storage_flush_ok = rtt_storage->flush(200U);
+    }
+#else
     // save the change (async via IO thread — same as ChibiOS)
     vp->save(force_save);
+#endif
 
     if (force_save && (parameter_flags & AP_PARAM_FLAG_ENABLE)) {
         AP_Param::invalidate_count();
     }
+
+    // [Cybernetics Ch.4] Closed-loop: confirm PARAM_SET on the same link immediately.
+    send_parameter_value(key, var_type, vp->cast_to_float(var_type));
+
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    if (!storage_flush_ok) {
+        GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "Param storage flush timeout (%s)", key);
+    }
+#endif
 
 #if HAL_LOGGING_ENABLED
     AP_Logger *logger = AP_Logger::get_singleton();

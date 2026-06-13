@@ -17,11 +17,31 @@
 #endif
 
 extern volatile uint32_t rtt_dbg_setup_stage;
+#ifndef AP_RTT_STORAGE_DEBUG
+#define AP_RTT_STORAGE_DEBUG 1
+#endif
+
+#if AP_RTT_STORAGE_DEBUG
 #define RTT_STORAGE_DBG_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
 volatile uint32_t rtt_dbg_storage_backend RTT_STORAGE_DBG_BSS;
 volatile uint32_t rtt_dbg_fram_probe RTT_STORAGE_DBG_BSS; /* 1=init ok, 2=read ok, 3=init fail, 4=read fail */
 volatile uint32_t rtt_dbg_fram_tick_ok RTT_STORAGE_DBG_BSS;
 volatile uint32_t rtt_dbg_fram_tick_fail RTT_STORAGE_DBG_BSS;
+volatile uint32_t rtt_dbg_storage_erase_calls RTT_STORAGE_DBG_BSS;
+volatile uint32_t rtt_dbg_storage_last_read_ofs RTT_STORAGE_DBG_BSS;
+volatile uint32_t rtt_dbg_storage_last_read_len RTT_STORAGE_DBG_BSS;
+volatile uint32_t rtt_dbg_storage_last_write_ofs RTT_STORAGE_DBG_BSS;
+volatile uint32_t rtt_dbg_storage_last_write_len RTT_STORAGE_DBG_BSS;
+volatile uint32_t rtt_dbg_storage_last_dirty_line RTT_STORAGE_DBG_BSS;
+volatile uint32_t rtt_dbg_storage_last_tick_line RTT_STORAGE_DBG_BSS;
+volatile uint32_t rtt_dbg_storage_dirty_empty_ms RTT_STORAGE_DBG_BSS;
+volatile uint32_t rtt_dbg_storage_tick_calls RTT_STORAGE_DBG_BSS;
+volatile uint32_t rtt_dbg_storage_empty_ticks RTT_STORAGE_DBG_BSS;
+volatile uint32_t rtt_dbg_storage_last_tick_ms RTT_STORAGE_DBG_BSS;
+volatile uint32_t rtt_dbg_storage_last_empty_ms RTT_STORAGE_DBG_BSS;
+volatile uint32_t rtt_dbg_storage_dirty_lines RTT_STORAGE_DBG_BSS;
+volatile uint32_t rtt_dbg_storage_healthy_state RTT_STORAGE_DBG_BSS;
+#endif
 
 extern const AP_HAL::HAL& hal;
 
@@ -111,11 +131,13 @@ namespace RTT
 
 void Storage::_publish_backend_debug(void)
 {
+#if AP_RTT_STORAGE_DEBUG
     rtt_dbg_storage_backend = (uint32_t)_initialisedType;
 #if HAL_WITH_RAMTRON
     if (_initialisedType == StorageBackend::FRAM && rtt_dbg_fram_probe == 0) {
         rtt_dbg_fram_probe = 2;
     }
+#endif
 #endif
 }
 
@@ -134,9 +156,13 @@ void Storage::_storage_open(void)
     rtt_dbg_setup_stage = 501;  // trying FRAM
     spi_cmsis_prepare_bus(2);
     if (_fram.init()) {
+#if AP_RTT_STORAGE_DEBUG
         rtt_dbg_fram_probe = 1;
+#endif
         if (_fram.read(0, _buffer, RTT_STORAGE_SIZE)) {
+#if AP_RTT_STORAGE_DEBUG
             rtt_dbg_fram_probe = 2;
+#endif
             _initialisedType = StorageBackend::FRAM;
             _publish_backend_debug();
             _last_empty_ms = AP_HAL::millis();
@@ -145,9 +171,13 @@ void Storage::_storage_open(void)
                                 (unsigned)_initialisedType);
             return;
         }
+#if AP_RTT_STORAGE_DEBUG
         rtt_dbg_fram_probe = 4;
+#endif
     } else {
+#if AP_RTT_STORAGE_DEBUG
         rtt_dbg_fram_probe = 3;
+#endif
     }
     rtt_dbg_setup_stage = 5011;  // FRAM init/read failed
 #endif
@@ -188,6 +218,10 @@ void Storage::read_block(void *dst, uint16_t src, size_t n)
     if (dst == nullptr || n > RTT_STORAGE_SIZE || src > (RTT_STORAGE_SIZE - n)) {
         return;
     }
+#if AP_RTT_STORAGE_DEBUG
+    rtt_dbg_storage_last_read_ofs = src;
+    rtt_dbg_storage_last_read_len = n;
+#endif
     _storage_open();
     memcpy(dst, &_buffer[src], n);
 }
@@ -197,6 +231,10 @@ void Storage::write_block(uint16_t dst, const void* src, size_t n)
     if (src == nullptr || n > RTT_STORAGE_SIZE || dst > (RTT_STORAGE_SIZE - n)) {
         return;
     }
+#if AP_RTT_STORAGE_DEBUG
+    rtt_dbg_storage_last_write_ofs = dst;
+    rtt_dbg_storage_last_write_len = n;
+#endif
     _storage_open();
     _sem.take_blocking();
     if (memcmp(src, &_buffer[dst], n) != 0) {
@@ -209,6 +247,9 @@ void Storage::write_block(uint16_t dst, const void* src, size_t n)
 bool Storage::erase()
 {
     _storage_open();
+#if AP_RTT_STORAGE_DEBUG
+    rtt_dbg_storage_erase_calls++;
+#endif
 #if HAL_WITH_RAMTRON
     if (_initialisedType == StorageBackend::FRAM) {
         return AP_HAL::Storage::erase();
@@ -227,67 +268,144 @@ bool Storage::erase()
 
 void Storage::_timer_tick(void)
 {
+#if AP_RTT_STORAGE_DEBUG
+    rtt_dbg_storage_tick_calls++;
+    rtt_dbg_storage_last_tick_ms = AP_HAL::millis();
+#endif
     if (_initialisedType == StorageBackend::None || _initialisedType == StorageBackend::Stub) {
         return;
     }
     if (_dirty_mask.empty()) {
         _last_empty_ms = AP_HAL::millis();
+#if AP_RTT_STORAGE_DEBUG
+        rtt_dbg_storage_empty_ticks++;
+        rtt_dbg_storage_last_empty_ms = _last_empty_ms;
+        rtt_dbg_storage_dirty_lines = 0;
+#endif
         return;
     }
 
-    uint16_t i;
-    for (i = 0; i < RTT_STORAGE_NUM_LINES; i++) {
-        if (_dirty_mask.get(i)) {
-            break;
+#if AP_RTT_STORAGE_DEBUG
+    uint32_t dirty_count = 0;
+    for (uint16_t line = 0; line < RTT_STORAGE_NUM_LINES; line++) {
+        if (_dirty_mask.get(line)) {
+            dirty_count++;
         }
     }
-    if (i == RTT_STORAGE_NUM_LINES) {
-        return;
-    }
+    rtt_dbg_storage_dirty_lines = dirty_count;
+#endif
 
-    _sem.take_blocking();
-    memcpy(_tmpline, &_buffer[RTT_STORAGE_LINE_SIZE * i], RTT_STORAGE_LINE_SIZE);
-    _sem.give();
+    const uint8_t max_lines =
+#if HAL_WITH_RAMTRON
+        (_initialisedType == StorageBackend::FRAM) ? 8U :
+#endif
+        1U;
 
-    bool write_ok = false;
+    for (uint8_t written_lines = 0; written_lines < max_lines; written_lines++) {
+        uint16_t i;
+        for (i = 0; i < RTT_STORAGE_NUM_LINES; i++) {
+            if (_dirty_mask.get(i)) {
+                break;
+            }
+        }
+        if (i == RTT_STORAGE_NUM_LINES) {
+            return;
+        }
+
+        _sem.take_blocking();
+        memcpy(_tmpline, &_buffer[RTT_STORAGE_LINE_SIZE * i], RTT_STORAGE_LINE_SIZE);
+        _sem.give();
+#if AP_RTT_STORAGE_DEBUG
+        rtt_dbg_storage_last_tick_line = i;
+#endif
+
+        bool write_ok = false;
 
 #if HAL_WITH_RAMTRON
-    if (_initialisedType == StorageBackend::FRAM) {
-        /* Match ChibiOS: AP_RAMTRON::write() already verifies first 32 bytes */
-        write_ok = _fram.write(RTT_STORAGE_LINE_SIZE * i, _tmpline, RTT_STORAGE_LINE_SIZE);
-    }
+        if (_initialisedType == StorageBackend::FRAM) {
+            /*
+             * [Cybernetics Ch.4] Closed-loop: parameter saves often dirty
+             * adjacent 8-byte lines (sentinel/data/header).  Flushing a short
+             * FRAM dirty run in one scheduler tick reduces the reset window
+             * where only part of one logical parameter update is persistent.
+             */
+            write_ok = _fram.write(RTT_STORAGE_LINE_SIZE * i, _tmpline, RTT_STORAGE_LINE_SIZE);
+        }
 #endif
 
 #ifdef STORAGE_FLASH_PAGE
-    if (_initialisedType == StorageBackend::Flash) {
-        write_ok = _flash_write(i);
-    }
+        if (_initialisedType == StorageBackend::Flash) {
+            write_ok = _flash_write(i);
+        }
 #endif
 
-    if (write_ok) {
+        if (write_ok) {
 #if HAL_WITH_RAMTRON
-        if (_initialisedType == StorageBackend::FRAM) {
-            rtt_dbg_fram_tick_ok++;
-        }
+            if (_initialisedType == StorageBackend::FRAM) {
+#if AP_RTT_STORAGE_DEBUG
+                rtt_dbg_fram_tick_ok++;
 #endif
+            }
+#endif
+            _sem.take_blocking();
+            if (memcmp(_tmpline, &_buffer[RTT_STORAGE_LINE_SIZE * i], RTT_STORAGE_LINE_SIZE) == 0) {
+                _dirty_mask.clear(i);
+#if AP_RTT_STORAGE_DEBUG
+                rtt_dbg_storage_last_dirty_line = i;
+                if (_dirty_mask.empty()) {
+                    rtt_dbg_storage_dirty_empty_ms = AP_HAL::millis();
+                    rtt_dbg_storage_dirty_lines = 0;
+                }
+#endif
+            }
+            _sem.give();
+        } else {
+#if HAL_WITH_RAMTRON
+            if (_initialisedType == StorageBackend::FRAM) {
+#if AP_RTT_STORAGE_DEBUG
+                rtt_dbg_fram_tick_fail++;
+#endif
+            }
+#endif
+            break;
+        }
+    }
+}
+
+bool Storage::flush(uint32_t timeout_ms)
+{
+    const uint32_t start_ms = AP_HAL::millis();
+
+    while (true) {
         _sem.take_blocking();
-        if (memcmp(_tmpline, &_buffer[RTT_STORAGE_LINE_SIZE * i], RTT_STORAGE_LINE_SIZE) == 0) {
-            _dirty_mask.clear(i);
-        }
+        const bool empty = _dirty_mask.empty();
         _sem.give();
-    } else {
-#if HAL_WITH_RAMTRON
-        if (_initialisedType == StorageBackend::FRAM) {
-            rtt_dbg_fram_tick_fail++;
+        if (empty) {
+            return true;
         }
-#endif
+
+        /*
+         * [Cybernetics Ch.4] Closed-loop: PARAM_SET must not acknowledge a
+         * durable save until the HAL dirty lines are actually written to FRAM.
+         */
+        _timer_tick();
+
+        if (AP_HAL::millis() - start_ms >= timeout_ms) {
+            return false;
+        }
+        hal.scheduler->delay_microseconds(500);
     }
 }
 
 bool Storage::healthy()
 {
-    return ((_initialisedType != StorageBackend::None) &&
-            (AP_HAL::millis() - _last_empty_ms < 2000U));
+    const bool ok = ((_initialisedType != StorageBackend::None) &&
+                     (AP_HAL::millis() - _last_empty_ms < 2000U));
+#if AP_RTT_STORAGE_DEBUG
+    rtt_dbg_storage_healthy_state = ok ? 1U : 0U;
+    rtt_dbg_storage_last_empty_ms = _last_empty_ms;
+#endif
+    return ok;
 }
 
 void Storage::_flash_load(void)

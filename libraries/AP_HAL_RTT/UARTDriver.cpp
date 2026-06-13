@@ -589,7 +589,21 @@ void UARTDriver::_end()
 
 void UARTDriver::_flush()
 {
-    _drain_writebuf_to_dev();
+    if (!_initialized) {
+        return;
+    }
+
+    if (_is_usb) {
+        _drain_writebuf_to_dev();
+        return;
+    }
+
+    /*
+     * Match ChibiOS' non-USB flush semantics: wake/defer TX service rather
+     * than synchronously draining from the caller.  The RTT ap_uart thread
+     * drains physical UARTs at 1 kHz; running the polling fallback here lets
+     * MAVLink send-unlock spin on an unrelated TELEM port and starve USB CDC.
+     */
 }
 
 extern volatile uint32_t rtt_uart_dbg_rx_dma_starts;

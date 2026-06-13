@@ -24,6 +24,7 @@
 #include "AP_HAL_RTT/RCInput.h"
 #include "AP_HAL_RTT/GPIO.h"
 #include "hal_usb_lld_rtt.h"
+#include "rtt_ctl_telemetry.h"
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Math/AP_Math.h>
 #include <AP_InternalError/AP_InternalError.h>
@@ -36,6 +37,17 @@
 #include "rtt_dbg_bkp.h"
 
 volatile uint32_t rtt_dbg_sw_reboot_count = 0;
+
+static bool rtt_stack_range_valid(const void *stack_addr, uint32_t stack_size)
+{
+    const uintptr_t start = (uintptr_t)stack_addr;
+    const uintptr_t end = start + stack_size;
+    const uintptr_t sram_start = 0x20000000U;
+    const uintptr_t sram_end = 0x20080000U;
+
+    return stack_addr != nullptr && stack_size != 0 && end >= start &&
+           start >= sram_start && end <= sram_end;
+}
 
 #if HAL_WITH_IO_MCU
 /* ch.h provides thread_t / chThdGetSelfX for AP_IOMCU's thread_main.
@@ -126,6 +138,7 @@ void Scheduler::_timer_thread_entry(void *arg)
          * Safe even before IWDG is started (0xAAAA to KR when off = no-op). */
         if (sched->in_expected_delay()) {
             sched->watchdog_pat();
+            rtt_ctl_telemetry_tick(500);
         }
     }
 }
@@ -525,6 +538,21 @@ void Scheduler::delay_microseconds(uint16_t us)
  * ---------------------------------------------------------------- */
 void Scheduler::delay_microseconds_boost(uint16_t us)
 {
+    if (!_initialized && in_main_thread()) {
+        /*
+         * [Cybernetics Ch.4] Closed-loop: setup waits depend on SPI/timer
+         * producers for IMU samples. Keep the ChibiOS startup-priority
+         * discipline here instead of raising main above those producers.
+         */
+        _poll_usb_if_active();
+        if (us > 0) {
+            rt_thread_delay(1);
+        }
+        call_delay_cb();
+        _called_boost = true;
+        return;
+    }
+
     if (!_priority_boosted && in_main_thread()) {
         rt_thread_t self = rt_thread_self();
         if (self) {
@@ -546,17 +574,6 @@ void Scheduler::delay_microseconds_boost(uint16_t us)
      */
     if (in_main_thread() && _priority_boosted) {
         rt_thread_delay(1);
-        if (!_initialized) {
-            /*
-             * [Cybernetics Ch.4] Closed-loop: during setup, long sensor waits
-             * still need the registered delay callback to publish boot/status
-             * traffic and service active RTT parameter windows.  Once the main
-             * scheduler is initialized, match ChibiOS boost semantics: yield to
-             * worker threads, but do not run the startup delay callback from the
-             * normal wait_for_sample() path.
-             */
-            call_delay_cb();
-        }
         _called_boost = true;
         return;
     }
@@ -665,29 +682,10 @@ void Scheduler::set_system_initialized()
     }
     _initialized = true;
 
-    /* Reconfigure IWDG from ~10s (ap_rtt_iwdg_init early timeout) to ~2s
-     * for normal operation.  IWDG is already running from early init;
-     * we unlock PR/RLR, set tighter timeout, and wait for sync. */
+    /* CUAV V5 runs IWDG in hardware option-byte mode, so PR/RLR cannot be
+     * tightened here.  Refresh the fixed hardware watchdog and mark it active. */
 #define IWDG_KR    (*(volatile uint32_t *)0x40003000)
-#define IWDG_PR    (*(volatile uint32_t *)0x40003004)
-#define IWDG_RLR   (*(volatile uint32_t *)0x40003008)
-#define IWDG_SR    (*(volatile uint32_t *)0x4000300C)
-    IWDG_KR = 0xAAAA;          /* Feed to extend counter before reconfig */
-    IWDG_KR = 0x5555;          /* Unlock PR/RLR */
-    IWDG_PR = 3;               /* prescaler /32 */
-    IWDG_RLR = 2047;           /* ~2s timeout at LSI 32kHz */
-    {
-        volatile uint32_t iwdg_timeout = 1000000;
-        while (IWDG_SR & (IWDG_SR_PVU | IWDG_SR_RVU)) {
-            if (--iwdg_timeout == 0) {
-                rt_kprintf("IWDG: SR sync timeout in set_system_initialized (SR=0x%08lx)\n",
-                           (unsigned long)IWDG_SR);
-                break;
-            }
-            __NOP();
-        }
-    }
-    IWDG_KR = 0xAAAA;          /* Reload counter with new RLR value */
+    IWDG_KR = 0xAAAA;
     _iwdg_started = true;
 }
 
@@ -814,12 +812,11 @@ void Scheduler::watchdog_pat(void)
 {
     last_watchdog_pat_ms = AP_HAL::millis();
 
-    /* IWDG kick — only after IWDG has been configured by set_system_initialized() */
+    /* IWDG is already running from reset on CUAV V5.  Feed it during setup
+     * delays too; the hardware option-byte timeout cannot be changed here. */
 #if defined(HAL_BOARD_RTT) && !defined(IOMCU_FW)
-    if (_iwdg_started) {
 #define IWDG_KR_REG    (*(volatile uint32_t *)0x40003000)
-        IWDG_KR_REG = 0xAAAA;
-    }
+    IWDG_KR_REG = 0xAAAA;
 #endif
 }
 
@@ -831,32 +828,93 @@ void Scheduler::_check_stack_free(void)
 {
 #ifdef RT_USING_OVERFLOW_CHECK
     const uint32_t min_stack = 64;
+    struct stack_snapshot {
+        uint8_t *stack_addr;
+        uint32_t stack_size;
+        uint8_t prio;
+    };
+    stack_snapshot snapshots[32];
+    uint8_t snapshot_count = 0;
+    uint8_t nodes_seen = 0;
+    bool invalid_metadata = false;
 
     struct rt_object_information *info =
         rt_object_get_information(RT_Object_Class_Thread);
     if (info == RT_NULL) return;
 
-    rt_enter_critical();
-    for (struct rt_list_node *node = info->object_list.next;
-         node != &(info->object_list);
-         node = node->next) {
+    // [Cybernetics Ch.4] Closed-loop: stack diagnostics must report, not fault.
+    rt_base_t level = rt_spin_lock_irqsave(&info->spinlock);
+    struct rt_list_node *head = &info->object_list;
+    struct rt_list_node *node = head->next;
+    while (node != head) {
+        if (nodes_seen++ >= 64) {
+            invalid_metadata = true;
+            break;
+        }
+        if (((uintptr_t)node & (sizeof(uint32_t) - 1U)) != 0) {
+            invalid_metadata = true;
+            break;
+        }
+
+        struct rt_list_node *next = node->next;
+        if (next == nullptr || ((uintptr_t)next & (sizeof(uint32_t) - 1U)) != 0) {
+            invalid_metadata = true;
+            break;
+        }
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wcast-align"
         rt_thread_t thread = rt_list_entry(node, struct rt_thread, parent.list);
 #pragma GCC diagnostic pop
 
-        uint8_t *sp = (uint8_t *)thread->stack_addr;
+        if (snapshot_count >= sizeof(snapshots)/sizeof(snapshots[0])) {
+            break;
+        }
+
+        if (((uintptr_t)thread & (sizeof(uint32_t) - 1U)) != 0) {
+            invalid_metadata = true;
+            node = next;
+            continue;
+        }
+
+        volatile struct rt_thread *vthread = thread;
+        uint8_t *stack_addr = (uint8_t *)vthread->stack_addr;
+        uint32_t stack_size = vthread->stack_size;
+        const uintptr_t stack_start = (uintptr_t)stack_addr;
+        const uintptr_t stack_end = stack_start + stack_size;
+
+        if (stack_size < min_stack || stack_size > 128U * 1024U ||
+            stack_end < stack_start || !rtt_stack_range_valid(stack_addr, stack_size) ||
+            (thread->parent.type & ~RT_Object_Class_Static) != RT_Object_Class_Thread) {
+            invalid_metadata = true;
+            node = next;
+            continue;
+        }
+
+        snapshots[snapshot_count++] = {stack_addr, stack_size,
+                                       RT_SCHED_PRIV(thread).current_priority};
+
+        node = next;
+    }
+    rt_spin_unlock_irqrestore(&info->spinlock, level);
+
+    if (invalid_metadata) {
+#if AP_INTERNALERROR_ENABLED
+        AP::internalerror().error(AP_InternalError::error_t::flow_of_control, __LINE__);
+#endif
+    }
+
+    for (uint8_t i = 0; i < snapshot_count; i++) {
+        const stack_snapshot &snapshot = snapshots[i];
         uint32_t free = 0;
-        while (free < thread->stack_size && sp[free] == '#') {
+        while (free < min_stack && snapshot.stack_addr[free] == '#') {
             free++;
         }
         if (free < min_stack) {
 #if AP_INTERNALERROR_ENABLED
-            uint8_t prio = RT_SCHED_PRIV(thread).current_priority;
-            AP::internalerror().error(AP_InternalError::error_t::stack_overflow, prio);
+            AP::internalerror().error(AP_InternalError::error_t::stack_overflow, snapshot.prio);
 #endif
         }
     }
-    rt_exit_critical();
 #endif
 }

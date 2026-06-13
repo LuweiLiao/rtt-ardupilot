@@ -24,6 +24,7 @@
 #include <utility>
 
 #include <AP_HAL/AP_HAL.h>
+#include <AP_HAL/AP_HAL_Boards.h>
 #include <AP_HAL/utility/sparse-endian.h>
 #include <AP_Math/AP_Math.h>
 #include <AP_BoardConfig/AP_BoardConfig.h>
@@ -60,6 +61,14 @@
 #define PDCNTL_VAL_PULSE_DURATION_NORMAL 0xC0
 
 #define SAMPLING_PERIOD_USEC (10 * AP_USEC_PER_MSEC)
+
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#define IST8310_WHOAMI_ATTEMPTS 30
+#define IST8310_WHOAMI_RETRY_DELAY_MS 25
+#else
+#define IST8310_WHOAMI_ATTEMPTS 5
+#define IST8310_WHOAMI_RETRY_DELAY_MS 20
+#endif
 
 /*
  * FSR:
@@ -169,6 +178,7 @@ bool AP_Compass_IST8310::init()
 
     // high retries for init
     _dev->set_retries(10);
+    _dev->set_speed(AP_HAL::Device::SPEED_LOW);
 
     /*
       unfortunately the IST8310 employs the novel concept of a
@@ -185,17 +195,17 @@ bool AP_Compass_IST8310::init()
      */
     uint8_t whoami = 0;
     bool whoami_read_ok = false;
-    for (uint8_t attempt = 0; attempt < 5; attempt++) {
+    for (uint8_t attempt = 0; attempt < IST8310_WHOAMI_ATTEMPTS; attempt++) {
         rtt_dbg_ist8310_whoami_attempts = attempt + 1U;
         rtt_dbg_ist8310_initial_reset_write_ok =
             _dev->write_register(CNTL2_REG, CNTL2_VAL_SRST) ? 1U : 0U;
         if (!rtt_dbg_ist8310_initial_reset_write_ok) {
             rtt_dbg_ist8310_reset_write_fail++;
-            hal.scheduler->delay(20);
+            hal.scheduler->delay(IST8310_WHOAMI_RETRY_DELAY_MS);
             continue;
         }
 
-        hal.scheduler->delay(20);
+        hal.scheduler->delay(IST8310_WHOAMI_RETRY_DELAY_MS);
 
         whoami_read_ok = _dev->read_registers(WAI_REG, &whoami, 1);
         rtt_dbg_ist8310_whoami_read_ok = whoami_read_ok ? 1U : 0U;
@@ -203,7 +213,7 @@ bool AP_Compass_IST8310::init()
         if (whoami_read_ok && whoami == DEVICE_ID) {
             break;
         }
-        hal.scheduler->delay(20);
+        hal.scheduler->delay(IST8310_WHOAMI_RETRY_DELAY_MS);
     }
 
     // [Cybernetics Ch.9] Noise tolerance: early RTT I2C startup can miss the first WAI read.
@@ -256,6 +266,7 @@ bool AP_Compass_IST8310::init()
 
     // lower retries for run
     _dev->set_retries(3);
+    _dev->set_speed(AP_HAL::Device::SPEED_LOW);
 
     // start state machine: request a sample
     start_conversion();

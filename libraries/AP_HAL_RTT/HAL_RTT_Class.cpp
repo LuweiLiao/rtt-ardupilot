@@ -216,6 +216,7 @@ volatile uint32_t rtt_dbg_loop_time_min_us = 0xFFFFFFFF;
 volatile uint32_t rtt_dbg_work_time_us = 0;
 volatile uint32_t rtt_dbg_work_time_max_us = 0;
 volatile uint32_t rtt_dbg_overrun_count = 0;
+volatile uint32_t rtt_dbg_main_loop_service_yield_count = 0;
 volatile uint32_t rtt_dbg_fast_loop_count = 0;
 volatile uint32_t rtt_dbg_boost_calls_per_loop = 0;
 volatile uint32_t rtt_dbg_boost_total_us_per_loop = 0;
@@ -224,6 +225,23 @@ volatile uint32_t rtt_dbg_spi_ok = 0;
 volatile uint32_t rtt_dbg_wait_sample_us = 0;
 volatile uint32_t rtt_dbg_run_tasks_us = 0;
 volatile uint32_t rtt_dbg_extra_loop = 0;
+volatile uint32_t rtt_dbg_ins_stage = 0;
+volatile uint32_t rtt_dbg_ins_loop_rate = 0;
+volatile uint32_t rtt_dbg_ins_backend_count = 0;
+volatile uint32_t rtt_dbg_ins_gyro_count = 0;
+volatile uint32_t rtt_dbg_ins_accel_count = 0;
+volatile uint32_t rtt_dbg_ins_wait_calls = 0;
+volatile uint32_t rtt_dbg_ins_wait_counter = 0;
+volatile uint32_t rtt_dbg_ins_wait_limit = 0;
+volatile uint32_t rtt_dbg_ins_gyro_avail_mask = 0;
+volatile uint32_t rtt_dbg_ins_accel_avail_mask = 0;
+volatile uint32_t rtt_dbg_ins_gyro_wait_mask = 0;
+volatile uint32_t rtt_dbg_ins_accel_wait_mask = 0;
+volatile uint32_t rtt_dbg_ins_new_gyro_mask = 0;
+volatile uint32_t rtt_dbg_ins_new_accel_mask = 0;
+volatile uint32_t rtt_dbg_ins_cal_j = 0;
+volatile uint32_t rtt_dbg_ins_cal_i = 0;
+volatile uint32_t rtt_dbg_ins_cal_converged = 0;
 extern "C" volatile uint32_t rtt_cpu_idle_pct;
 
 #ifndef HAL_RTT_UART7_PERIODIC_TELEMETRY
@@ -304,6 +322,7 @@ static void _main_loop_entry(void* arg)
     rtt_dbg_hal_run_called = 0x11111111;  /* Second magic number after setup */
 
     uint32_t last_loop_us = AP_HAL::micros();
+    uint8_t service_yield_counter = 0;
     for (;;) {
         rtt_dbg_boost_calls_per_loop = 0;
         rtt_dbg_boost_total_us_per_loop = 0;
@@ -321,7 +340,20 @@ static void _main_loop_entry(void* arg)
         if (work > rtt_dbg_work_time_max_us) rtt_dbg_work_time_max_us = work;
         if (work > 2500) rtt_dbg_overrun_count++;
         if (!schedulerInstance.check_called_boost()) {
-            hal.scheduler->delay_microseconds(50);
+            /*
+             * [Cybernetics Ch.4] Closed-loop: RTT sub-200us delays are DWT
+             * busy-waits, unlike ChibiOS chThdSleep() calls.  Periodically
+             * yield a real RT-Thread tick so lower-priority IO/storage/logger
+             * threads can update heartbeats without promoting them above the
+             * 400Hz main loop budget.
+             */
+            if (++service_yield_counter >= 32) {
+                service_yield_counter = 0;
+                rtt_dbg_main_loop_service_yield_count++;
+                rt_thread_mdelay(1);
+            } else {
+                hal.scheduler->delay_microseconds(50);
+            }
         }
         schedulerInstance.watchdog_pat();
         uint32_t now_us = AP_HAL::micros();
@@ -343,8 +375,8 @@ extern "C" void ap_rtt_iwdg_init(void);
 
 void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
 {
-    /* Feed + reconfigure IWDG before anything else — hardware IWDG is active from
-     * reset with ~512ms timeout (FLASH_OPTCR_IWDG_SW=0 on CUAV V5).  Must run
+    /* Feed IWDG before anything else — hardware IWDG is active from reset with
+     * ~512ms timeout (FLASH_OPTCR_IWDG_SW=0 on CUAV V5).  Must run
      * before debug markers or init that can exceed the remaining margin. */
     ap_rtt_iwdg_init();
 #if AP_HAL_SHARED_DMA_ENABLED
@@ -354,16 +386,16 @@ void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
     rtt_ctl_print_snapshot();
     rt_kprintf("HAL_RTT::run\n");
 
-    /* Strategic feed — PVU/RVU stuck means IWDG still at ~512ms timeout.
-     * SysTick feeds every 1ms from here on, but ap_rtt_iwdg_init() may have
-     * consumed up to ~200ms.  Feed now to maximize remaining margin before
-     * the next SysTick fires. */
+    /* Strategic feed. SysTick feeds every 1ms from here on, but
+     * ap_rtt_iwdg_init() may have consumed margin in the fixed hardware
+     * watchdog window. */
     *(volatile uint32_t *)0x40003000 = 0xAAAA;
 
     /* Save reset reason before RMVF clear — mirrors ChibiOS board.c
      * stm32_watchdog_save_reason() / stm32_watchdog_clear_reason(). */
     rtt_boot_rcc_csr = RCC->CSR;
     rtt_dbg_bkp_restore_prev_fault();
+    rtt_ctl_print_snapshot();
     RCC->CSR |= RCC_CSR_RMVF;
 
 #ifdef HAL_I2C_CLEAR_BUS

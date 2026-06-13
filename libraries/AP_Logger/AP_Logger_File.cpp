@@ -38,6 +38,36 @@ extern const AP_HAL::HAL& hal;
 
 #define LOGGER_PAGE_SIZE 1024UL
 
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#define RTT_LOGGER_DBG_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+volatile uint32_t rtt_dbg_logger_io_timer_calls RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_last_heartbeat_ms RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_last_operation RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_write_calls RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_write_bytes RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_last_write_len RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_last_write_ret RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_last_write_ms RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_max_write_ms RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_fsync_calls RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_last_fsync_ms RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_max_fsync_ms RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_last_errno RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_open_error_ms RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_last_write_failed RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_write_fd RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_alive_state RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_logging_failed_state RTT_LOGGER_DBG_BSS;
+
+enum {
+    RTT_LOGGER_OP_NONE = 0,
+    RTT_LOGGER_OP_DISK_SPACE = 1,
+    RTT_LOGGER_OP_WRITE = 2,
+    RTT_LOGGER_OP_FSYNC = 3,
+    RTT_LOGGER_OP_CLOSE = 4,
+};
+#endif
+
 #define MB_to_B 1000000
 #define B_to_MB 0.000001
 
@@ -911,6 +941,13 @@ void AP_Logger_File::io_timer(void)
 {
     uint32_t tnow = AP_HAL::millis();
     _io_timer_heartbeat = tnow;
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_logger_io_timer_calls++;
+    rtt_dbg_logger_last_heartbeat_ms = tnow;
+    rtt_dbg_logger_write_fd = (uint32_t)_write_fd;
+    rtt_dbg_logger_open_error_ms = _open_error_ms;
+    rtt_dbg_logger_last_write_failed = _last_write_failed ? 1U : 0U;
+#endif
 
     if (start_new_log_pending) {
         start_new_log();
@@ -949,14 +986,23 @@ void AP_Logger_File::io_timer(void)
     if (tnow - _free_space_last_check_time > _free_space_check_interval) {
         _free_space_last_check_time = tnow;
         last_io_operation = "disk_space_avail";
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_logger_last_operation = RTT_LOGGER_OP_DISK_SPACE;
+#endif
         if (disk_space_avail() < _free_space_min_avail && disk_space() > 0) {
             DEV_PRINTF("Out of space for logging\n");
             stop_logging();
             _open_error_ms = AP_HAL::millis(); // prevent logging starting again for 5s
             last_io_operation = "";
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_dbg_logger_last_operation = RTT_LOGGER_OP_NONE;
+#endif
             return;
         }
         last_io_operation = "";
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_logger_last_operation = RTT_LOGGER_OP_NONE;
+#endif
     }
 #endif
     _last_write_time = tnow;
@@ -979,6 +1025,9 @@ void AP_Logger_File::io_timer(void)
     }
 #endif
     last_io_operation = "write";
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_logger_last_operation = RTT_LOGGER_OP_WRITE;
+#endif
     if (!write_fd_semaphore.take(1)) {
         return;
     }
@@ -992,8 +1041,25 @@ void AP_Logger_File::io_timer(void)
         nbytes = bytes_until_fsync; // write exactly enough to sync
     }
 
+    const uint32_t write_start_ms = AP_HAL::millis();
     ssize_t nwritten = AP::FS().write(_write_fd, head, nbytes);
+    const uint32_t write_elapsed_ms = AP_HAL::millis() - write_start_ms;
     last_io_operation = "";
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_logger_last_operation = RTT_LOGGER_OP_NONE;
+    rtt_dbg_logger_write_calls++;
+    rtt_dbg_logger_last_write_len = nbytes;
+    rtt_dbg_logger_last_write_ret = (uint32_t)nwritten;
+    rtt_dbg_logger_last_write_ms = write_elapsed_ms;
+    if (write_elapsed_ms > rtt_dbg_logger_max_write_ms) {
+        rtt_dbg_logger_max_write_ms = write_elapsed_ms;
+    }
+    if (nwritten > 0) {
+        rtt_dbg_logger_write_bytes += (uint32_t)nwritten;
+    } else {
+        rtt_dbg_logger_last_errno = (uint32_t)errno;
+    }
+#endif
     if (nwritten <= 0) {
         if (errno == ENOSPC) {
             DEV_PRINTF("Out of space for logging\n");
@@ -1005,8 +1071,14 @@ void AP_Logger_File::io_timer(void)
             // the file. This allows us to cope with temporary write
             // failures caused by directory listing
             last_io_operation = "close";
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_dbg_logger_last_operation = RTT_LOGGER_OP_CLOSE;
+#endif
             AP::FS().close(_write_fd);
             last_io_operation = "";
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_dbg_logger_last_operation = RTT_LOGGER_OP_NONE;
+#endif
             _write_fd = -1;
             printf("Failed to write to File: %s\n", strerror(errno));
         }
@@ -1020,8 +1092,21 @@ void AP_Logger_File::io_timer(void)
         // we know nwritten > 0 so we won't sync if bytes_until_fsync == 0
         if ((uint32_t)nwritten == bytes_until_fsync) {
             last_io_operation = "fsync";
+            const uint32_t fsync_start_ms = AP_HAL::millis();
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_dbg_logger_last_operation = RTT_LOGGER_OP_FSYNC;
+#endif
             AP::FS().fsync(_write_fd);
+            const uint32_t fsync_elapsed_ms = AP_HAL::millis() - fsync_start_ms;
             last_io_operation = "";
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_dbg_logger_last_operation = RTT_LOGGER_OP_NONE;
+            rtt_dbg_logger_fsync_calls++;
+            rtt_dbg_logger_last_fsync_ms = fsync_elapsed_ms;
+            if (fsync_elapsed_ms > rtt_dbg_logger_max_fsync_ms) {
+                rtt_dbg_logger_max_fsync_ms = fsync_elapsed_ms;
+            }
+#endif
         }
 
 #if AP_RTC_ENABLED && CONFIG_HAL_BOARD == HAL_BOARD_CHIBIOS
@@ -1044,6 +1129,9 @@ bool AP_Logger_File::io_thread_alive() const
 {
     if (!hal.scheduler->is_system_initialized()) {
         // the system has long pauses during initialisation, assume still OK
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_logger_alive_state = 1U;
+#endif
         return true;
     }
     // if the io thread hasn't had a heartbeat in a while then it is
@@ -1061,26 +1149,45 @@ bool AP_Logger_File::io_thread_alive() const
         timeout_ms *= sitl->speedup;
     }
 #endif
-    return (AP_HAL::millis() - _io_timer_heartbeat) < timeout_ms;
+    const bool ok = (AP_HAL::millis() - _io_timer_heartbeat) < timeout_ms;
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_logger_alive_state = ok ? 1U : 0U;
+#endif
+    return ok;
 }
 
 bool AP_Logger_File::logging_failed() const
 {
     if (!_initialised) {
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_logger_logging_failed_state = 1U;
+#endif
         return true;
     }
     if (recent_open_error()) {
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_logger_logging_failed_state = 2U;
+#endif
         return true;
     }
     if (!io_thread_alive()) {
         // No heartbeat in a second.  IO thread is dead?! Very Not
         // Good.
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_logger_logging_failed_state = 3U;
+#endif
         return true;
     }
     if (_last_write_failed) {
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_logger_logging_failed_state = 4U;
+#endif
         return true;
     }
 
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_logger_logging_failed_state = 0U;
+#endif
     return false;
 }
 
@@ -1115,4 +1222,3 @@ void AP_Logger_File::erase_next(void)
 }
 
 #endif // HAL_LOGGING_FILESYSTEM_ENABLED
-

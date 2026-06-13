@@ -32,6 +32,19 @@ extern int rt_hw_usart_init(void);
 extern void __libc_init_array(void);
 extern void rt_hw_systick_init(void);
 
+volatile unsigned rtt_sensor_power_cycle_count;
+volatile unsigned rtt_sensor_power_i2c_clamp_count;
+
+#ifndef RTT_SENSOR_RAIL_OFF_MS
+#define RTT_SENSOR_RAIL_OFF_MS 1800
+#endif
+
+#ifndef RTT_SENSOR_RAIL_ON_SETTLE_MS
+#define RTT_SENSOR_RAIL_ON_SETTLE_MS 900
+#endif
+
+static bool rtt_sensor_rail_held_off;
+
 #if defined(BSP_USING_SPI) && defined(HAL_RTT_SPI_ATTACH_LIST)
 struct spi_attach_entry {
     const char *bus_name;
@@ -218,12 +231,10 @@ static void _spi_lld_board_init(void)
  *  Hardware watchdog (if enabled by option bytes)
  *  starts counting from reset with ~512ms timeout.
  *
- *  Strategy: feed NOW, don't reconfigure PR/RLR
- *  (LSI-domain PVU/RVU sync can hang early in boot
- *   before clock init).  The 512ms window is enough
- *   for board init + scheduler startup; after that,
- *   ap_rtt_iwdg_init() in HAL_RTT::run() extends
- *   to ~10s and sets up periodic feeding.
+ *  Strategy: feed NOW and never reconfigure PR/RLR.  CUAV V5 uses
+ *  hardware-IWDG option bytes, so PR/RLR writes do not take effect and can
+ *  leave PVU/RVU pending.  Keep the fixed ~512ms window and feed it from
+ *  early startup, SysTick, idle, and HAL scheduler paths.
  *
  *  CMSIS struct access — uses IWDG_TypeDef from
  *  stm32f7xx.h (no HAL dependency).
@@ -235,26 +246,87 @@ static void _iwdg_early_feed(void)
     IWDG->KR = 0xAAAAU;
 }
 
-static void _iwdg_reconfig(void)
+static void _iwdg_feed_only(void)
 {
-    /* Reconfigure IWDG to longer timeout (~10s).
-     * Called AFTER clock init, when LSI is stable
-     * and APB bus interface is fully operational.
-     * NO rt_kprintf here — console not yet initialized. */
-    IWDG->KR = 0x5555U;
-    IWDG->PR = 6U;
-    for (volatile int i = 0; i < 100000 && (IWDG->SR & IWDG_SR_PVU); i++) { }
-    IWDG->KR = 0x5555U;
-    IWDG->RLR = 1250U;
-    for (volatile int i = 0; i < 100000 && (IWDG->SR & IWDG_SR_RVU); i++) { }
     IWDG->KR = 0xAAAAU;
+}
+
+static void _board_delay_ms_with_iwdg(rt_uint32_t ms)
+{
+    for (rt_uint32_t i = 0; i < ms; i++) {
+        _iwdg_feed_only();
+        rt_thread_mdelay(1);
+    }
+    _iwdg_feed_only();
+}
+
+static void _sensor_i2c3_lines_clamp_low(void)
+{
+#if defined(SOC_SERIES_STM32F7) && defined(HAL_GPIO_VDD_3V3_SENSORS_EN_PIN)
+    /*
+     * [Cybernetics Ch.11] Lyapunov thinking: reduce the unknown residual
+     * energy/state in the IST8310 during an MCU-only reset.  PE3 alone can
+     * remove the rail, but PH7/PH8 may still weak-power the device through
+     * I2C line protection paths.  Clamp both internal-compass I2C3 lines low
+     * while VDD_3V3_SENSORS_EN is off, then release them before powering up.
+     */
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOHEN;
+    (void)RCC->AHB1ENR;
+    GPIOH->BSRR = (1U << (7U + 16U)) | (1U << (8U + 16U));
+    GPIOH->MODER = (GPIOH->MODER & ~((3U << 14U) | (3U << 16U))) |
+                   ((1U << 14U) | (1U << 16U));
+    GPIOH->OTYPER |= (1U << 7U) | (1U << 8U);
+    GPIOH->PUPDR &= ~((3U << 14U) | (3U << 16U));
+    __DSB();
+    rtt_sensor_power_i2c_clamp_count++;
+#endif
+}
+
+static void _sensor_i2c3_lines_release(void)
+{
+#if defined(SOC_SERIES_STM32F7) && defined(HAL_GPIO_VDD_3V3_SENSORS_EN_PIN)
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOHEN;
+    (void)RCC->AHB1ENR;
+    GPIOH->BSRR = (1U << 7U) | (1U << 8U);
+    GPIOH->MODER &= ~((3U << 14U) | (3U << 16U));
+    GPIOH->OTYPER |= (1U << 7U) | (1U << 8U);
+    GPIOH->PUPDR = (GPIOH->PUPDR & ~((3U << 14U) | (3U << 16U))) |
+                   ((1U << 14U) | (1U << 16U));
+    __DSB();
+#endif
+}
+
+static void _sensor_power_hold_off_early(void)
+{
+#ifdef HAL_GPIO_VDD_3V3_SENSORS_EN_INIT
+    if (!HAL_GPIO_VDD_3V3_SENSORS_EN_INIT) {
+        return;
+    }
+#endif
+#ifdef HAL_GPIO_VDD_3V3_SENSORS_EN_PIN
+    /*
+     * [Cybernetics Ch.17] Ultrastability: start the sensor-rail OFF window as
+     * soon as clocks/GPIOE exist.  Some IST8310 reset-run failures only occur
+     * when the chip remains biased through an MCU reset; waiting until the
+     * INIT_PREV hook to pull PE3 low left too little discharge time and later
+     * board GPIO repair code could immediately drive PE3 high again.
+     */
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOEEN;
+    (void)RCC->AHB1ENR;
+    __DSB();
+    GPIOE->MODER = (GPIOE->MODER & ~(3U << 6)) | (1U << 6);
+    GPIOE->OTYPER &= ~(1U << 3);
+    GPIOE->BSRR = (1U << (3 + 16));
+    _sensor_i2c3_lines_clamp_low();
+    rtt_sensor_rail_held_off = true;
+#endif
 }
 
 void rt_hw_board_init(void)
 {
     /* Layer 0: IWDG watchdog — feed immediately before any init that
      * may take >512ms (the default hardware watchdog timeout).
-     * PR/RLR reconfig deferred to after clock init (see _iwdg_reconfig below). */
+     * PR/RLR are not software-configurable in hardware-IWDG mode. */
     _iwdg_early_feed();
 
     rt_kprintf("[BOARD-INIT] Starting board initialization\n");
@@ -284,10 +356,11 @@ void rt_hw_board_init(void)
 
     rtt_clock_init();
     rtt_enable_peripheral_clocks();
+    _sensor_power_hold_off_early();
 
-    /* IWDG reconfig to ~10s — after clock/peripheral init so APB bus
-     * interface is stable and LSI-domain sync completes reliably. */
-    _iwdg_reconfig();
+    /* Hardware IWDG remains at its option-byte default; just refresh it after
+     * clock/peripheral setup before starting SysTick. */
+    _iwdg_feed_only();
 
     rt_hw_systick_init();
     rt_hw_pin_init();
@@ -335,6 +408,7 @@ void rt_hw_board_init(void)
         __ISB();
         (void)RCC->AHB1ENR;  /* 强制读，保证写管道清空 */
 
+#ifndef HAL_GPIO_VDD_3V3_SENSORS_EN_PIN
         /* Sensor power PE3 re-apply (SPI4 HAL init can clobber it) */
     {
         volatile uint32_t *moder = (volatile uint32_t *)0x40021000; /* GPIOE */
@@ -345,6 +419,7 @@ void rt_hw_board_init(void)
         /* Also ensure ODR[3] = HIGH */
         *(volatile uint32_t *)0x40021014 |= (1U << 3);
     }
+#endif
 
     /*
      * SPI1 GPIO early init — configure PG11(SCK)/PA6(MISO)/PD7(MOSI) as AF5.
@@ -419,8 +494,22 @@ static int _sensor_power_init(void)
 {
 #ifdef HAL_GPIO_VDD_3V3_SENSORS_EN_PIN
     rt_pin_mode(HAL_GPIO_VDD_3V3_SENSORS_EN_PIN, PIN_MODE_OUTPUT);
+    /*
+     * [Cybernetics Ch.17] Ultrastability: an MCU-only reset can leave the
+     * IST8310 powered but not ACKing I2C during the ArduPilot compass probe.
+     * Give the sensor rail a software power-cycle before device probes so
+     * reset-run behaves like a clean ChibiOS-style board start.
+     */
+    rt_pin_write(HAL_GPIO_VDD_3V3_SENSORS_EN_PIN, PIN_LOW);
+    _sensor_i2c3_lines_clamp_low();
+    (void)rtt_sensor_rail_held_off;
+    _board_delay_ms_with_iwdg(RTT_SENSOR_RAIL_OFF_MS);
+    _sensor_i2c3_lines_release();
+    rt_thread_mdelay(5);
     rt_pin_write(HAL_GPIO_VDD_3V3_SENSORS_EN_PIN, HAL_GPIO_VDD_3V3_SENSORS_EN_INIT);
-    rt_kprintf("[PWR] VDD_3V3_SENSORS_EN enabled (pin=0x%x)\n",
+    rtt_sensor_power_cycle_count++;
+    _board_delay_ms_with_iwdg(RTT_SENSOR_RAIL_ON_SETTLE_MS);
+    rt_kprintf("[PWR] VDD_3V3_SENSORS_EN power-cycled/enabled (pin=0x%x)\n",
                (unsigned)HAL_GPIO_VDD_3V3_SENSORS_EN_PIN);
 #endif
 #ifdef HAL_GPIO_HEATER_EN_PIN

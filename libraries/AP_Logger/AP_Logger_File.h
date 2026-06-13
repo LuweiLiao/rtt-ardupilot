@@ -14,7 +14,11 @@
 #if HAL_LOGGING_FILESYSTEM_ENABLED
 
 #ifndef HAL_LOGGER_WRITE_CHUNK_SIZE
-#if AP_FILESYSTEM_LITTLEFS_ENABLED
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT && AP_FILESYSTEM_POSIX_ENABLED
+// [Cybernetics Ch.4] Closed-loop: RTT DFS/elmfat writes must return often
+// enough for AP_Logger's IO-thread heartbeat to stay healthy.
+#define HAL_LOGGER_WRITE_CHUNK_SIZE 512
+#elif AP_FILESYSTEM_LITTLEFS_ENABLED
 #define HAL_LOGGER_WRITE_CHUNK_SIZE 2048
 #else
 #define HAL_LOGGER_WRITE_CHUNK_SIZE 4096

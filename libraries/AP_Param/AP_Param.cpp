@@ -147,12 +147,48 @@ StorageAccess AP_Param::_storage(StorageManager::StorageParam);
 StorageAccess AP_Param::_storage_bak(StorageManager::StorageParamBak);
 #endif
 
+#ifndef AP_RTT_PARAM_DEBUG
+#define AP_RTT_PARAM_DEBUG (CONFIG_HAL_BOARD == HAL_BOARD_RTT)
+#endif
+
+#if AP_RTT_PARAM_DEBUG
+#define RTT_PARAM_DBG_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+volatile uint32_t rtt_dbg_param_save_calls RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_save_push_ok RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_save_push_wait RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_save_queue_available RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_save_io_calls RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_save_io_popped RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_save_sync_calls RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_save_sync_existing RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_save_sync_new RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_setup_calls RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_setup_bad_header RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_setup_hdr_word RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_erase_all_calls RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_load_all_calls RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_load_all_found_sentinel RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_load_all_no_sentinel RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_load_all_last_ofs RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_save_last_key RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_save_last_group RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_save_last_type RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_save_last_ofs RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_save_last_value_ofs RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_save_last_sentinel_ofs RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_scan_matches RTT_PARAM_DBG_BSS;
+volatile uint32_t rtt_dbg_param_scan_last_match_ofs RTT_PARAM_DBG_BSS;
+#endif
+
 // flags indicating frame type
 uint16_t AP_Param::_frame_type_flags;
 
 // write to EEPROM
 void AP_Param::eeprom_write_check(const void *ptr, uint16_t ofs, uint8_t size)
 {
+#if AP_RTT_PARAM_DEBUG
+    rtt_dbg_param_save_last_value_ofs = ofs;
+#endif
     _storage.write_block(ofs, ptr, size);
 #if AP_PARAM_STORAGE_BAK_ENABLED
     _storage_bak.write_block(ofs, ptr, size);
@@ -164,6 +200,9 @@ bool AP_Param::_hide_disabled_groups = true;
 // write a sentinal value at the given offset
 void AP_Param::write_sentinal(uint16_t ofs)
 {
+#if AP_RTT_PARAM_DEBUG
+    rtt_dbg_param_save_last_sentinel_ofs = ofs;
+#endif
     struct Param_header phdr;
     phdr.type = _sentinal_type;
     set_key(phdr, _sentinal_key);
@@ -176,6 +215,9 @@ void AP_Param::write_sentinal(uint16_t ofs)
 // a sentinal
 void AP_Param::erase_all(void)
 {
+#if AP_RTT_PARAM_DEBUG
+    rtt_dbg_param_erase_all_calls++;
+#endif
     struct EEPROM_header hdr;
 
     // write the header
@@ -359,10 +401,16 @@ void AP_Param::check_var_info(void)
 // setup the _var_info[] table
 bool AP_Param::setup(void)
 {
+#if AP_RTT_PARAM_DEBUG
+    rtt_dbg_param_setup_calls++;
+#endif
     struct EEPROM_header hdr {};
 
     // check the header
     _storage.read_block(&hdr, 0, sizeof(hdr));
+#if AP_RTT_PARAM_DEBUG
+    memcpy((void *)&rtt_dbg_param_setup_hdr_word, &hdr, sizeof(rtt_dbg_param_setup_hdr_word));
+#endif
 
 #if AP_PARAM_STORAGE_BAK_ENABLED
     struct EEPROM_header hdr2 {};
@@ -385,6 +433,9 @@ bool AP_Param::setup(void)
         // header doesn't match. We can't recover any variables. Wipe
         // the header and setup the sentinal directly after the header
         Debug("bad header in setup - erasing");
+#if AP_RTT_PARAM_DEBUG
+        rtt_dbg_param_setup_bad_header++;
+#endif
         erase_all();
     }
 
@@ -769,6 +820,10 @@ bool AP_Param::scan(const AP_Param::Param_header *target, uint16_t *pofs)
         if (phdr.type == target->type &&
             get_key(phdr) == get_key(*target) &&
             phdr.group_element == target->group_element) {
+#if AP_RTT_PARAM_DEBUG
+            rtt_dbg_param_scan_matches++;
+            rtt_dbg_param_scan_last_match_ofs = ofs;
+#endif
             // found it
             *pofs = ofs;
             return true;
@@ -1149,6 +1204,9 @@ void AP_Param::notify() const {
 */
 void AP_Param::save_sync(bool force_save, bool send_to_gcs)
 {
+#if AP_RTT_PARAM_DEBUG
+    rtt_dbg_param_save_sync_calls++;
+#endif
     uint32_t group_element = 0;
     const struct GroupInfo *ginfo;
     struct GroupNesting group_nesting {};
@@ -1199,6 +1257,13 @@ void AP_Param::save_sync(bool force_save, bool send_to_gcs)
     uint16_t ofs;
     if (scan(&phdr, &ofs)) {
         // found an existing copy of the variable
+#if AP_RTT_PARAM_DEBUG
+        rtt_dbg_param_save_sync_existing++;
+        rtt_dbg_param_save_last_key = get_key(phdr);
+        rtt_dbg_param_save_last_group = phdr.group_element;
+        rtt_dbg_param_save_last_type = phdr.type;
+        rtt_dbg_param_save_last_ofs = ofs;
+#endif
         eeprom_write_check(ap, ofs+sizeof(phdr), type_size((enum ap_var_type)phdr.type));
         if (send_to_gcs) {
             send_parameter(name, (enum ap_var_type)phdr.type, idx);
@@ -1246,6 +1311,13 @@ void AP_Param::save_sync(bool force_save, bool send_to_gcs)
     }
 
     // write a new sentinal, then the data, then the header
+#if AP_RTT_PARAM_DEBUG
+    rtt_dbg_param_save_sync_new++;
+    rtt_dbg_param_save_last_key = get_key(phdr);
+    rtt_dbg_param_save_last_group = phdr.group_element;
+    rtt_dbg_param_save_last_type = phdr.type;
+    rtt_dbg_param_save_last_ofs = ofs;
+#endif
     write_sentinal(ofs + sizeof(phdr) + type_size((enum ap_var_type)phdr.type));
     eeprom_write_check(ap, ofs+sizeof(phdr), type_size((enum ap_var_type)phdr.type));
     eeprom_write_check(&phdr, ofs, sizeof(phdr));
@@ -1260,6 +1332,9 @@ void AP_Param::save_sync(bool force_save, bool send_to_gcs)
 */
 void AP_Param::save(bool force_save)
 {
+#if AP_RTT_PARAM_DEBUG
+    rtt_dbg_param_save_calls++;
+#endif
     struct param_save p, p2;
     p.param = this;
     p.force_save = force_save;
@@ -1273,6 +1348,10 @@ void AP_Param::save(bool force_save)
         return;
     }
     while (!save_queue.push(p)) {
+#if AP_RTT_PARAM_DEBUG
+        rtt_dbg_param_save_push_wait++;
+        rtt_dbg_param_save_queue_available = save_queue.available();
+#endif
         // if we can't save to the queue
         if (hal.util->get_soft_armed() && hal.scheduler->in_main_thread()) {
             // if we are armed in main thread then don't sleep, instead we lose the
@@ -1287,6 +1366,10 @@ void AP_Param::save(bool force_save)
         hal.scheduler->delay_microseconds(500);
         hal.scheduler->expect_delay_ms(0);
     }
+#if AP_RTT_PARAM_DEBUG
+    rtt_dbg_param_save_push_ok++;
+    rtt_dbg_param_save_queue_available = save_queue.available();
+#endif
 }
 
 /*
@@ -1294,8 +1377,16 @@ void AP_Param::save(bool force_save)
  */
 void AP_Param::save_io_handler(void)
 {
+#if AP_RTT_PARAM_DEBUG
+    rtt_dbg_param_save_io_calls++;
+    rtt_dbg_param_save_queue_available = save_queue.available();
+#endif
     struct param_save p;
     while (save_queue.pop(p)) {
+#if AP_RTT_PARAM_DEBUG
+        rtt_dbg_param_save_io_popped++;
+        rtt_dbg_param_save_queue_available = save_queue.available();
+#endif
         p.param->save_sync(p.force_save, true);
     }
     if (hal.scheduler->is_system_initialized()) {
@@ -1570,6 +1661,9 @@ void AP_Param::setup_sketch_defaults(void)
 //
 bool AP_Param::load_all()
 {
+#if AP_RTT_PARAM_DEBUG
+    rtt_dbg_param_load_all_calls++;
+#endif
     struct Param_header phdr;
     uint16_t ofs = sizeof(AP_Param::EEPROM_header);
 
@@ -1585,6 +1679,10 @@ bool AP_Param::load_all()
         if (is_sentinal(phdr)) {
             // we've reached the sentinal
             sentinal_offset = ofs;
+#if AP_RTT_PARAM_DEBUG
+            rtt_dbg_param_load_all_found_sentinel++;
+            rtt_dbg_param_load_all_last_ofs = ofs;
+#endif
             return true;
         }
 
@@ -1601,6 +1699,10 @@ bool AP_Param::load_all()
 
     // we didn't find the sentinal
     Debug("no sentinal in load_all");
+#if AP_RTT_PARAM_DEBUG
+    rtt_dbg_param_load_all_no_sentinel++;
+    rtt_dbg_param_load_all_last_ofs = ofs;
+#endif
     return false;
 }
 

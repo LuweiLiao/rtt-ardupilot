@@ -45,7 +45,12 @@ extern const AP_HAL::HAL& hal;
 #endif
 
 #ifndef HAL_LOGGING_STACK_SIZE
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+// [Cybernetics Ch.4] Closed-loop: RTT log_io overflow was captured in hardware.
+#define HAL_LOGGING_STACK_SIZE 8192
+#else
 #define HAL_LOGGING_STACK_SIZE 1580
+#endif
 #endif
 
 #ifndef HAL_LOGGING_MAV_BUFSIZE

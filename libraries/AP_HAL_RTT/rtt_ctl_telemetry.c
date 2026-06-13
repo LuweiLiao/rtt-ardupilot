@@ -18,12 +18,32 @@ extern volatile uint32_t rtt_dbg_main_loop_entry_called;
 extern volatile uint32_t rtt_dbg_main_loop_iterations;
 extern volatile uint32_t rtt_dbg_loop_time_us;
 extern volatile uint32_t rtt_dbg_overrun_count;
+extern volatile uint32_t rtt_dbg_setup_trace;
 extern volatile uint32_t rtt_dbg_setup_stage;
 extern volatile uint32_t rtt_dbg_storage_backend;
+extern volatile uint32_t rtt_dbg_wait_sample_us;
+extern volatile uint32_t rtt_dbg_ins_stage;
+extern volatile uint32_t rtt_dbg_ins_loop_rate;
+extern volatile uint32_t rtt_dbg_ins_backend_count;
+extern volatile uint32_t rtt_dbg_ins_gyro_count;
+extern volatile uint32_t rtt_dbg_ins_accel_count;
+extern volatile uint32_t rtt_dbg_ins_wait_calls;
+extern volatile uint32_t rtt_dbg_ins_wait_counter;
+extern volatile uint32_t rtt_dbg_ins_wait_limit;
+extern volatile uint32_t rtt_dbg_ins_gyro_avail_mask;
+extern volatile uint32_t rtt_dbg_ins_accel_avail_mask;
+extern volatile uint32_t rtt_dbg_ins_gyro_wait_mask;
+extern volatile uint32_t rtt_dbg_ins_accel_wait_mask;
+extern volatile uint32_t rtt_dbg_ins_new_gyro_mask;
+extern volatile uint32_t rtt_dbg_ins_new_accel_mask;
+extern volatile uint32_t rtt_dbg_ins_cal_j;
+extern volatile uint32_t rtt_dbg_ins_cal_i;
+extern volatile uint32_t rtt_dbg_ins_cal_converged;
 extern volatile uint32_t rtt_dbg_usb_init;
 extern volatile uint32_t rtt_dbg_usb_usbrst;
 extern volatile uint32_t rtt_dbg_usb_enumdne;
 extern volatile uint32_t rtt_dbg_usb_setup_stup;
+extern uint32_t rtt_boot_rcc_csr;
 
 extern volatile rt_uint32_t rtt_dbg_hardfault_stack_pc;
 
@@ -78,12 +98,15 @@ void rtt_ctl_print_snapshot(void)
     const unsigned loop_hz = (rtt_dbg_loop_time_us > 0U)
         ? (1000000U / rtt_dbg_loop_time_us) : 0U;
 
-    char buf[320];
+    char buf[640];
     const int n = snprintf(
         buf, sizeof(buf),
         "RTT_CTL t=%lu hal=0x%08lx ent=0x%08lx iter=%lu "
         "usb=%lu stup=%lu usbrst=%lu enmd=%lu cfg=%u conn=%u "
-        "loop_us=%lu loop_hz=%u ov=%lu stg=%lu stor=%lu hf=0x%08lx",
+        "loop_us=%lu loop_hz=%u ov=%lu trc=%lu stg=%lu stor=%lu "
+        "ins=%lu rate=%lu bc=%lu gc=%lu ac=%lu wc=%lu w=%lu/%lu "
+        "gm=0x%lx/0x%lx am=0x%lx/0x%lx ng=0x%lx na=0x%lx "
+        "cal=%lu/%lu/%lu wus=%lu csr=0x%08lx hf=0x%08lx",
         (unsigned long)_now_ms(),
         (unsigned long)rtt_dbg_hal_run_called,
         (unsigned long)rtt_dbg_main_loop_entry_called,
@@ -97,8 +120,28 @@ void rtt_ctl_print_snapshot(void)
         (unsigned long)rtt_dbg_loop_time_us,
         loop_hz,
         (unsigned long)rtt_dbg_overrun_count,
+        (unsigned long)rtt_dbg_setup_trace,
         (unsigned long)rtt_dbg_setup_stage,
         (unsigned long)rtt_dbg_storage_backend,
+        (unsigned long)rtt_dbg_ins_stage,
+        (unsigned long)rtt_dbg_ins_loop_rate,
+        (unsigned long)rtt_dbg_ins_backend_count,
+        (unsigned long)rtt_dbg_ins_gyro_count,
+        (unsigned long)rtt_dbg_ins_accel_count,
+        (unsigned long)rtt_dbg_ins_wait_calls,
+        (unsigned long)rtt_dbg_ins_wait_counter,
+        (unsigned long)rtt_dbg_ins_wait_limit,
+        (unsigned long)rtt_dbg_ins_gyro_avail_mask,
+        (unsigned long)rtt_dbg_ins_gyro_wait_mask,
+        (unsigned long)rtt_dbg_ins_accel_avail_mask,
+        (unsigned long)rtt_dbg_ins_accel_wait_mask,
+        (unsigned long)rtt_dbg_ins_new_gyro_mask,
+        (unsigned long)rtt_dbg_ins_new_accel_mask,
+        (unsigned long)rtt_dbg_ins_cal_j,
+        (unsigned long)rtt_dbg_ins_cal_i,
+        (unsigned long)rtt_dbg_ins_cal_converged,
+        (unsigned long)rtt_dbg_wait_sample_us,
+        (unsigned long)rtt_boot_rcc_csr,
         (unsigned long)rtt_dbg_hardfault_stack_pc);
     if (n > 0 && n < (int)sizeof(buf)) {
         _emit_line(buf);
