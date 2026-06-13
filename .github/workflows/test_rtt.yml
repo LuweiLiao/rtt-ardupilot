@@ -1,16 +1,21 @@
-# RT-Thread rtt_fmuv2 板级 CI：校验 RTT 路径与 BSP 部署，至少执行 waf configure（可选 waf build）
-name: test rtt_fmuv2
+name: test rtt
 
 on:
   push:
     paths:
+      - '.github/workflows/test_rtt.yml'
+      - 'SConstruct'
+      - 'Tools/scripts/rtt_*.py'
+      - 'Tools/scripts/scons_ardupilot_sources.py'
       - 'libraries/AP_HAL_RTT/**'
-      - 'Tools/ardupilotwaf/**'
       - 'modules/rt-thread/**'
   pull_request:
     paths:
+      - '.github/workflows/test_rtt.yml'
+      - 'SConstruct'
+      - 'Tools/scripts/rtt_*.py'
+      - 'Tools/scripts/scons_ardupilot_sources.py'
       - 'libraries/AP_HAL_RTT/**'
-      - 'Tools/ardupilotwaf/**'
       - 'modules/rt-thread/**'
   workflow_dispatch:
 
@@ -19,40 +24,56 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  rtt-configure-build:
+  scons-build:
     runs-on: ubuntu-22.04
+    container: ardupilot/ardupilot-dev-base:v0.1.3
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: cuav-v5-copter
+            vehicle: ArduCopter
+            target: cuav-v5
+            extra_args: ''
+            artifact_bin: build/rtt_cuav_v5/rtthread.bin
+            artifact_elf: build/rtt_deploy/cuav_v5/rt-thread.elf
+          - name: cuav-v5-l0-boot
+            vehicle: ArduCopter
+            target: cuav-v5
+            extra_args: '--test=l0_boot'
+            artifact_bin: build/rtt_cuav_v5/rtthread.bin
+            artifact_elf: build/rtt_deploy/cuav_v5/rt-thread.elf
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Ensure rt-thread submodule
+      - name: Install RTT build tools
         run: |
-          git submodule update --init --recursive modules/rt-thread
+          apt-get update
+          apt-get install -y scons python3
 
-      - name: Install arm-none-eabi and scons
+      - name: Build ${{ matrix.name }}
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-none-eabi scons python3
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+          python3 -m SCons --v=${{ matrix.vehicle }} --target=${{ matrix.target }} ${{ matrix.extra_args }} -j"$(nproc)"
 
-      - name: Configure rtt_fmuv2
+      - name: Check RTT artifacts
+        shell: bash
         run: |
-          git config --global --add safe.directory ${GITHUB_WORKSPACE}
-          ./waf configure --board rtt_fmuv2
+          test -s "${{ matrix.artifact_bin }}"
+          test -s "${{ matrix.artifact_elf }}"
+          ls -lh "${{ matrix.artifact_bin }}" "${{ matrix.artifact_elf }}"
 
-      # 可选：BSP 目录存在且已有 packages 时执行 waf build；否则仅提示本地需 pkgs --update
-      - name: Build (optional)
-        run: |
-          RTT_ROOT="${GITHUB_WORKSPACE}/modules/rt-thread"
-          BSP_DIR="${RTT_ROOT}/bsp/stm32/stm32f427-fmuv2"
-          if [ ! -d "$BSP_DIR" ]; then
-            echo "BSP dir not found, skipping build."
-            exit 0
-          fi
-          echo "BSP deployed at $BSP_DIR"
-          if [ -d "$BSP_DIR/packages/CMSIS-Core-latest" ]; then
-            ./waf build
-          else
-            echo "BSP packages not present; run 'pkgs --update' in $BSP_DIR locally for full build (see Tools/ardupilotwaf/RTT_BUILD_FMUV2.md)."
-          fi
+      - name: Upload RTT artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtt-${{ matrix.name }}
+          path: |
+            ${{ matrix.artifact_bin }}
+            ${{ matrix.artifact_elf }}
+            build/rtt_deploy/cuav_v5/rtthread.map
+          if-no-files-found: warn
