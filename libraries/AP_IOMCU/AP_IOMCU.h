@@ -318,6 +318,7 @@ private:
     uint32_t last_servo_out_us;
 
     bool corked;
+    bool pwm_out_dirty;
     bool do_shutdown;
     bool done_shutdown;
 

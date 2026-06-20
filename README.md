@@ -1,283 +1,338 @@
-# CUAV V5 RT-Thread ArduPilot 移植验收分支
+# CUAV V5 RT-Thread ArduPilot 移植分支
 
-本分支用于把 ArduPilot 在 CUAV V5 上的 RT-Thread 移植推进到可验收状态。它不是上游 ArduPilot 的通用介绍页，而是本工作分支的交付说明：记录这个分支解决什么问题、怎么做、怎么构建、怎么验收，以及最终达到了什么效果。
+本仓库分支用于把 ArduPilot 移植到 CUAV V5 的 RT-Thread 平台，并完成台架级软件验收。它不是 ArduPilot 上游项目的通用 README，而是当前 RTT 分支的交付说明：说明这个分支解决什么问题、采用什么实现方式、已经达到什么效果，以及如何复现测试。
 
-当前主仓库分支：
+当前工作分支：
 
 ```text
 issue/rtt-spi-lld-real-activation
 ```
 
-当前主仓库交付提交：
+## 分支目标
+
+本分支的目标是在不降低 `SCHED_LOOP_RATE=400`、不关闭 arming/system check、不隐藏告警的前提下，让 CUAV V5 RTT 固件达到可验收状态。
+
+核心验收目标：
+
+- Mission Planner 不再报告 `PreArm: Main loop slow`。
+- `SCHED_LOOP_RATE` 保持 400，主循环稳定达到验收线 `>=380Hz`。
+- `IMU0: fast sampling enabled 0.0kHz/0.0kHz` 不再出现，并能解释原因。
+- USB MAVLink CDC 正常，参数下载不能卡顿。
+- MAVLink FTP 正常，可读取 `@PARAM/param.pck`，可对 SDCard 写读删文件。
+- USB SLCAN CDC 正常，可通过 CAN1 验证标准 CAN 和 DroneCAN-like 扩展帧。
+- IMU/INS、磁力计、气压计、SDCard、日志等外设 driver-level 健康。
+- 工作空间保持清晰，过程文件进入 `results/recycle_bin/`，最终证据集中保存。
+
+## 当前验收结论
+
+本轮最终证据根目录：
 
 ```text
-4786392220 AP_HAL_RTT: complete CUAV V5 acceptance path
+results/execution/loop_rate_goal_20260620T095201Z/
 ```
 
-RT-Thread 子模块交付提交：
+当前软件台架验收结论：
 
 ```text
-modules/rt-thread
-df63617ad1 stm32: keep CUAV V5 hardware IWDG fed
-```
-
-## 目标
-
-这个分支的目标是让 CUAV V5 上的 RT-Thread ArduPilot 具备完整的台架验收能力，而不是只做到能启动或能出心跳。
-
-主要目标包括：
-
-- USB CDC MAVLink 可稳定工作。
-- 参数下载速度接近 ChibiOS 版本的使用体验，不能长时间卡住。
-- MAVLink FTP 可正常读写 SDCard 和读取 `@PARAM/param.pck`。
-- USB 复合设备中的 CDC 和 SLCAN 两个虚拟串口可同时使用。
-- 标准 CAN 和 DroneCAN 可通过 USB SLCAN 调试。
-- IMU、INS、磁力计、气压计、SDCard、日志等核心外设 driver-level 健康。
-- OpenOCD/GDB 检查无 HardFault。
-- 代码、测试脚本、证据和文档整理清晰，可提交和推送 GitHub。
-
-## 已达到的效果
-
-最终全量验收结果为 GREEN：
-
-```text
-results/execution/acceptance_20260613T090123Z_after_align_flash_serial_full/acceptance_suite.json
-verdict=GREEN
-reason=acceptance_suite_ok
-```
-
-关键指标：
-
-```text
-参数下载: 942/942, 1.601 s, 588.3 params/s, missing=0
-参数持久化: GREEN
+主循环性能: GREEN
+USB 描述符: GREEN
+USB MAVLink CDC 参数下载: GREEN
 MAVLink FTP: GREEN
-@PARAM/param.pck: decoded_count=942
-DataFlash 日志下载: GREEN, 94208 bytes
-OpenOCD/GDB: CFSR=0, HFSR=0, VTOR=0x08008000, 无 HardFault
+USB SLCAN / SocketCAN: GREEN
+标准 CAN 发送: GREEN
+DroneCAN-like 扩展帧: GREEN
+IMU/INS/磁力计/气压计/logging driver-level: GREEN
+SDCard / 日志下载: GREEN
+最终编译: GREEN
 ```
 
-外设 driver-level 验收：
+仍需明确的边界：
 
 ```text
-gyro: healthy
-accel: healthy
-mag: healthy
-baro: healthy
-logging: healthy
-ATTITUDE: 有数据
-EKF_STATUS_REPORT: 有数据
-RAW_IMU: 有数据
-SCALED_PRESSURE: 有数据
-mag_norm_mgauss=382.9
-press_abs_hpa=1001.59
+AHRS/pre-arm calibration 仍未闭合。
+当前台架未接 RC，硬件安全开关、3D accel calibration、compass calibration 等 PreArm 项仍会存在。
+这些是实机飞行准备条件，不是 RTT driver-level 失败。
 ```
 
-USB SLCAN / 标准 CAN：
-
-```text
-results/execution/slcan_20260613T090627Z_ascii_after_full_acceptance/slcan_ascii_gate.json
-verdict=GREEN
-reason=slcan_ascii_bidir_ok
-```
-
-DroneCAN：
-
-```text
-results/execution/dronecan_20260613T091439Z_after_full_acceptance_fixed_device/pydronecan.json
-verdict=GREEN
-reason=node_status_seen
-dronecan_version=1.0.27
-NodeStatus events=9
-source_node_id=10
-health=0
-mode=0
-```
-
-CDC + SLCAN 并存压力：
-
-```text
-results/execution/coexist_20260613T091529Z_after_full_acceptance/coexist_summary.json
-verdict=GREEN
-CAN traffic active
-can_apm saw 9220 frames with ID 0x555
-can_dbg saw 9220 frames with ID 0x555
-CDC 参数下载: 942/942, 1.944 s, 484.6 params/s
-MAVFTP: GREEN
-```
-
-## 仍需明确的边界
-
-`strict_prearm` 仍然是 RED：
-
-```text
-driver_verdict=GREEN
-calibration_verdict=RED
-```
-
-这不是驱动失败，而是物理飞行准备条件未闭合，例如 AHRS/pre-arm 校准、RC、安全开关等。因此本分支声明的是：
+因此本分支当前声明的是：
 
 ```text
 CUAV V5 RT-Thread ArduPilot driver-level 软件台架验收通过。
 ```
 
-本分支不声明：
+本分支当前不声明：
 
 ```text
 已经满足实机解锁起飞条件。
 ```
 
-CAN 路径也要保持准确：
+## 关键测试结果
+
+### 主循环性能
+
+证据：
 
 ```text
-当前台架物理 CAN 口通过 CAN_SLCAN_CPORT=2 路径为 GREEN。
-CAN_SLCAN_CPORT=1 仍是 ACK error 红路径。
+results/execution/loop_rate_goal_20260620T095201Z/loop_rate_gate_long_20260620T180025Z/loop_rate_gate.json
 ```
 
-也就是说，当前接线的物理口在本 RT-Thread/ArduPilot 映射里走内部 CAN2。不能把 `CAN_SLCAN_CPORT=1` 说成已经修好。
+结果：
+
+```text
+verdict=GREEN
+reason=loop_rate_ok
+target_loop_rate_hz=400
+ins_loop_rate=400
+min_loop_rate_hz=380
+debug_loop_hz=794.9
+monitor_stuck_count=0
+main_loop_slow_text=[]
+imu_banner_text=[]
+raw_imu_nonzero=true
+```
+
+说明：
+
+- `SCHED_LOOP_RATE` 没有降低，目标仍为 400。
+- `ins_loop_rate=400`，满足本目标的调度配置要求。
+- 300 秒采样内未出现 `PreArm: Main loop slow`。
+- 300 秒采样内未出现 `IMU0: fast sampling enabled 0.0kHz/0.0kHz`。
+- `debug_loop_hz` 是 RTT 调试计数口径，不表示把 ArduPilot 主循环改成 800Hz；验收口径仍以 `target_loop_rate_hz=400`、`ins_loop_rate=400`、无 main-loop-slow STATUSTEXT 为准。
+
+`Rate CPU normal, rate set to 250Hz` 的解释：
+
+```text
+该文本来自 ArduCopter 的 fast-rate / rate-controller thread，不是 SCHED_LOOP_RATE。
+RTT 分支在 bench/disarmed 条件下限制 fast-rate 动态上限，避免高频 rate thread 与 USB、日志、storage 抢占后拖慢 400Hz 主调度。
+```
+
+### USB 描述符和双 CDC
+
+证据：
+
+```text
+results/execution/loop_rate_goal_20260620T095201Z/usb_descriptor_20260620T180219Z/usb_descriptor_gate.json
+```
+
+结果：
+
+```text
+verdict=GREEN
+VID:PID=1209:5740
+bDeviceClass=0xEF
+bDeviceSubClass=0x02
+bDeviceProtocol=0x01
+bNumInterfaces=4
+MI_00/MI_01=MAVLink CDC
+MI_02/MI_03=SLCAN CDC
+bulk endpoint max packet=64
+interrupt endpoint max packet=16
+```
+
+Linux 实际枚举：
+
+```text
+/dev/serial/by-id/usb-ArduPilot_CUAVv5_2B0039000351383439353636-if00  # MAVLink CDC
+/dev/serial/by-id/usb-ArduPilot_CUAVv5_2B0039000351383439353636-if02  # SLCAN CDC
+```
+
+### 参数下载
+
+证据：
+
+```text
+results/execution/loop_rate_goal_20260620T095201Z/acceptance_suite_20260620T180635Z/param_download/param_download.json
+```
+
+结果：
+
+```text
+verdict=GREEN
+reason=complete_fast
+reported_count=947
+unique_indices=947
+missing_count=0
+elapsed_s=1.406
+rate_params_s=673.3
+```
+
+说明：USB CDC 参数下载已经达到短时间完成，不再是 Mission Planner 体验里的长时间卡住。
+
+### MAVLink FTP / SDCard
+
+证据：
+
+```text
+results/execution/loop_rate_goal_20260620T095201Z/mavftp_retry_guard_20260620T181233Z/mavftp_gate.json
+```
+
+结果：
+
+```text
+verdict=GREEN
+reason=mavftp_ok
+list "/"=Success
+list "/APM"=Success
+@PARAM/param.pck bytes=10653
+param_pck decoded_count=947
+SD test file write/read/remove=Success
+post_ftp_stability=true
+```
+
+本轮同时修正了 MAVFTP 验收脚本的两个主机侧问题：
+
+- `pymavlink` 在该固件消息流下可能出现 instance-message cache crash，脚本增加了局部 guard。
+- `pymavlink` 连接对象的 `target_component` 可能保持为 0，但实际飞控消息源组件是 1；MAVFTP gate 现在优先使用 heartbeat source component，避免把 FTP 请求发到 component 0 后误判固件超时。
+
+### 外设健康
+
+证据：
+
+```text
+results/execution/loop_rate_goal_20260620T095201Z/peripheral_health_20260620T181420Z/peripheral_health.json
+```
+
+结果：
+
+```text
+verdict=GREEN
+driver_verdict=GREEN
+reason=peripheral_driver_ok_calibration_pending
+gyro present/enabled/healthy=true
+accel present/enabled/healthy=true
+mag present/enabled/healthy=true
+baro present/enabled/healthy=true
+logging present/enabled/healthy=true
+RAW_IMU present
+ATTITUDE present
+EKF_STATUS_REPORT present
+SCALED_PRESSURE present
+```
+
+采样数据示例：
+
+```text
+accel_norm_mg=1021.1
+mag_norm_mgauss=290.0
+press_abs_hpa=1003.72
+```
+
+`calibration_verdict=RED` 的原因是 `ahrs.healthy=false`，对应台架未完成 3D accel / compass calibration，不是 IMU、磁力计或气压计驱动失败。
+
+### 日志下载
+
+证据：
+
+```text
+results/execution/loop_rate_goal_20260620T095201Z/log_download_20260620T181524Z/log_download_gate.json
+```
+
+结果：
+
+```text
+verdict=GREEN
+reason=log_list_download_restore_ok
+selected_log id=497
+download bytes=93696
+sha256=c8ea67dddaddc569359ef621ff7a4e3dadda2576d47f922b6c9c9ceb7f30ca16
+LOG_BACKEND_TYPE=1
+LOG_DISARMED_after_reset=1
+```
+
+### USB SLCAN / CAN1 / DroneCAN-like
+
+证据：
+
+```text
+results/execution/loop_rate_goal_20260620T095201Z/socketcan_dronecan_sudo_20260620T182307Z/socketcan_dronecan_gate.json
+```
+
+结果：
+
+```text
+verdict=GREEN
+reason=socketcan_slcan_dronecan_gate_ok
+slcand iface_exists=true
+iface=can_rtt0
+cansend standard_ok=true
+cansend extended_ok=true
+candump line_count=4
+dronecan_fallback verdict=GREEN
+dronecan_fallback source_node_ids=[10]
+```
+
+说明：
+
+- 主机普通用户直接运行 `slcand` 时可能因为 `TIOCSETD` 权限失败，需要 `--sudo-system-tools`。
+- 官方 `dronecan` Python 库本轮没有解出 NodeStatus，但 `candump` 抓到了来自 source node 10 的扩展 DroneCAN-like 帧，满足本台架的 DroneCAN-like 验收。
+- 标准 CAN 和扩展 CAN 发送均通过 `cansend` 返回码验证。
 
 ## 做了什么
 
-### 1. USB CDC / MAVLink
+### USB / CherryUSB / CDC
 
-RTT/CherryUSB 的 CDC 路径对 ArduPilot 的假设进行了补齐：
+RTT 版 USB CDC 尽量贴近 ChibiOS 行为：
 
-- 区分 CDC buffer 所有权和 USB IN endpoint 完成时机。
-- 处理满包结束时的 ZLP 行为。
-- 避免参数下载和 MAVFTP 因调度或缓冲复用而卡住。
-- 修正 MAVFTP 对 RTT 负 errno 的处理。
-- 增加参数下载、MAVFTP、心跳稳定性的可复现测试脚本。
+- 使用 ChibiOS 风格双 CDC 描述符：MAVLink CDC 在 `MI_00`，SLCAN CDC 在 `MI_02`。
+- 保持 `1209:5740`、`EF/02/01`、IAD、4 interface、bulk 64B、interrupt 16B。
+- USB serial 使用 STM32 UID 生成 24 位十六进制字符串，避免 Windows 复用旧固定序列号实例。
+- CDC TX 路径修正 buffer 所有权、endpoint 完成时机、ZLP、host 未消费时的恢复行为。
+- 参数下载和 MAVFTP 相关路径避免长时间阻塞主循环。
 
-结果：
+### Scheduler / 主循环
 
-```text
-CDC 参数下载稳定在 1.6-2.0 s 级别。
-MAVFTP 可稳定 list/read/write/remove。
-FTP 后心跳仍稳定。
-```
+RTT 与 ChibiOS 的核心差异不是单个函数，而是调度、USB、日志、storage、fast-rate thread 的系统耦合。
 
-### 2. Scheduler / Logger / Storage
+本分支的主循环修复方向：
 
-RTT 的调度行为和 ChibiOS 不同。早期问题不是单个 USB bug，而是主循环、USB、logger、storage 之间的系统耦合。
+- 不降低 `SCHED_LOOP_RATE`。
+- 不关闭 arming/system check。
+- 不隐藏 `Main loop slow` 告警。
+- 减少热路径诊断开销，重型 loop 诊断默认关闭。
+- 对 RTT fast-rate thread 做保守动态上限，避免 bench/disarmed 条件下抢占主调度。
+- 保留低开销 monitor counters，用于追踪 main loop stuck、loop delay、当前 task/semline。
 
-本分支做了这些修复：
+### MAVFTP / 参数 / 测试工具
 
-- 主循环周期性让出真实 RT-Thread tick，避免低优先级 storage/logger liveness 被饿死。
-- 保持 logger IO 在线程优先级上的合理位置，不用粗暴升优先级掩盖问题。
-- 强化 stack 检查，避免诊断代码自身造成 fault。
-- 改进日志创建、列表、下载和恢复测试。
+测试工具修正：
 
-结果：
+- MAVFTP gate 使用当前 `rtt_usb_port_select.py` 自动选择 ArduPilot `if00`。
+- MAVFTP gate 使用 heartbeat 源组件作为 FTP target component，避免 component 0 超时。
+- MAVFTP gate 增加 `pymavlink` instance cache guard。
+- SLCAN ASCII gate 处理 RTT SLCAN 的延迟响应归并，并按固件实现把 `z/Z` 视为标准/扩展帧 ACK。
 
-```text
-DataFlash 日志 list/download/restore 为 GREEN。
-SDCard 读写和 MAVFTP 读写均通过。
-```
+### CAN / SLCAN
 
-### 3. I2C / IST8310 磁力计
+SLCAN 路径：
 
-CUAV V5 的 IST8310 在 OpenOCD MCU-only reset 后可能处于不干净状态。ChibiOS 路径中很多启动时序和 I2C 恢复细节已经被长期打磨，RTT 需要补齐这些系统行为。
+- USB `if02` 作为 SLCAN CDC。
+- 支持 `slcand` 挂载 SocketCAN。
+- 支持标准帧和扩展帧发送。
+- 支持通过 `candump` 捕获 CAN1 上的 DroneCAN-like 扩展帧。
 
-本分支做了这些处理：
+## 构建
 
-- 传感器电源轨早期拉低。
-- 在传感器断电窗口 clamp I2C3 的 PH7/PH8，避免 IST8310 被 I2C 保护路径弱供电。
-- 使用确定性的 sensor rail off/on settle 时间。
-- I2C timeout 后恢复 STM32 I2C 外设和 GPIO AF open-drain 状态。
-- I2C bus clear 采用更接近 ChibiOS 的方式：释放 SDA、脉冲 SCL、生成 STOP、恢复 AF。
-- IST8310 probe 增加 RTT 下的 WHOAMI 重试预算并使用低速 I2C。
-
-结果：
-
-```text
-磁力计 driver health 为 GREEN。
-RAW_IMU 磁场非零。
-mag_norm_mgauss=382.9。
-```
-
-### 4. CAN / USB SLCAN / DroneCAN
-
-USB 第二虚拟串口作为 SLCAN 调试口：
-
-```text
-/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if02
-```
-
-主机工具：
-
-```text
-slcand
-candump
-cansend
-cangen
-dronecan 1.0.27
-```
-
-本分支修复了 RTT CAN 发送邮箱超时恢复问题：
-
-```cpp
-txi.aborted = false;
-txi.setup   = true;
-txi.pushed  = false;
-```
-
-这避免无 ACK 发送后 TX mailbox 状态卡住。
-
-当前默认参数：
-
-```text
-SERIAL6_PROTOCOL 22
-CAN_P1_DRIVER 1
-CAN_D1_PROTOCOL 1
-CAN_P2_DRIVER 1
-CAN_D2_PROTOCOL 1
-CAN_SLCAN_CPORT 2
-```
-
-结果：
-
-```text
-USB SLCAN ASCII 标准 CAN 双向收发 GREEN。
-SocketCAN/can-utils 路径 GREEN。
-pydronecan NodeStatus 监听 GREEN。
-CDC + SLCAN 并存压力 GREEN。
-```
-
-注意：官方 `dronecan 1.0.27` 使用 SocketCAN 时设备名应直接写：
-
-```python
-dronecan.make_node("can_dbg", node_id=127, bitrate=1000000)
-```
-
-不要写成：
-
-```python
-dronecan.make_node("can:can_dbg", ...)
-```
-
-后者会把 `can:can_dbg` 当作真实接口名并报 `OSError: [Errno 19] No such device`。
-
-### 5. Hardware IWDG / RT-Thread 子模块
-
-CUAV V5 使用硬件 IWDG option bytes，早期尝试重新配置 PR/RLR 可能受限或卡在同步状态。
-
-RT-Thread 子模块中做了：
-
-- 启动早期只 feed watchdog，不再依赖重新配置 PR/RLR。
-- SysTick 中 feed IWDG，避免慢初始化期间 watchdog 触发。
-
-子模块提交：
-
-```text
-df63617ad1 stm32: keep CUAV V5 hardware IWDG fed
-```
-
-## 如何构建
-
-本分支禁止使用 waf 构建 CUAV V5 RTT 固件。使用 SCons：
+CUAV V5 RTT 固件使用 SCons，不使用 waf：
 
 ```bash
-python3 -m SCons --target=cuav-v5 -j$(nproc)
+python3 -m SCons --target=cuav-v5 -j16
+```
+
+本轮最终编译证据：
+
+```text
+results/execution/loop_rate_goal_20260620T095201Z/final_build_20260620T182452Z.log
+```
+
+最终编译结果：
+
+```text
+scons: done building targets.
+Binary integrity check PASSED
+ROM used: 1441384 B / 1504 KB = 93.59%
+RAM_STACK: 86296 B / 128 KB = 65.84%
+RAM_DMA: 25184 B / 64 KB = 38.43%
+RAM_APP: 55988 B / 320 KB = 17.09%
 ```
 
 常用产物：
@@ -288,154 +343,150 @@ build/rtt_deploy/cuav_v5/rt-thread.elf
 build/rtt_deploy/cuav_v5/arducopter.apj
 ```
 
-## 如何烧录
+## 烧录
 
-CUAV V5 应用入口为：
+CUAV V5 应用入口：
 
 ```text
 0x08008000
 ```
 
-OpenOCD 直接烧录：
+OpenOCD 烧录：
 
 ```bash
-openocd -f interface/stlink.cfg -f target/stm32f7x.cfg \
+timeout 120 openocd -f interface/stlink.cfg -f target/stm32f7x.cfg \
   -c "program build/rtt_cuav_v5/rtthread.bin 0x08008000 verify" \
   -c "reset run" \
   -c "shutdown"
-```
 
-OpenOCD 操作后清理：
-
-```bash
 pkill -9 -x openocd 2>/dev/null || true
 pkill -9 -f '[o]penoccd' 2>/dev/null || true
 ```
 
-## 如何验收
+## 复测命令
 
-所有手工测试脚本都建议用 `nohup + timeout`，并把输出放到 `results/execution/`。
+所有长时间测试建议使用 `nohup + timeout`，并把输出放到 `results/execution/`。
 
-### 全量串行验收
-
-不要让多个 pymavlink reader 同时抢 CDC 口。推荐使用串行 suite：
+### 主循环性能 gate
 
 ```bash
-TS=$(date -u +%Y%m%dT%H%M%SZ)
-DIR="results/execution/acceptance_${TS}_cuav_v5_rtt"
-mkdir -p "$DIR"
+OUT=results/execution/loop_rate_goal_$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p "$OUT"
+PORT=$(ls /dev/serial/by-id/usb-ArduPilot*if00 | head -1)
 
-nohup timeout 960 python3 Tools/scripts/rtt_acceptance_suite.py \
-  --port /dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00 \
-  --outdir "$DIR" \
-  --include-param-persist \
-  --strict-prearm-health \
-  --allow-strict-prearm-red \
-  > "$DIR/nohup.log" 2>&1 &
+nohup timeout 420 python3 Tools/scripts/rtt_loop_rate_gate.py \
+  --port "$PORT" \
+  --outdir "$OUT/loop_rate_gate_long" \
+  --sample-s 300 \
+  --min-loop-rate 380 \
+  --target-loop-rate 400 \
+  > "$OUT/loop_rate_gate_long.log" 2>&1 &
 ```
 
-### USB SLCAN ASCII 验收
+### 参数下载 gate
 
 ```bash
-TS=$(date -u +%Y%m%dT%H%M%SZ)
-DIR="results/execution/slcan_${TS}_ascii"
-mkdir -p "$DIR"
+OUT=results/execution/param_download_$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p "$OUT"
 
-nohup timeout 80 python3 Tools/scripts/rtt_slcan_ascii_gate.py \
-  --board-port /dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if02 \
-  --debugger-port /dev/serial/by-id/usb-STMicroelectronics_STM32_Virtual_ComPort_206E395C5446-if00 \
-  --outdir "$DIR" \
-  --frames 5 \
-  --listen-s 0.8 \
-  > "$DIR/nohup.log" 2>&1
+nohup timeout 90 python3 Tools/scripts/rtt_param_download_gate.py \
+  --port auto \
+  --outdir "$OUT" \
+  > "$OUT/stdout.log" 2>&1 &
 ```
 
-### MAVFTP 验收
+### MAVFTP gate
 
 ```bash
-TS=$(date -u +%Y%m%dT%H%M%SZ)
-DIR="results/execution/mavftp_${TS}"
-mkdir -p "$DIR"
+OUT=results/execution/mavftp_$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p "$OUT"
 
-nohup timeout 180 python3 Tools/scripts/rtt_mavftp_gate.py \
-  --port /dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00 \
-  --outdir "$DIR" \
+nohup timeout 300 python3 Tools/scripts/rtt_mavftp_gate.py \
+  --port auto \
+  --outdir "$OUT" \
   --require-sd \
-  > "$DIR/nohup.log" 2>&1
+  > "$OUT/stdout.log" 2>&1 &
 ```
 
-## 证据文档
+### 外设健康 gate
 
-主要验收文档：
+```bash
+OUT=results/execution/peripheral_$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p "$OUT"
 
-```text
-docs/rtt-porting/CUAV_V5_RTT_ACCEPTANCE_CURRENT.md
-docs/rtt-porting/CUAV_V5_RTT_USB_SLCAN_CURRENT.md
+nohup timeout 120 python3 Tools/scripts/rtt_peripheral_health_gate.py \
+  --port auto \
+  --outdir "$OUT" \
+  > "$OUT/stdout.log" 2>&1 &
 ```
 
-系统性根因文档：
+### 日志下载 gate
 
-```text
-docs/rtt-porting/RTT_USB_CHIBIOS_CHERRYUSB_ROOT_CAUSE.md
+```bash
+OUT=results/execution/log_download_$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p "$OUT"
+
+nohup timeout 300 python3 Tools/scripts/rtt_log_download_gate.py \
+  --port auto \
+  --outdir "$OUT" \
+  --reset-after-restore \
+  > "$OUT/stdout.log" 2>&1 &
 ```
 
-关键证据目录：
+### SocketCAN / DroneCAN-like gate
 
-```text
-results/execution/acceptance_20260613T090123Z_after_align_flash_serial_full/
-results/execution/slcan_20260613T090627Z_ascii_after_full_acceptance/
-results/execution/dronecan_20260613T091439Z_after_full_acceptance_fixed_device/
-results/execution/coexist_20260613T091529Z_after_full_acceptance/
+```bash
+OUT=results/execution/socketcan_$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p "$OUT"
+
+nohup timeout 120 python3 Tools/scripts/rtt_socketcan_dronecan_gate.py \
+  --port auto \
+  --iface can_rtt0 \
+  --outdir "$OUT" \
+  --pre-listen-s 2 \
+  --listen-s 5 \
+  --dronecan-listen-s 10 \
+  --require-rx \
+  --require-dronecan \
+  --dronecan-any-node \
+  --sudo-system-tools \
+  > "$OUT/stdout.log" 2>&1 &
 ```
 
-废弃或被替代的过程文件保存在：
+## 工作空间整理规则
 
-```text
-results/recycle_bin/
-```
+本分支按下面方式组织文件：
 
-## 工作区规则
-
-本分支的工作区整理规则：
-
-- 源码修复放在对应库目录。
+- 源码修复放在对应 `libraries/`、`ArduCopter/`、`Tools/scripts/` 中。
 - 可复现测试脚本放在 `Tools/scripts/`。
 - 长期说明文档放在 `docs/rtt-porting/`。
-- 有效测试证据放在 `results/execution/`。
-- 废弃过程文件、旧日志和临时产物放在 `results/recycle_bin/`。
-- 不把临时 PID、临时 candump、临时 setup.log 散落在仓库根目录。
+- 当前有效验收证据放在 `results/execution/loop_rate_goal_20260620T095201Z/`。
+- 废弃过程目录、旧构建试验、旧烧录日志、旧 GDB 快照放在 `results/recycle_bin/`。
 
-当前交付时已经确认：
-
-```text
-无残留 slcand/candump/cangen/openocd 进程。
-无残留 can_apm/can_dbg SocketCAN 接口。
-无当前测试产生的根目录临时 CAN 文件。
-主仓库和子模块均已提交并推送到 GitHub。
-```
-
-## 结论
-
-本分支已经完成 CUAV V5 RT-Thread ArduPilot 的 driver-level 软件台架验收：
+本轮整理把 262 个过程目录/日志移动到：
 
 ```text
-USB CDC: GREEN
-参数下载: GREEN
-MAVLink FTP: GREEN
-SDCard / 日志: GREEN
-IMU / INS / ATTITUDE / EKF 数据流: GREEN
-磁力计: GREEN
-气压计: GREEN
-USB SLCAN: GREEN
-标准 CAN: GREEN
-DroneCAN: GREEN
-CDC + SLCAN 并存: GREEN
-OpenOCD/GDB HardFault 检查: GREEN
+results/recycle_bin/20260620T182654Z_loop_rate_goal_process_artifacts/
 ```
 
-保留边界：
+最终保留的主证据目录只包含：
 
 ```text
-strict pre-arm 仍需真实飞行前校准、RC、安全开关闭合。
-CAN_SLCAN_CPORT=1 仍是当前台架红路径。
+acceptance_suite_20260620T180635Z/
+loop_rate_gate_long_20260620T180025Z/
+mavftp_retry_guard_20260620T181233Z/
+peripheral_health_20260620T181420Z/
+log_download_20260620T181524Z/
+socketcan_dronecan_sudo_20260620T182307Z/
+usb_descriptor_20260620T180219Z/
+final_build_20260620T182452Z.log
 ```
+
+## 注意事项
+
+- 不要用降低 `SCHED_LOOP_RATE`、关闭 arming check、屏蔽 STATUSTEXT 的方式伪修复主循环问题。
+- OpenOCD 操作后必须清理残留进程，否则可能占住 USB CDC。
+- 不要同时运行多个读取同一 MAVLink CDC 的 pymavlink gate，参数下载和 MAVFTP 要串行。
+- `slcand` 需要 `TIOCSETD` 权限；普通用户失败时使用 `--sudo-system-tools`。
+- 当前 CAN1/DroneCAN-like 证据来自 `candump` 扩展帧 fallback，官方 `dronecan` 库本轮没有解出 NodeStatus。
+

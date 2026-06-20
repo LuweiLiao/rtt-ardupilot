@@ -81,7 +81,7 @@ uint64_t Util::get_micros64() const
 {
     _dwt_init();
     const uint32_t tick_hz = RT_TICK_PER_SECOND ? RT_TICK_PER_SECOND : 1000U;
-    const uint32_t cpu_hz = SystemCoreClock ? SystemCoreClock : 216000000U;
+    const uint32_t cpu_mhz = _cpu_freq_mhz ? _cpu_freq_mhz : 216U;
 
     rt_base_t level = rt_hw_interrupt_disable();
     const uint32_t cyc = DWT_CYCCNT;
@@ -97,7 +97,7 @@ uint64_t Util::get_micros64() const
     static bool dwt_time_valid;
     static uint32_t last_cyc;
     static uint64_t accumulated_us;
-    static uint64_t fractional_cycles;
+    static uint32_t fractional_cycles;
     static uint64_t last_returned_us;
 
     if (!dwt_time_valid) {
@@ -112,13 +112,13 @@ uint64_t Util::get_micros64() const
 
     const uint32_t delta_cycles = cyc - last_cyc;
     last_cyc = cyc;
-    const uint64_t scaled = fractional_cycles + (uint64_t)delta_cycles * 1000000ULL;
-    const uint32_t delta_us = (uint32_t)(scaled / cpu_hz);
+    const uint64_t scaled_cycles = (uint64_t)fractional_cycles + delta_cycles;
+    const uint32_t delta_us = (uint32_t)(scaled_cycles / cpu_mhz);
     if (delta_us > rtt_dbg_timebase_micros_delta_max) {
         rtt_dbg_timebase_micros_delta_max = delta_us;
     }
     accumulated_us += delta_us;
-    fractional_cycles = scaled % cpu_hz;
+    fractional_cycles = (uint32_t)(scaled_cycles % cpu_mhz);
     const uint64_t now_us = accumulated_us;
     if (now_us < last_returned_us) {
         rtt_dbg_timebase_micros_backwards++;

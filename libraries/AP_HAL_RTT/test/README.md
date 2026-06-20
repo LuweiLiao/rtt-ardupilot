@@ -91,7 +91,7 @@ test/
 | `D_storage` | `drivers/D_storage/` | **已构建 / 上板 PASS** — HAL smoke (tail 8B scratch RW+restore); RAM stub on cuav_v5 |
 | `D_scheduler` | `drivers/D_scheduler/` | **已构建 / 上板 PASS** — HAL smoke (`scheduler` init + timer proc + delay); callback count>0 |
 | `D_analogin` | `drivers/D_analogin/` | **已构建 / 上板 PASS** — HAL smoke (`analogin` init/ch6 + `_timer_tick`; raw/mV diagnostics); not full ADC calibration |
-| `D_usb_serial` | `drivers/D_usb_serial/` | **已构建 / 上板 PASS** — HAL `serial(0)` CherryUSB CDC (`rtt_test_hal_usb_serial_link.py`); ACM `1209:5741` @921600 beacon+echo；CFSR/HFSR=0 |
+| `D_usb_serial` | `drivers/D_usb_serial/` | **已构建 / 上板 PASS** — HAL `serial(0)` CherryUSB CDC (`rtt_test_hal_usb_serial_link.py`); ACM `1209:5740` @921600 beacon+echo；CFSR/HFSR=0 |
 | `D_rcoutput` | `drivers/D_rcoutput/` | **已构建** — HAL smoke (CH0 1000–1200 µs; read/read_last_sent); PWM 波形未验证 |
 | `D_rcinput` | `drivers/D_rcinput/` | **已构建** — HAL smoke (`rcin` API; no channels→FAIL); SBUS/PPM for pass; 上板未验证 |
 | `E_sdcard` | `drivers/E_sdcard/` | **已构建 / 上板 PASS** — SD/FS smoke (POSIX on `/APM`); needs microSD |

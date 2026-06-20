@@ -1,0 +1,10 @@
+# Compatibility dual-CDC identity for Windows composite binding isolation tests.
+#
+# Build with:
+#   scons --v=ArduCopter --target=cuav_v5 \
+#     --extra-hwdef=libraries/AP_HAL_RTT/hwdef/extras/windows_chibios_dualcdc_shape.dat
+#
+# RTT5740L now makes this ChibiOS-style shape the default. This extra hwdef is
+# kept as an explicit compatibility knob for older branches and scripts; on the
+# current branch it should be equivalent to the default dual-CDC descriptor.
+define RTT_USB_CHIBIOS_DUALCDC_SHAPE 1

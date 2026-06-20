@@ -14,8 +14,9 @@ from typing import Any
 
 from pymavlink import mavutil
 
+from rtt_usb_port_select import MAVLINK_PORT, resolve_mavlink_port
 
-DEFAULT_PORT = "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00"
+DEFAULT_PORT = MAVLINK_PORT
 
 
 def iso_now() -> str:
@@ -23,22 +24,7 @@ def iso_now() -> str:
 
 
 def resolve_port(port_arg: str) -> str:
-    if port_arg != "auto":
-        return port_arg
-    if os.path.exists(DEFAULT_PORT):
-        return DEFAULT_PORT
-    for pattern in (
-        "/dev/serial/by-id/usb-APM_CUAV_V5_CDC*",
-        "/dev/serial/by-id/*CUAV*CDC*",
-        "/dev/serial/by-id/*ArduPilot*",
-    ):
-        matches = sorted(glob.glob(pattern))
-        if matches:
-            return matches[0]
-    acms = sorted(glob.glob("/dev/ttyACM*"))
-    if acms:
-        return acms[-1]
-    raise RuntimeError("no_cdc_port")
+    return resolve_mavlink_port(port_arg)
 
 
 def wait_for_port(port_arg: str, timeout_s: float, retry_s: float) -> tuple[str, float]:

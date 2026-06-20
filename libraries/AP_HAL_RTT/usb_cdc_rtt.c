@@ -38,14 +38,14 @@ extern void usb_lld_stall_out(void *usbp, usbep_t ep);
 #define CDC_PORT_COUNT          2U
 #define EP0_MAX_PACKET          64
 #define CDC_DATA_MAX_PACKET     64
-#define CDC_NOTIFY_MAX_PACKET   8
+#define CDC_NOTIFY_MAX_PACKET   16
 
-#define CDC0_DATA_IN_EP         1
+#define CDC0_NOTIFY_IN_EP       1
+#define CDC0_DATA_IN_EP         2
 #define CDC0_DATA_OUT_EP        2
-#define CDC0_NOTIFY_IN_EP       3
+#define CDC1_NOTIFY_IN_EP       3
 #define CDC1_DATA_IN_EP         4
 #define CDC1_DATA_OUT_EP        4
-#define CDC1_NOTIFY_IN_EP       5
 
 #define CDC_DESC_SET_LEN        66
 #define CDC_CFG_DESC_LEN        (9 + CDC_DESC_SET_LEN * CDC_PORT_COUNT)
@@ -63,7 +63,7 @@ static const uint8_t usb_dev_desc[] = {
     0x01,                  /* bDeviceProtocol: IAD */
     EP0_MAX_PACKET,        /* bMaxPacketSize0 */
     0x09, 0x12,            /* idVendor = 0x1209 */
-    0x41, 0x57,            /* idProduct = 0x5741 */
+    0x40, 0x57,            /* idProduct = 0x5740 */
     0x00, 0x02,            /* bcdDevice = 2.00 */
     0x01,                  /* iManufacturer */
     0x02,                  /* iProduct */
@@ -105,7 +105,7 @@ static const uint8_t usb_cfg_desc[] = {
 
     /* CDC Call Management Functional Descriptor */
     5, 0x24, 0x01,         /* bLength, CS_INTERFACE, CALL_MGMT */
-    0x01,                  /* bmCapabilities */
+    0x03,                  /* bmCapabilities */
     1,                     /* bDataInterface */
 
     /* CDC ACM Functional Descriptor */
@@ -117,12 +117,12 @@ static const uint8_t usb_cfg_desc[] = {
     0,                     /* bMasterInterface */
     1,                     /* bSlaveInterface */
 
-    /* EP3 IN: Interrupt (CDC0 notifications) */
+    /* EP1 IN: Interrupt (CDC0 notifications) */
     7, 5,                  /* bLength, bDescriptorType = ENDPOINT */
-    0x83,                  /* bEndpointAddress: IN EP3 */
+    0x81,                  /* bEndpointAddress: IN EP1 */
     0x03,                  /* bmAttributes: Interrupt */
     CDC_NOTIFY_MAX_PACKET, 0x00,
-    0x10,                  /* bInterval = 16 ms */
+    0x01,                  /* bInterval = 1 ms */
 
     /* ---- CDC0 Interface 1: CDC Data ---- */
     9, 4,
@@ -131,16 +131,16 @@ static const uint8_t usb_cfg_desc[] = {
     0x0A, 0x00, 0x00,      /* bInterfaceClass/SubClass/Protocol = CDC Data */
     0,                     /* iInterface */
 
-    /* EP1 IN: Bulk (CDC data device -> host) */
+    /* EP2 OUT: Bulk (CDC data host -> device) */
     7, 5,
-    0x81,                  /* bEndpointAddress: IN EP1 */
+    0x02,                  /* bEndpointAddress: OUT EP2 */
     0x02,                  /* bmAttributes: Bulk */
     CDC_DATA_MAX_PACKET, 0x00,
     0x00,                  /* bInterval */
 
-    /* EP2 OUT: Bulk (CDC data host -> device) */
+    /* EP2 IN: Bulk (CDC data device -> host) */
     7, 5,
-    0x02,                  /* bEndpointAddress: OUT EP2 */
+    0x82,                  /* bEndpointAddress: IN EP2 */
     0x02,                  /* bmAttributes: Bulk */
     CDC_DATA_MAX_PACKET, 0x00,
     0x00,                  /* bInterval */
@@ -150,14 +150,14 @@ static const uint8_t usb_cfg_desc[] = {
     2,                     /* bFirstInterface */
     2,                     /* bInterfaceCount */
     2, 2, 1,
-    0,
+    0,                     /* iFunction */
 
     /* ---- CDC1 Interface 2: CDC Communication ---- */
     9, 4,
     2, 0,
     1,
     2, 2, 1,
-    0,
+    0,                     /* iInterface */
 
     /* CDC Header Functional Descriptor */
     5, 0x24, 0x00,
@@ -165,7 +165,7 @@ static const uint8_t usb_cfg_desc[] = {
 
     /* CDC Call Management Functional Descriptor */
     5, 0x24, 0x01,
-    0x01,
+    0x03,
     3,                     /* bDataInterface */
 
     /* CDC ACM Functional Descriptor */
@@ -177,26 +177,19 @@ static const uint8_t usb_cfg_desc[] = {
     2,                     /* bMasterInterface */
     3,                     /* bSlaveInterface */
 
-    /* EP5 IN: Interrupt (CDC1 notifications) */
+    /* EP3 IN: Interrupt (CDC1 notifications) */
     7, 5,
-    0x85,
+    0x83,
     0x03,
     CDC_NOTIFY_MAX_PACKET, 0x00,
-    0x10,
+    0x01,
 
     /* ---- CDC1 Interface 3: CDC Data ---- */
     9, 4,
     3, 0,
     2,
     0x0A, 0x00, 0x00,
-    0,
-
-    /* EP4 IN: Bulk (CDC1 data device -> host) */
-    7, 5,
-    0x84,
-    0x02,
-    CDC_DATA_MAX_PACKET, 0x00,
-    0x00,
+    0,                     /* iInterface */
 
     /* EP4 OUT: Bulk (CDC1 data host -> device) */
     7, 5,
@@ -204,6 +197,13 @@ static const uint8_t usb_cfg_desc[] = {
     0x02,
     CDC_DATA_MAX_PACKET, 0x00,
     0x00,                  /* bInterval */
+
+    /* EP4 IN: Bulk (CDC1 data device -> host) */
+    7, 5,
+    0x84,
+    0x02,
+    CDC_DATA_MAX_PACKET, 0x00,
+    0x00,
 };
 
 /* String descriptors */
@@ -213,30 +213,42 @@ static const uint8_t usb_str_lang[] = {
 };
 
 static const uint8_t usb_str_manufacturer[] = {
-    8, 3,                  /* bLength, STRING */
-    'A', 0, 'P', 0, 'M', 0,
+    20, 3,                 /* bLength = 2 + 2*9, STRING */
+    'A', 0, 'r', 0, 'd', 0, 'u', 0, 'P', 0,
+    'i', 0, 'l', 0, 'o', 0, 't', 0,
 };
 
 static const uint8_t usb_str_product[] = {
-    28, 3,                 /* bLength = 2 + 2*13, STRING */
+    16, 3,                 /* bLength = 2 + 2*7, STRING */
     'C', 0, 'U', 0, 'A', 0, 'V', 0, ' ', 0,
-    'V', 0, '5', 0, ' ', 0,
-    'C', 0, 'D', 0, 'C', 0, ' ', 0, '1', 0,
+    'V', 0, '5', 0,
 };
 
 static const uint8_t usb_str_serial[] = {
-    12, 3,                 /* bLength = 2 + 2*5, STRING */
-    '0', 0, '0', 0, '0', 0, '0', 0, '1', 0,
+    18, 3,                 /* bLength = 2 + 2*8, STRING */
+    'R', 0, 'T', 0, 'T', 0, '5', 0, '7', 0, '4', 0, '0', 0, 'D', 0,
+};
+
+static const uint8_t usb_str_mavlink[] = {
+    24, 3,                 /* bLength = 2 + 2*11, STRING */
+    'M', 0, 'A', 0, 'V', 0, 'L', 0, 'i', 0, 'n', 0, 'k', 0,
+    ' ', 0, 'C', 0, 'D', 0, 'C', 0,
+};
+
+static const uint8_t usb_str_slcan[] = {
+    20, 3,                 /* bLength = 2 + 2*9, STRING */
+    'S', 0, 'L', 0, 'C', 0, 'A', 0, 'N', 0,
+    ' ', 0, 'C', 0, 'D', 0, 'C', 0,
 };
 
 /* ========================================================================== */
 /* CDC ACM state                                                              */
 /* ========================================================================== */
 
-/* Line coding: 57600 8N1 (default), one per CDC ACM function. */
+/* ChibiOS dual-CDC default line coding: 38400 8N1, one per CDC ACM function. */
 static uint8_t cdc_line_coding[CDC_PORT_COUNT][7] = {
-    { 0x00, 0xE1, 0x00, 0x00, 0, 0, 8 },
-    { 0x00, 0xE1, 0x00, 0x00, 0, 0, 8 },
+    { 0x00, 0x96, 0x00, 0x00, 0, 0, 8 },
+    { 0x00, 0x96, 0x00, 0x00, 0, 0, 8 },
 };
 
 /* CDC serial state bits for notification */
@@ -276,7 +288,7 @@ static uint8_t cdc_port_from_interface(uint8_t iface)
 }
 
 /* ========================================================================== */
-/* EP1 (CDC Data IN — Bulk 64 bytes)                                          */
+/* EP1 (CDC0 Notification IN — Interrupt 16 bytes)                            */
 /* ========================================================================== */
 
 static USBInEndpointState ep1_in_state;
@@ -285,15 +297,13 @@ static void cdc_ep1_in_cb(void *usbp, usbep_t ep)
 {
     (void)usbp;
     (void)ep;
-    /* Transfer completed — no action needed for now.
-     * The caller can check transmission status via the transmitting bitmap. */
 }
 
 static RT_USBEndpointConfig ep1_config = {
-    .ep_mode       = USB_EP_MODE_TYPE_BULK,
+    .ep_mode       = USB_EP_MODE_TYPE_INTR,
     .in_state      = (void *)&ep1_in_state,
     .out_state     = NULL,
-    .in_maxsize    = CDC_DATA_MAX_PACKET,
+    .in_maxsize    = CDC_NOTIFY_MAX_PACKET,
     .out_maxsize   = 0,
     .in_multiplier = 1,
     .setup_buf     = {0},
@@ -303,11 +313,18 @@ static RT_USBEndpointConfig ep1_config = {
 };
 
 /* ========================================================================== */
-/* EP2 (CDC Data OUT — Bulk 64 bytes)                                         */
+/* EP2 (CDC0 Data IN/OUT — Bulk 64 bytes)                                     */
 /* ========================================================================== */
 
+static USBInEndpointState ep2_in_state;
 static uint8_t ep2_rx_buf[CDC_DATA_MAX_PACKET];
 static USBOutEndpointState ep2_out_state;
+
+static void cdc_ep2_in_cb(void *usbp, usbep_t ep)
+{
+    (void)usbp;
+    (void)ep;
+}
 
 static void cdc_ep2_out_cb(void *usbp, usbep_t ep)
 {
@@ -320,19 +337,19 @@ static void cdc_ep2_out_cb(void *usbp, usbep_t ep)
 
 static RT_USBEndpointConfig ep2_config = {
     .ep_mode       = USB_EP_MODE_TYPE_BULK,
-    .in_state      = NULL,
+    .in_state      = (void *)&ep2_in_state,
     .out_state     = (void *)&ep2_out_state,
-    .in_maxsize    = 0,
+    .in_maxsize    = CDC_DATA_MAX_PACKET,
     .out_maxsize   = CDC_DATA_MAX_PACKET,
-    .in_multiplier = 0,
+    .in_multiplier = 1,
     .setup_buf     = {0},
     .setup_cb      = NULL,
-    .in_cb         = NULL,
+    .in_cb         = cdc_ep2_in_cb,
     .out_cb        = cdc_ep2_out_cb,
 };
 
 /* ========================================================================== */
-/* EP3 (CDC Notification IN — Interrupt 8 bytes)                              */
+/* EP3 (CDC1 Notification IN — Interrupt 16 bytes)                            */
 /* ========================================================================== */
 
 static USBInEndpointState ep3_in_state;
@@ -394,31 +411,6 @@ static RT_USBEndpointConfig ep4_config = {
 };
 
 /* ========================================================================== */
-/* EP5 (CDC1 Notification IN — Interrupt 8 bytes)                             */
-/* ========================================================================== */
-
-static USBInEndpointState ep5_in_state;
-
-static void cdc_ep5_in_cb(void *usbp, usbep_t ep)
-{
-    (void)usbp;
-    (void)ep;
-}
-
-static RT_USBEndpointConfig ep5_config = {
-    .ep_mode       = USB_EP_MODE_TYPE_INTR,
-    .in_state      = (void *)&ep5_in_state,
-    .out_state     = NULL,
-    .in_maxsize    = CDC_NOTIFY_MAX_PACKET,
-    .out_maxsize   = 0,
-    .in_multiplier = 1,
-    .setup_buf     = {0},
-    .setup_cb      = NULL,
-    .in_cb         = cdc_ep5_in_cb,
-    .out_cb        = NULL,
-};
-
-/* ========================================================================== */
 /* CDC descriptor callback (for HAL _usb_default_handler)                     */
 /* ========================================================================== */
 
@@ -442,6 +434,8 @@ static const uint8_t *cdc_get_descriptor(void *usbp, uint8_t dtype,
         case 1:  return usb_str_manufacturer;
         case 2:  return usb_str_product;
         case 3:  return usb_str_serial;
+        case 4:  return usb_str_mavlink;
+        case 5:  return usb_str_slcan;
         default: return NULL;
         }
 
@@ -468,13 +462,11 @@ static void cdc_event_cb(void *usbp, uint8_t event)
         drv->epc[2] = &ep2_config;
         drv->epc[3] = &ep3_config;
         drv->epc[4] = &ep4_config;
-        drv->epc[5] = &ep5_config;
 
         usb_lld_init_endpoint(drv, 1);
         usb_lld_init_endpoint(drv, 2);
         usb_lld_init_endpoint(drv, 3);
         usb_lld_init_endpoint(drv, 4);
-        usb_lld_init_endpoint(drv, 5);
 
         /* Arm OUT endpoints for the first data reception. */
         {
@@ -507,7 +499,6 @@ static void cdc_event_cb(void *usbp, uint8_t event)
         drv->epc[2] = NULL;
         drv->epc[3] = NULL;
         drv->epc[4] = NULL;
-        drv->epc[5] = NULL;
 
         for (uint8_t i = 0; i < CDC_PORT_COUNT; i++) {
             _cdc_configured[i] = false;
@@ -654,7 +645,7 @@ bool usb_cdc_send_data_idx(uint8_t idx, const uint8_t *data, uint32_t len)
     if (drv->transmitting & (1U << ep))
         return false;
 
-    isp = (idx == 0) ? &ep1_in_state : &ep4_in_state;
+    isp = (idx == 0) ? &ep2_in_state : &ep4_in_state;
 
     isp->txbuf   = data;
     isp->txsize  = (uint16_t)len;
@@ -737,7 +728,7 @@ bool usb_cdc_send_notification_idx(uint8_t idx, uint16_t serial_state)
     notify[idx][9] = (uint8_t)((serial_state >> 8) & 0xFF);
 
     ep = cdc_notify_in_ep[idx];
-    isp = (idx == 0) ? &ep3_in_state : &ep5_in_state;
+    isp = (idx == 0) ? &ep1_in_state : &ep3_in_state;
 
     isp->txbuf   = notify[idx];
     isp->txsize  = 10;

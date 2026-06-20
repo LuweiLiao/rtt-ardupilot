@@ -233,6 +233,18 @@ static inline uint32_t dwc2_dbg_now_ms(void)
     return (uint32_t)((rt_tick_get() * 1000U) / RT_TICK_PER_SECOND);
 }
 
+static inline bool dwc2_dbg_is_cdc_data_in_ep(uint8_t ep_idx)
+{
+    /*
+     * [Cybernetics Ch.4] Closed-loop: the older single-CDC diagnostic path
+     * uses EP1 IN, while the normal dual-CDC ArduPilot app uses EP2 IN for
+     * MAVLink and EP4 IN for SLCAN.  Keep the existing debug counters but make
+     * the guarded TXFE/XFRC path cover the endpoint that Windows/Mission
+     * Planner actually opens.
+     */
+    return ep_idx == 1U || ep_idx == 2U || ep_idx == 4U;
+}
+
 static uint32_t dwc2_dbg_pack4(const uint8_t *buf, uint32_t len, uint32_t ofs)
 {
     uint32_t v = 0;
@@ -557,7 +569,7 @@ static void dwc2_tx_fifo_empty_procecss(uint8_t busid, uint8_t ep_idx)
     uint32_t fifoemptymsk;
     uint32_t dtxfsts;
 
-    if (ep_idx == 1U) {
+    if (dwc2_dbg_is_cdc_data_in_ep(ep_idx)) {
         rtt_dbg_dwc2_ep1_txfe_process++;
     }
 
@@ -569,7 +581,7 @@ static void dwc2_tx_fifo_empty_procecss(uint8_t busid, uint8_t ep_idx)
     len32b = (len + 3U) / 4U;
     dtxfsts = USB_OTG_INEP(ep_idx)->DTXFSTS & USB_OTG_DTXFSTS_INEPTFSAV;
 
-    if (ep_idx == 1U) {
+    if (dwc2_dbg_is_cdc_data_in_ep(ep_idx)) {
         rtt_dbg_dwc2_ep1_txfe_enter_xfer_len = g_dwc2_udc[busid].in_ep[ep_idx].xfer_len;
         rtt_dbg_dwc2_ep1_txfe_enter_actual = g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len;
         rtt_dbg_dwc2_ep1_txfe_enter_len = len;
@@ -613,7 +625,7 @@ static void dwc2_tx_fifo_empty_procecss(uint8_t busid, uint8_t ep_idx)
             USB_OTG_INEP(ep_idx)->DIEPTSIZ |= (USB_OTG_DIEPTSIZ_MULCNT & (1U << 29));
         }
 
-        if (ep_idx == 1U) {
+        if (dwc2_dbg_is_cdc_data_in_ep(ep_idx)) {
             dwc2_dbg_ep1_txfe_trace(g_dwc2_udc[busid].in_ep[ep_idx].xfer_buf,
                                     len,
                                     g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len,
@@ -626,7 +638,7 @@ static void dwc2_tx_fifo_empty_procecss(uint8_t busid, uint8_t ep_idx)
         g_dwc2_udc[busid].in_ep[ep_idx].xfer_buf += len;
         g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len += len;
         dwc2_irq_restore(primask);
-        if (ep_idx == 1U) {
+        if (dwc2_dbg_is_cdc_data_in_ep(ep_idx)) {
             rtt_dbg_dwc2_ep1_txfe_write_loops++;
             rtt_dbg_dwc2_ep1_txfe_wrote_bytes += len;
         }
@@ -637,12 +649,12 @@ static void dwc2_tx_fifo_empty_procecss(uint8_t busid, uint8_t ep_idx)
         uint32_t primask = dwc2_irq_save();
         USB_OTG_DEV->DIEPEMPMSK &= ~fifoemptymsk;
         dwc2_irq_restore(primask);
-        if (ep_idx == 1U) {
+        if (dwc2_dbg_is_cdc_data_in_ep(ep_idx)) {
             rtt_dbg_dwc2_ep1_txfe_mask_clears++;
         }
     }
 
-    if (ep_idx == 1U) {
+    if (dwc2_dbg_is_cdc_data_in_ep(ep_idx)) {
         rtt_dbg_dwc2_ep1_txfe_post_dtxfsts = USB_OTG_INEP(ep_idx)->DTXFSTS & USB_OTG_DTXFSTS_INEPTFSAV;
         rtt_dbg_dwc2_ep1_txfe_post_dieptsiz = USB_OTG_INEP(ep_idx)->DIEPTSIZ;
         rtt_dbg_dwc2_ep1_txfe_post_diepctl = USB_OTG_INEP(ep_idx)->DIEPCTL;
@@ -726,7 +738,7 @@ static inline uint32_t dwc2_get_inep_intstatus(uint8_t busid, uint8_t epnum)
     msk |= USB_OTG_DIEPINT_EPDISD;
 
     tmpreg = USB_OTG_INEP((uint32_t)epnum)->DIEPINT;
-    if (epnum == 1U) {
+    if (dwc2_dbg_is_cdc_data_in_ep(epnum)) {
         rtt_dbg_dwc2_ep1_raw = tmpreg;
         rtt_dbg_dwc2_ep1_msk = msk;
         rtt_dbg_dwc2_ep1_empmsk = emp;
@@ -734,14 +746,14 @@ static inline uint32_t dwc2_get_inep_intstatus(uint8_t busid, uint8_t epnum)
     }
     /*
      * [Cybernetics Ch.4] Closed-loop: ChibiOS clears DIEPINT before handling
-     * because it accepts XFRC as a final completion event.  The RTT EP1 path
+     * because it accepts XFRC as a final completion event.  The RTT CDC data-IN path
      * can defer XFRC when DIEPTSIZ still reports transfer residue; do not clear
      * masked IN events here or the deferred event is lost and the CDC layer has
      * to fall back to slow timeout/recovery.
      */
     USB_OTG_INEP((uint32_t)epnum)->DIEPINT = tmpreg & ~msk;
     tmpreg = tmpreg & msk;
-    if (epnum == 1U) {
+    if (dwc2_dbg_is_cdc_data_in_ep(epnum)) {
         rtt_dbg_dwc2_ep1_masked = tmpreg;
     }
 
@@ -1129,7 +1141,7 @@ int usbd_ep_start_write(uint8_t busid, const uint8_t ep, const uint8_t *data, ui
     uint8_t ep_idx = USB_EP_GET_IDX(ep);
     uint32_t pktcnt = 0;
 
-    if (ep_idx == 1U) {
+    if (dwc2_dbg_is_cdc_data_in_ep(ep_idx)) {
         const uint32_t now_ms = dwc2_dbg_now_ms();
         if (rtt_dbg_dwc2_ep1_last_start_ms != 0U) {
             const uint32_t delta_ms = now_ms - rtt_dbg_dwc2_ep1_last_start_ms;
@@ -1244,7 +1256,7 @@ int usbd_ep_start_write(uint8_t busid, const uint8_t ep, const uint8_t *data, ui
         }
     }
 #endif
-    if (ep_idx == 1U) {
+    if (dwc2_dbg_is_cdc_data_in_ep(ep_idx)) {
         rtt_dbg_dwc2_ep1_dieptsiz_last = USB_OTG_INEP(ep_idx)->DIEPTSIZ;
         rtt_dbg_dwc2_ep1_diepctl_last = USB_OTG_INEP(ep_idx)->DIEPCTL;
         rtt_dbg_dwc2_ep1_daintmsk_last = USB_OTG_DEV->DAINTMSK;
@@ -1397,18 +1409,18 @@ void USBD_IRQHandler(uint8_t busid)
             rtt_dbg_dwc2_iep_intr_last = ep_intr;
             while (ep_intr != 0U) {
                 if ((ep_intr & 0x1U) != 0U) {
-                    if (ep_idx == 1U) {
+                    if (dwc2_dbg_is_cdc_data_in_ep(ep_idx)) {
                         rtt_dbg_dwc2_ep1_seen++;
                     }
                     epint = dwc2_get_inep_intstatus(busid, ep_idx);
 
                     const bool epint_has_xfrc = (epint & USB_OTG_DIEPINT_XFRC) == USB_OTG_DIEPINT_XFRC;
                     const bool epint_has_txfe = (epint & USB_OTG_DIEPINT_TXFE) == USB_OTG_DIEPINT_TXFE;
-                    if (ep_idx == 1U && epint_has_xfrc && epint_has_txfe) {
+                    if (dwc2_dbg_is_cdc_data_in_ep(ep_idx) && epint_has_xfrc && epint_has_txfe) {
                         rtt_dbg_dwc2_ep1_irq_xfrc_txfe_same++;
                     }
                     if (epint_has_txfe) {
-                        if (ep_idx == 1U) {
+                        if (dwc2_dbg_is_cdc_data_in_ep(ep_idx)) {
                             const uint32_t now_ms = dwc2_dbg_now_ms();
                             rtt_dbg_dwc2_ep1_last_txfe_ms = now_ms;
                             if (rtt_dbg_dwc2_ep1_last_start_ms != 0U) {
@@ -1449,8 +1461,8 @@ void USBD_IRQHandler(uint8_t busid)
                         } else {
                             const uint32_t dieptsiz_snapshot = USB_OTG_INEP(ep_idx)->DIEPTSIZ;
                             const uint32_t dieptsiz_xfrsiz = dieptsiz_snapshot & USB_OTG_DIEPTSIZ_XFRSIZ;
-                            const bool ep1_fifo_loaded_with_residue =
-                                (ep_idx == 1U) &&
+                            const bool cdc_fifo_loaded_with_residue =
+                                dwc2_dbg_is_cdc_data_in_ep(ep_idx) &&
                                 (dieptsiz_xfrsiz != 0U) &&
                                 (g_dwc2_udc[busid].in_ep[ep_idx].xfer_len != 0U) &&
                                 (g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len >=
@@ -1458,15 +1470,15 @@ void USBD_IRQHandler(uint8_t busid)
                             /*
                              * [Cybernetics Ch.4] Closed-loop: a CherryUSB bulk-IN callback
                              * releases the CDC ring slots and allows cdc_tx_buf reuse.  Treat
-                             * EP1 XFRC as too early only while software still has bytes to put
+                             * CDC data-IN XFRC as too early only while software still has bytes to put
                              * into DWC2.  Once the whole transfer has been loaded into the FIFO,
                              * follow ChibiOS OTGv1 semantics and let XFRC close the transfer:
                              * `actual_xfer_len` is FIFO-fill progress, not host-completion
                              * progress, and waiting for a second XFRC after XFRSIZ drains can
                              * lose the only completion edge.
                              */
-                            if (ep_idx == 1U && (dieptsiz_xfrsiz != 0U) &&
-                                !ep1_fifo_loaded_with_residue) {
+                            if (dwc2_dbg_is_cdc_data_in_ep(ep_idx) && (dieptsiz_xfrsiz != 0U) &&
+                                !cdc_fifo_loaded_with_residue) {
                                 rtt_dbg_dwc2_ep1_xfrc_incomplete_ignored++;
                                 rtt_dbg_dwc2_ep1_xfrc_incomplete_dieptsiz = dieptsiz_snapshot;
                                 rtt_dbg_dwc2_ep1_xfrc_incomplete_actual = g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len;
@@ -1489,7 +1501,7 @@ void USBD_IRQHandler(uint8_t busid)
                                     rtt_dbg_dwc2_ep1_xfrc_deferred_until_drained++;
                                 }
                             } else {
-                                if (ep1_fifo_loaded_with_residue) {
+                                if (cdc_fifo_loaded_with_residue) {
                                     rtt_dbg_dwc2_ep1_xfrc_complete_after_fifo_load_with_residue++;
                                     rtt_dbg_dwc2_ep1_xfrc_complete_after_fifo_load_dieptsiz = dieptsiz_snapshot;
                                     g_dwc2_udc[busid].in_ep[ep_idx].actual_xfer_len =
@@ -1499,7 +1511,7 @@ void USBD_IRQHandler(uint8_t busid)
                                         g_dwc2_udc[busid].in_ep[ep_idx].xfer_len - dieptsiz_xfrsiz;
                                 }
                                 g_dwc2_udc[busid].in_ep[ep_idx].xfer_len = 0;
-                                if (ep_idx == 1U) {
+                                if (dwc2_dbg_is_cdc_data_in_ep(ep_idx)) {
                                     const uint32_t now_ms = dwc2_dbg_now_ms();
                                     rtt_dbg_dwc2_ep1_last_xfrc_ms = now_ms;
                                     if (rtt_dbg_dwc2_ep1_last_start_ms != 0U) {
@@ -1524,7 +1536,7 @@ void USBD_IRQHandler(uint8_t busid)
                         }
                     }
                     if ((epint & USB_OTG_DIEPINT_EPDISD) == USB_OTG_DIEPINT_EPDISD) {
-                        if (ep_idx == 1U) {
+                        if (dwc2_dbg_is_cdc_data_in_ep(ep_idx)) {
                             rtt_dbg_dwc2_ep1_epdisd++;
                         }
                         USB_OTG_INEP(ep_idx)->DIEPINT = USB_OTG_DIEPINT_EPDISD;

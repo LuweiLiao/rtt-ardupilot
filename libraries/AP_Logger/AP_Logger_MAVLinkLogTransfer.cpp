@@ -28,6 +28,26 @@
 
 extern const AP_HAL::HAL& hal;
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#define RTT_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+volatile uint32_t rtt_dbg_log_send_batch_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_log_send_batch_max_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_log_send_data_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_log_send_data_max_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_log_send_batch_sent RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_log_send_batch_sent_max RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_log_send_batch_budget_breaks RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_log_send_batch_no_space_breaks RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_log_send_num_sends RTT_DBG_DTCM_BSS;
+
+static inline void rtt_log_send_update_max(volatile uint32_t &target, uint32_t value)
+{
+    if (value > target) {
+        target = value;
+    }
+}
+#endif
+
 /**
    handle all types of log download requests from the GCS
  */
@@ -233,15 +253,57 @@ void AP_Logger::handle_log_sending()
     }
 #endif
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    /*
+     * [Cybernetics Ch.4] Closed-loop: ChibiOS can drain a large USB LOG_DATA
+     * burst outside the 400 Hz main-loop budget.  RTT currently runs this path
+     * in the caller context, so the upstream 250-packet USB burst can create a
+     * real main_loop_stuck event.  Keep log download enabled, but slice it into
+     * short quanta that are verified by rtt_loop_rate_gate.py.
+     */
+    if (_log_sending_link->is_high_bandwidth() && hal.gpio->usb_connected()) {
+        num_sends = 4;
+    } else if (_log_sending_link->have_flow_control() && num_sends > 4) {
+        num_sends = 4;
+    }
+    constexpr uint32_t rtt_log_send_budget_us = 700U;
+    const uint32_t rtt_batch_start_us = AP_HAL::micros();
+    uint32_t rtt_sent = 0;
+    rtt_dbg_log_send_num_sends = num_sends;
+#endif
+
     for (uint8_t i=0; i<num_sends; i++) {
         if (transfer_activity != TransferActivity::SENDING) {
             // may have completed sending data
             break;
         }
-        if (!handle_log_send_data()) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        if (i > 0 && AP_HAL::micros() - rtt_batch_start_us >= rtt_log_send_budget_us) {
+            rtt_dbg_log_send_batch_budget_breaks++;
             break;
         }
+        const uint32_t rtt_data_start_us = AP_HAL::micros();
+#endif
+        if (!handle_log_send_data()) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_dbg_log_send_batch_no_space_breaks++;
+#endif
+            break;
+        }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        const uint32_t rtt_data_us = AP_HAL::micros() - rtt_data_start_us;
+        rtt_dbg_log_send_data_us = rtt_data_us;
+        rtt_log_send_update_max(rtt_dbg_log_send_data_max_us, rtt_data_us);
+        rtt_sent++;
+#endif
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_batch_us = AP_HAL::micros() - rtt_batch_start_us;
+    rtt_dbg_log_send_batch_us = rtt_batch_us;
+    rtt_log_send_update_max(rtt_dbg_log_send_batch_max_us, rtt_batch_us);
+    rtt_dbg_log_send_batch_sent = rtt_sent;
+    rtt_log_send_update_max(rtt_dbg_log_send_batch_sent_max, rtt_sent);
+#endif
 }
 
 /**

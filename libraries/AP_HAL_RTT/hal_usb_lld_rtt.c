@@ -5,7 +5,7 @@
  * with the HAL state machine (_usb_reset, _usb_ep0setup, etc.) from
  * modules/ChibiOS/os/hal/src/hal_usb.c.
  *
- * Self-contained: no ChibiOS dependency, no CherryUSB dependency.
+ * Self-contained native backend: no ChibiOS dependency, no CherryUSB dependency.
  * Targeted at STM32F767 (CUAV V5) with OTG_FS.
  *
  * Register layout: ChibiOS stm32_otg_t (single struct covering all DWC2 regs).
@@ -433,16 +433,18 @@ typedef struct {
 /* FIFO sizes in words (32-bit words, not bytes) */
 #define RX_FIFO_SIZE_WORDS      128     /* 512 bytes */
 #define EP0_TX_FIFO_SIZE_WORDS  16      /* 64 bytes */
-#define EP1_TX_FIFO_SIZE_WORDS  32      /* 128 bytes for CDC bulk IN */
-#define EP3_TX_FIFO_SIZE_WORDS  4       /* 16 bytes for CDC notification */
+#define EP1_TX_FIFO_SIZE_WORDS  4       /* 16 bytes for CDC0 notification */
+#define EP2_TX_FIFO_SIZE_WORDS  32      /* 128 bytes for CDC0 bulk IN */
+#define EP3_TX_FIFO_SIZE_WORDS  4       /* 16 bytes for CDC1 notification */
+#define EP4_TX_FIFO_SIZE_WORDS  32      /* 128 bytes for CDC1 bulk IN */
 
 /* Maximum packet sizes */
 #define EP0_MAX_PACKET          64
-#define EP1_MAX_PACKET          64
-#define EP2_MAX_PACKET          64
+#define EP_NOTIFY_MAX_PACKET    16
+#define EP_DATA_MAX_PACKET      64
 
 #define OTG_FIFO_MEM_SIZE       320     /* OTG1 FS FIFO RAM in words */
-#define NUM_ENDPOINTS           4       /* EP0..EP3 */
+#define NUM_ENDPOINTS           4       /* Highest endpoint number: EP0..EP4 */
 #define OTG_FS_BASE             0x50000000UL  /* STM32F7 OTG_FS base */
 
 /* STM32F767 is OTG stepping 2 */
@@ -524,7 +526,7 @@ static const uint8_t usb_dev_desc[] = {
     0x01,                  /* bDeviceProtocol: IAD */
     EP0_MAX_PACKET,        /* bMaxPacketSize0 */
     0x09, 0x12,            /* idVendor = 0x1209 */
-    0x41, 0x57,            /* idProduct = 0x5741 */
+    0x40, 0x57,            /* idProduct = 0x5740 */
     0x00, 0x02,            /* bcdDevice = 2.00 */
     0x01,                  /* iManufacturer */
     0x02,                  /* iProduct */
@@ -536,14 +538,14 @@ static const uint8_t usb_cfg_desc[] = {
     /* Configuration descriptor */
     9,                     /* bLength */
     2,                     /* bDescriptorType = CONFIGURATION */
-    0x4B, 0x00,            /* wTotalLength = 75 */
-    2,                     /* bNumInterfaces */
+    0x8D, 0x00,            /* wTotalLength = 141 */
+    4,                     /* bNumInterfaces */
     1,                     /* bConfigurationValue */
     0,                     /* iConfiguration */
     0xC0,                  /* bmAttributes: Self-powered */
     50,                    /* bMaxPower = 100mA */
 
-    /* IAD */
+    /* CDC0 IAD */
     8,                     /* bLength */
     0x0B,                  /* bDescriptorType = IAD */
     0,                     /* bFirstInterface */
@@ -566,7 +568,7 @@ static const uint8_t usb_cfg_desc[] = {
 
     /* CDC Call Management FD */
     5, 0x24, 0x01,         /* bLength, CS_INTERFACE, CALL_MGMT */
-    0x01,                  /* bmCapabilities */
+    0x03,                  /* bmCapabilities */
     1,                     /* bDataInterface */
 
     /* CDC ACM FD */
@@ -578,12 +580,12 @@ static const uint8_t usb_cfg_desc[] = {
     0,                     /* bMasterInterface */
     1,                     /* bSlaveInterface */
 
-    /* EP3 IN: Interrupt (CDC notification) */
+    /* EP1 IN: Interrupt (CDC0 notification) */
     7, 5,                  /* bLength, bDescriptorType = ENDPOINT */
-    0x83,                  /* bEndpointAddress: IN EP3 */
+    0x81,                  /* bEndpointAddress: IN EP1 */
     0x03,                  /* bmAttributes: Interrupt */
-    0x08, 0x00,            /* wMaxPacketSize = 8 */
-    0x10,                  /* bInterval = 16ms */
+    EP_NOTIFY_MAX_PACKET, 0x00, /* wMaxPacketSize = 16, matching ChibiOS SerialUSB */
+    0x01,                  /* bInterval = 1ms */
 
     /* Interface 1: CDC Data */
     9, 4,
@@ -592,18 +594,81 @@ static const uint8_t usb_cfg_desc[] = {
     0x0A, 0x00, 0x00,      /* bInterfaceClass/SubClass/Protocol = CDC Data */
     0,                     /* iInterface */
 
-    /* EP1 IN: Bulk (CDC data device→host) */
-    7, 5,
-    0x81,                  /* bEndpointAddress: IN EP1 */
-    0x02,                  /* bmAttributes: Bulk */
-    EP1_MAX_PACKET, 0x00,  /* wMaxPacketSize = 64 */
-    0x00,                  /* bInterval */
-
-    /* EP2 OUT: Bulk (CDC data host→device) */
+    /* EP2 OUT: Bulk (CDC0 data host -> device) */
     7, 5,
     0x02,                  /* bEndpointAddress: OUT EP2 */
     0x02,                  /* bmAttributes: Bulk */
-    EP2_MAX_PACKET, 0x00,  /* wMaxPacketSize = 64 */
+    EP_DATA_MAX_PACKET, 0x00, /* wMaxPacketSize = 64 */
+    0x00,                  /* bInterval */
+
+    /* EP2 IN: Bulk (CDC0 data device -> host) */
+    7, 5,
+    0x82,                  /* bEndpointAddress: IN EP2 */
+    0x02,                  /* bmAttributes: Bulk */
+    EP_DATA_MAX_PACKET, 0x00, /* wMaxPacketSize = 64 */
+    0x00,                  /* bInterval */
+
+    /* CDC1 IAD */
+    8,                     /* bLength */
+    0x0B,                  /* bDescriptorType = IAD */
+    2,                     /* bFirstInterface */
+    2,                     /* bInterfaceCount */
+    2,                     /* bFunctionClass = CDC Comm */
+    2,                     /* bFunctionSubClass = ACM */
+    1,                     /* bFunctionProtocol = AT */
+    0,                     /* iFunction */
+
+    /* Interface 2: CDC Communication */
+    9, 4,                  /* bLength, bDescriptorType = INTERFACE */
+    2, 0,                  /* bInterfaceNumber, bAlternateSetting */
+    1,                     /* bNumEndpoints */
+    2, 2, 1,               /* bInterfaceClass/SubClass/Protocol */
+    0,                     /* iInterface */
+
+    /* CDC Header FD */
+    5, 0x24, 0x00,         /* bLength, CS_INTERFACE, HEADER */
+    0x10, 0x01,            /* bcdCDC = 1.10 */
+
+    /* CDC Call Management FD */
+    5, 0x24, 0x01,         /* bLength, CS_INTERFACE, CALL_MGMT */
+    0x03,                  /* bmCapabilities */
+    3,                     /* bDataInterface */
+
+    /* CDC ACM FD */
+    4, 0x24, 0x02,         /* bLength, CS_INTERFACE, ACM */
+    0x02,                  /* bmCapabilities */
+
+    /* CDC Union FD */
+    5, 0x24, 0x06,         /* bLength, CS_INTERFACE, UNION */
+    2,                     /* bMasterInterface */
+    3,                     /* bSlaveInterface */
+
+    /* EP3 IN: Interrupt (CDC1 notification) */
+    7, 5,                  /* bLength, bDescriptorType = ENDPOINT */
+    0x83,                  /* bEndpointAddress: IN EP3 */
+    0x03,                  /* bmAttributes: Interrupt */
+    EP_NOTIFY_MAX_PACKET, 0x00, /* wMaxPacketSize = 16, matching ChibiOS SerialUSB */
+    0x01,                  /* bInterval = 1ms */
+
+    /* Interface 3: CDC Data */
+    9, 4,
+    3, 0,                  /* bInterfaceNumber, bAlternateSetting */
+    2,                     /* bNumEndpoints */
+    0x0A, 0x00, 0x00,      /* bInterfaceClass/SubClass/Protocol = CDC Data */
+    0,                     /* iInterface */
+
+    /* EP4 OUT: Bulk (CDC1 data host -> device) */
+    7, 5,
+    0x04,                  /* bEndpointAddress: OUT EP4 */
+    0x02,                  /* bmAttributes: Bulk */
+    EP_DATA_MAX_PACKET, 0x00, /* wMaxPacketSize = 64 */
+    0x00,                  /* bInterval */
+
+    /* EP4 IN: Bulk (CDC1 data device -> host) */
+    7, 5,
+    0x84,                  /* bEndpointAddress: IN EP4 */
+    0x02,                  /* bmAttributes: Bulk */
+    EP_DATA_MAX_PACKET, 0x00, /* wMaxPacketSize = 64 */
     0x00,                  /* bInterval */
 };
 
@@ -614,20 +679,20 @@ static const uint8_t usb_str_lang[] = {
 };
 
 static const uint8_t usb_str_manufacturer[] = {
-    8, 3,                  /* bLength, STRING */
-    'A', 0, 'P', 0, 'M', 0,
+    20, 3,                 /* bLength = 2 + 2*9, STRING */
+    'A', 0, 'r', 0, 'd', 0, 'u', 0, 'P', 0,
+    'i', 0, 'l', 0, 'o', 0, 't', 0,
 };
 
 static const uint8_t usb_str_product[] = {
-    28, 3,                 /* bLength = 2 + 2*13, STRING */
+    16, 3,                 /* bLength = 2 + 2*7, STRING */
     'C', 0, 'U', 0, 'A', 0, 'V', 0, ' ', 0,
-    'V', 0, '5', 0, ' ', 0,
-    'C', 0, 'D', 0, 'C', 0, ' ', 0, '1', 0,
+    'V', 0, '5', 0,
 };
 
 static const uint8_t usb_str_serial[] = {
-    12, 3,                 /* bLength = 2 + 2*5, STRING */
-    '0', 0, '0', 0, '0', 0, '0', 0, '1', 0,
+    18, 3,                 /* bLength = 2 + 2*8, STRING */
+    'R', 0, 'T', 0, 'T', 0, '5', 0, '7', 0, '4', 0, '0', 0, 'C', 0,
 };
 
 /* ========================================================================== */
@@ -2374,5 +2439,5 @@ bool usb_lld_send_cdc_notification(uint16_t serial_state)
     notify[8] = (uint8_t)(serial_state & 0xFF);
     notify[9] = (uint8_t)((serial_state >> 8) & 0xFF);
 
-    return usb_lld_send_rtt(3, notify, 10);
+    return usb_lld_send_rtt(1, notify, 10);
 }

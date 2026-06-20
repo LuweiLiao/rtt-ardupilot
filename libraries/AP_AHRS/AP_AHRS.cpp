@@ -205,6 +205,34 @@ const AP_Param::GroupInfo AP_AHRS::var_info[] = {
 
 extern const AP_HAL::HAL& hal;
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#define RTT_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+volatile uint32_t rtt_dbg_ahrs_update_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ahrs_update_total_accum_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ahrs_update_total_max_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ahrs_orientation_accum_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ahrs_dcm_accum_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ahrs_ekf2_accum_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ahrs_ekf3_accum_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ahrs_view_accum_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ahrs_aoa_ssa_accum_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ahrs_update_state_accum_us RTT_DBG_DTCM_BSS;
+
+#if HAL_RTT_LOOP_DIAG
+static void rtt_dbg_ahrs_accum(volatile uint32_t &slot, uint32_t start_us)
+{
+    slot += AP_HAL::micros() - start_us;
+}
+
+static void rtt_dbg_ahrs_update_max(volatile uint32_t &slot, uint32_t value)
+{
+    if (value > slot) {
+        slot = value;
+    }
+}
+#endif
+#endif
+
 // constructor
 AP_AHRS::AP_AHRS(uint8_t flags) :
     _ekf_flags(flags)
@@ -391,11 +419,20 @@ void AP_AHRS::update_state(void)
 // update run at loop rate
 void AP_AHRS::update(bool skip_ins_update)
 {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+    const uint32_t rtt_dbg_update_start_us = AP_HAL::micros();
+    uint32_t rtt_dbg_stage_start_us = rtt_dbg_update_start_us;
+    rtt_dbg_ahrs_update_calls++;
+#endif
     // periodically checks to see if we should update the AHRS
     // orientation (e.g. based on the AHRS_ORIENTATION parameter)
     // allow for runtime change of orientation
     // this makes initial config easier
     update_orientation();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+    rtt_dbg_ahrs_accum(rtt_dbg_ahrs_orientation_accum_us, rtt_dbg_stage_start_us);
+    rtt_dbg_stage_start_us = AP_HAL::micros();
+#endif
 
     if (!skip_ins_update) {
         // tell the IMU to grab some data
@@ -421,6 +458,10 @@ void AP_AHRS::update(bool skip_ins_update)
 #if AP_AHRS_DCM_ENABLED
     update_DCM();
 #endif
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+    rtt_dbg_ahrs_accum(rtt_dbg_ahrs_dcm_accum_us, rtt_dbg_stage_start_us);
+    rtt_dbg_stage_start_us = AP_HAL::micros();
+#endif
 
     // update takeoff/touchdown flags
     update_flags();
@@ -439,16 +480,32 @@ void AP_AHRS::update(bool skip_ins_update)
 #if HAL_NAVEKF2_AVAILABLE
         update_EKF2();
 #endif
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+        rtt_dbg_ahrs_accum(rtt_dbg_ahrs_ekf2_accum_us, rtt_dbg_stage_start_us);
+        rtt_dbg_stage_start_us = AP_HAL::micros();
+#endif
 #if HAL_NAVEKF3_AVAILABLE
         update_EKF3();
+#endif
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+        rtt_dbg_ahrs_accum(rtt_dbg_ahrs_ekf3_accum_us, rtt_dbg_stage_start_us);
+        rtt_dbg_stage_start_us = AP_HAL::micros();
 #endif
     } else {
         // otherwise run EKF3 first
 #if HAL_NAVEKF3_AVAILABLE
         update_EKF3();
 #endif
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+        rtt_dbg_ahrs_accum(rtt_dbg_ahrs_ekf3_accum_us, rtt_dbg_stage_start_us);
+        rtt_dbg_stage_start_us = AP_HAL::micros();
+#endif
 #if HAL_NAVEKF2_AVAILABLE
         update_EKF2();
+#endif
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+        rtt_dbg_ahrs_accum(rtt_dbg_ahrs_ekf2_accum_us, rtt_dbg_stage_start_us);
+        rtt_dbg_stage_start_us = AP_HAL::micros();
 #endif
     }
 
@@ -467,9 +524,17 @@ void AP_AHRS::update(bool skip_ins_update)
         // update optional alternative attitude view
         _view->update();
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+    rtt_dbg_ahrs_accum(rtt_dbg_ahrs_view_accum_us, rtt_dbg_stage_start_us);
+    rtt_dbg_stage_start_us = AP_HAL::micros();
+#endif
 
     // update AOA and SSA
     update_AOA_SSA();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+    rtt_dbg_ahrs_accum(rtt_dbg_ahrs_aoa_ssa_accum_us, rtt_dbg_stage_start_us);
+    rtt_dbg_stage_start_us = AP_HAL::micros();
+#endif
 
 #if HAL_GCS_ENABLED
     state.active_EKF = _active_EKF_type();
@@ -509,6 +574,12 @@ void AP_AHRS::update(bool skip_ins_update)
 
     // update published state
     update_state();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+    rtt_dbg_ahrs_accum(rtt_dbg_ahrs_update_state_accum_us, rtt_dbg_stage_start_us);
+    const uint32_t rtt_dbg_update_total_us = AP_HAL::micros() - rtt_dbg_update_start_us;
+    rtt_dbg_ahrs_update_total_accum_us += rtt_dbg_update_total_us;
+    rtt_dbg_ahrs_update_max(rtt_dbg_ahrs_update_total_max_us, rtt_dbg_update_total_us);
+#endif
 
 #if CONFIG_HAL_BOARD == HAL_BOARD_SITL
     /*

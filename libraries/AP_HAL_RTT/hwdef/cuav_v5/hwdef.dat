@@ -13,10 +13,9 @@ FLASH_RESERVE_END_KB 512
 # Match ArduPilot CUAVv5/fmuv5: 16MHz HSE -> 216MHz SYSCLK
 OSCILLATOR_HZ 16000000
 
-# Serial order — match ChibiOS fmuv5 GCS/telemetry ports while leaving UART7
-# exclusively to the RT-Thread console/shell debug port.
-# The second logical CDC function is exposed as OTG2/SERIAL6 for SLCAN.
-SERIAL_ORDER OTG1 USART2 USART3 USART1 UART4 USART6 OTG2
+# Serial order — match ChibiOS fmuv5 GCS/telemetry ports. UART7 remains
+# SERIAL6/debug, and the second logical CDC function is exposed as OTG2/SERIAL7.
+SERIAL_ORDER OTG1 USART2 USART3 USART1 UART4 USART6 UART7 OTG2
 
 # ---- USB OTG FS pins (match RT-Thread stm32f765-cuav-v5 BSP) ----
 PA8  OTG1_SOF  OTG1 AF10
@@ -125,6 +124,7 @@ PA4  SPARE2_ADC1         ADC1    SCALE(1)
 
 # USB CDC baudrate (virtual serial — actual speed is USB full-speed, but ArduPilot uses this for MAVLink bandwidth calc)
 define DEFAULT_SERIAL0_BAUD 921600
+define HAL_OTG2_PROTOCOL SerialProtocol_SLCAN
 
 define AP_CHECK_FIRMWARE_ENABLED 1
 # Battery monitor pin assignments (channel index in AnalogIn)
@@ -191,8 +191,10 @@ PF1  I2C2_SCL  I2C2  AF4
 # ---- I2C4 ----
 PF15 I2C4_SDA  I2C4  AF4
 PF14 I2C4_SCL  I2C4  AF4
-# IST8310 on I2C3 (bus 0) at 0x0E, internal, match ChibiOS fmuv5 ROTATION
-define HAL_MAG_PROBE_LIST PROBE_MAG_I2C(IST8310, 0, 0x0E, false, ROTATION_ROLL_180_YAW_90)
+# IST8310 compass probing: keep this in the same form as ChibiOS fmuv5 so the
+# generated HAL_MAG_PROBE_LIST preserves the internal/external bus wrappers.
+COMPASS IST8310 I2C:ALL_EXTERNAL:0x0E true  ROTATION_ROLL_180_YAW_90
+COMPASS IST8310 I2C:ALL_INTERNAL:0x0E false ROTATION_ROLL_180_YAW_90
 define HAL_COMPASS_ALLOW_INIT_NO_MAG 1
 define HAL_COMPASS_AUTO_ROT_DEFAULT 2
 

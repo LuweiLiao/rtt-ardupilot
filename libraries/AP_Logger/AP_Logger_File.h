@@ -93,6 +93,9 @@ private:
     const char *_log_directory;
     bool _last_write_failed;
     bool _have_ever_opened{false};
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    uint16_t _rtt_next_log_num{1};
+#endif
 
     uint32_t _io_timer_heartbeat;
     bool io_thread_alive() const;
@@ -113,6 +116,10 @@ private:
 
     bool dirent_to_log_num(const dirent *de, uint16_t &log_num) const;
     bool write_lastlog_file(uint16_t log_num);
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    void rtt_mark_start_new_log_stage(uint32_t stage, uint32_t start_ms);
+    bool rtt_should_start_file_log() const;
+#endif
 
     // write buffer
     ByteBuffer _writebuf{0};

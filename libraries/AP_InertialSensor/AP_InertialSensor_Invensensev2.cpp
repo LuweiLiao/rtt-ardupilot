@@ -74,6 +74,11 @@ AP_InertialSensor_Invensensev2::AP_InertialSensor_Invensensev2(AP_InertialSensor
     , _temp_filter(1125, 1)
     , _rotation(rotation)
     , _dev(std::move(dev))
+    , _fast_sampling(false)
+    , _gyro_fifo_downsample_rate(1)
+    , _accel_fifo_downsample_rate(1)
+    , _gyro_backend_rate_hz(1125)
+    , _accel_backend_rate_hz(1125)
 {
 }
 
@@ -257,7 +262,7 @@ void AP_InertialSensor_Invensensev2::start()
 
 // get a startup banner to output to the GCS
 bool AP_InertialSensor_Invensensev2::get_output_banner(char* banner, uint8_t banner_len) {
-    if (_fast_sampling) {
+    if (_fast_sampling && _gyro_backend_rate_hz != 0 && _gyro_fifo_downsample_rate != 0) {
         snprintf(banner, banner_len, "IMU%u: fast sampling enabled %.1fkHz/%.1fkHz",
             gyro_instance, _gyro_backend_rate_hz * _gyro_fifo_downsample_rate * 0.001, _gyro_backend_rate_hz * 0.001);
         return true;

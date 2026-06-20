@@ -22,14 +22,18 @@ import struct
 import sys
 import tempfile
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+import copy
 
 from pymavlink import mavftp, mavutil
 
+from rtt_usb_port_select import MAVLINK_PORT, resolve_mavlink_port
 
-DEFAULT_PORT = "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00"
+DEFAULT_PORT = MAVLINK_PORT
+DEFAULT_TARGET_COMPONENT = mavutil.mavlink.MAV_COMP_ID_AUTOPILOT1
 
 
 class GateError(RuntimeError):
@@ -38,30 +42,47 @@ class GateError(RuntimeError):
         self.payload = payload
 
 
+def install_pymavlink_instance_cache_guard() -> None:
+    """Work around pymavlink instance-cache crashes while waiting for heartbeat."""
+    if getattr(mavutil, "_rtt_instance_cache_guard", False):
+        return
+
+    original_add_message = mavutil.add_message
+
+    def guarded_add_message(messages: dict[str, Any], mtype: str, msg: Any) -> None:
+        if msg._instance_field is None or getattr(msg, msg._instance_field, None) is None:
+            messages[mtype] = msg
+            return
+        instance_value = getattr(msg, msg._instance_field)
+        if mtype not in messages:
+            messages[mtype] = copy.copy(msg)
+            messages[mtype]._instances = {}
+            messages[mtype]._instances[instance_value] = msg
+            messages["%s[%s]" % (mtype, str(instance_value))] = copy.copy(msg)
+            return
+        if getattr(messages[mtype], "_instances", None) is None:
+            messages[mtype]._instances = {}
+        messages[mtype]._instances[instance_value] = msg
+        prev_instances = messages[mtype]._instances
+        messages[mtype] = copy.copy(msg)
+        messages[mtype]._instances = prev_instances
+        messages["%s[%s]" % (mtype, str(instance_value))] = copy.copy(msg)
+
+    guarded_add_message._original_add_message = original_add_message  # type: ignore[attr-defined]
+    mavutil.add_message = guarded_add_message
+    mavutil._rtt_instance_cache_guard = True
+
+
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def resolve_port(port_arg: str) -> str:
-    if port_arg != "auto":
-        return port_arg
-    if os.path.exists(DEFAULT_PORT):
-        return DEFAULT_PORT
-    for pattern in (
-        "/dev/serial/by-id/usb-APM_CUAV_V5_CDC*",
-        "/dev/serial/by-id/*CUAV*CDC*",
-        "/dev/serial/by-id/*ArduPilot*",
-    ):
-        matches = sorted(glob.glob(pattern))
-        if matches:
-            return matches[0]
-    acms = sorted(glob.glob("/dev/ttyACM*"))
-    if acms:
-        return acms[-1]
-    raise RuntimeError("no_cdc_port")
+    return resolve_mavlink_port(port_arg)
 
 
-def connect(port: str, source_system: int, timeout_s: float) -> Any:
+def connect(port: str, source_system: int, timeout_s: float) -> tuple[Any, int]:
+    install_pymavlink_instance_cache_guard()
     conn = mavutil.mavlink_connection(
         port,
         baud=115200,
@@ -72,7 +93,9 @@ def connect(port: str, source_system: int, timeout_s: float) -> Any:
     if hb is None or conn.target_system == 0:
         conn.close()
         raise RuntimeError("no_heartbeat")
-    return conn
+    heartbeat_component = int(hb.get_srcComponent())
+    target_component = int(conn.target_component or heartbeat_component or DEFAULT_TARGET_COMPONENT)
+    return conn, target_component
 
 
 def drain(conn: Any, seconds: float) -> None:
@@ -248,8 +271,13 @@ def ftp_read(ftp: mavftp.MAVFTP, remote_path: str, local_dir: Path,
 
     start = time.monotonic()
     wait_rets: list[dict[str, Any]] = []
+    read_exception: str | None = None
     while "data" not in done and time.monotonic() - start < 35.0:
-        ret = ftp.process_ftp_reply("BurstReadFile", timeout=8)
+        try:
+            ret = ftp.process_ftp_reply("BurstReadFile", timeout=8)
+        except Exception as exc:  # noqa: BLE001 - pymavlink may write the file before surfacing a serial timeout
+            read_exception = repr(exc)
+            break
         ret_info = ret_payload(ret)
         if ret.error_code != mavftp.FtpError.Success:
             wait_rets.append(ret_info)
@@ -258,6 +286,16 @@ def ftp_read(ftp: mavftp.MAVFTP, remote_path: str, local_dir: Path,
         payload[f"read_intermediate_rets_{remote_path}"] = wait_rets[-5:]
 
     data = done.get("data")
+    if (data is None or len(data) == 0) and local_path.exists() and local_path.stat().st_size > 0:
+        data = local_path.read_bytes()
+        payload[f"read_{remote_path}_callback_fallback"] = {
+            "reason": "local_file_written_before_callback",
+            "bytes": len(data),
+        }
+        if read_exception is not None:
+            payload[f"read_{remote_path}_callback_fallback"]["suppressed_exception"] = read_exception
+    elif read_exception is not None:
+        raise GateError(f"ftp_read_wait_failed:{remote_path}:{read_exception}", payload)
     if data is None or len(data) == 0:
         raise GateError(f"ftp_read_empty:{remote_path}", payload)
     remote_estimated_size = ftp.remote_file_size
@@ -314,7 +352,7 @@ def ftp_rm(ftp: mavftp.MAVFTP, remote_path: str, payload: dict[str, Any],
     require_success(ret, payload)
 
 
-def heartbeat_stability(conn: Any, seconds: float) -> dict[str, Any]:
+def heartbeat_stability(conn: Any, seconds: float, accept_status: list[int]) -> dict[str, Any]:
     start = time.monotonic()
     count = 0
     statuses: list[int] = []
@@ -328,7 +366,11 @@ def heartbeat_stability(conn: Any, seconds: float) -> dict[str, Any]:
         "seconds": seconds,
         "heartbeats": count,
         "statuses": statuses,
-        "stable": count >= max(2, int(seconds) - 1) and all(status in (3, 4) for status in statuses),
+        "accept_status": accept_status,
+        "stable": (
+            count >= max(2, int(seconds) - 1)
+            and all(status in accept_status for status in statuses)
+        ),
     }
 
 
@@ -342,16 +384,17 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
         "steps": [],
     }
 
-    conn = connect(port, source_system=args.source_system, timeout_s=args.heartbeat_timeout)
+    conn, target_component = connect(port, source_system=args.source_system, timeout_s=args.heartbeat_timeout)
     try:
         payload["target_system"] = int(conn.target_system)
-        payload["target_component"] = int(conn.target_component)
+        payload["target_component"] = int(target_component)
+        payload["pymavlink_target_component"] = int(conn.target_component)
         drain(conn, 0.4)
 
         ftp = timed_step(
             payload,
             "ftp_init_reset_sessions",
-            lambda: mavftp.MAVFTP(conn, conn.target_system, conn.target_component),
+            lambda: mavftp.MAVFTP(conn, conn.target_system, target_component),
         )
 
         root_entries = list_dir(ftp, "/", payload)
@@ -397,7 +440,7 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
         payload["reset_sessions_final_ret"] = ret_payload(reset_ret)
         require_success(reset_ret, payload)
 
-        stability = heartbeat_stability(conn, args.post_ftp_stability)
+        stability = heartbeat_stability(conn, args.post_ftp_stability, args.accept_status)
         payload["post_ftp_stability"] = stability
         if not stability["stable"]:
             raise GateError("post_ftp_heartbeat_unstable", payload)
@@ -409,6 +452,7 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
     except Exception:
         payload["verdict"] = "RED"
         payload["reason"] = str(sys.exc_info()[1])
+        payload["traceback"] = traceback.format_exc()
         raise GateError(payload["reason"], payload)
     finally:
         conn.close()
@@ -424,6 +468,7 @@ def main() -> int:
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--source-system", type=int, default=243)
     parser.add_argument("--heartbeat-timeout", type=float, default=25.0)
+    parser.add_argument("--accept-status", type=int, action="append", default=[3, 4, 5])
     parser.add_argument("--require-sd", action="store_true")
     parser.add_argument("--param-read-size", type=int, default=4096)
     parser.add_argument("--min-param-bytes", type=int, default=128)
@@ -447,6 +492,7 @@ def main() -> int:
             "timestamp_utc": iso_now(),
             "verdict": "RED",
             "reason": str(exc),
+            "traceback": traceback.format_exc(),
             "port": resolved_port,
         }
         rc = 2

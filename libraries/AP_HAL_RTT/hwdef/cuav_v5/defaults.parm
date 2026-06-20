@@ -1,10 +1,13 @@
 # ChibiOS-style second logical USB CDC port for CAN SLCAN passthrough.
-SERIAL6_PROTOCOL 22
+# SERIAL6 stays UART7/debug; SERIAL7 is OTG2, matching ChibiOS fmuv5.
+SERIAL7_PROTOCOL 22
+COMPASS_USE2 0
+COMPASS_USE3 0
+FSTRATE_ENABLE 1
 CAN_P1_DRIVER 1
 CAN_D1_PROTOCOL 1
-# The bench-tested CUAV V5 connector used for USB SLCAN maps to ArduPilot's
-# second CAN interface on this RTT port. Keep CAN1 enabled, but route SLCAN to
-# CAN2 so the second USB virtual port can observe/drive the connected bus.
+# The user bench has the SLCAN debugger on CAN1. Route USB SLCAN to CAN1 by
+# default while keeping CAN2 enabled for regression tests and external setups.
 CAN_P2_DRIVER 1
 CAN_D2_PROTOCOL 1
-CAN_SLCAN_CPORT 2
+CAN_SLCAN_CPORT 1

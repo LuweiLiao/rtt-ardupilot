@@ -1,0 +1,11 @@
+# Diagnostic USB identity for Windows/Mission Planner isolation tests.
+#
+# Build with:
+#   scons --v=ArduCopter --target=cuav_v5 \
+#     --extra-hwdef=libraries/AP_HAL_RTT/hwdef/extras/windows_mavlink_only.dat
+#
+# This keeps the same MAVLink CDC data path but exposes one ChibiOS-style
+# single CDC ACM function on VID/PID 1209:5741.  If this connects in Mission
+# Planner while the default dual-CDC 1209:5740 build does not, the remaining
+# issue is Windows composite CDC/MI_02 binding rather than MAVLink TX/RX.
+define RTT_USB_MAVLINK_ONLY 1

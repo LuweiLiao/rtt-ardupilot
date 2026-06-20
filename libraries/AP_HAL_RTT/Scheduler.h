@@ -30,7 +30,7 @@
  *
  * RT-Thread (lower = higher priority):
  *   MONITOR(2) > MAIN_BOOST(3) > TIMER/SPI/RCOUT(4) > MAIN_normal(5)
- *   > RCIN(6) > I2C(7) >> UART(14) > LED(14) > STORAGE(16) > IO(18) > SCRIPTING(30)
+ *   > RCIN/UART(6) > I2C(7) >> LED(14) > STORAGE(16) > IO(18) > SCRIPTING(30)
  *
  * delay_microseconds_boost() boosts only after setup is complete. During
  * setup, main remains at startup priority so SPI/timer sensor producers can

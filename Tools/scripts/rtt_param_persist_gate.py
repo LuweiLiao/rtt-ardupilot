@@ -20,8 +20,9 @@ from typing import Any
 
 from pymavlink import mavutil
 
+from rtt_usb_port_select import MAVLINK_PORT, resolve_mavlink_port
 
-DEFAULT_PORT = "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00"
+DEFAULT_PORT = MAVLINK_PORT
 DEFAULT_PARAM_CANDIDATES = ("LOG_DISARMED", "SR0_RAW_SENS", "SR0_EXT_STAT")
 
 
@@ -43,27 +44,7 @@ def realpath_or_self(path: str) -> str:
 
 
 def resolve_port(port_arg: str) -> str:
-    if port_arg != "auto":
-        return port_arg
-
-    if os.path.exists(DEFAULT_PORT):
-        return DEFAULT_PORT
-
-    patterns = (
-        "/dev/serial/by-id/usb-APM_CUAV_V5_CDC*",
-        "/dev/serial/by-id/*CUAV*CDC*",
-        "/dev/serial/by-id/*ArduPilot*",
-    )
-    for pattern in patterns:
-        matches = sorted(glob.glob(pattern))
-        if matches:
-            return matches[0]
-
-    acms = sorted(glob.glob("/dev/ttyACM*"))
-    if acms:
-        return acms[-1]
-
-    raise RuntimeError("no_cdc_port")
+    return resolve_mavlink_port(port_arg)
 
 
 def connect(port: str, source_system: int = 248, timeout_s: float = 25.0) -> Any:

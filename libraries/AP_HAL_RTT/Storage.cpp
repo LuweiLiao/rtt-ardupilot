@@ -399,6 +399,27 @@ bool Storage::flush(uint32_t timeout_ms)
 
 bool Storage::healthy()
 {
+    if (_initialisedType != StorageBackend::None && !_dirty_mask.empty()) {
+        /*
+         * [Cybernetics Ch.4] Closed-loop: on RTT the low-priority storage
+         * thread can be starved by a healthy 400 Hz main loop.  If arming is
+         * checking storage while dirty data is pending, advance one bounded
+         * flush step here so health reflects real persistence progress instead
+         * of background-thread scheduling luck.
+         */
+        _timer_tick();
+    }
+    if (_initialisedType != StorageBackend::None && _dirty_mask.empty()) {
+        /*
+         * [Cybernetics Ch.4] Closed-loop: RT-Thread can keep the low-priority
+         * storage thread off CPU while the 400 Hz main loop is healthy.  If no
+         * dirty lines are pending, storage is already durable; refresh the
+         * health timestamp here instead of requiring a background tick only to
+         * rediscover an empty mask.  Dirty data still relies on _timer_tick()
+         * progress and keeps the original timeout semantics.
+         */
+        _last_empty_ms = AP_HAL::millis();
+    }
     const bool ok = ((_initialisedType != StorageBackend::None) &&
                      (AP_HAL::millis() - _last_empty_ms < 2000U));
 #if AP_RTT_STORAGE_DEBUG

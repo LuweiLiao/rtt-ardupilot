@@ -1,4 +1,4 @@
-"""Host USB CDC presence sensor agent (setpoint 1209:5741)."""
+"""Host USB CDC presence sensor agent (setpoint 1209:5740)."""
 from __future__ import annotations
 
 import subprocess
@@ -19,5 +19,5 @@ class HostCDCSensorAgent:
             out = subprocess.check_output(["lsusb"], text=True, stderr=subprocess.DEVNULL)
         except (subprocess.CalledProcessError, FileNotFoundError):
             return False, []
-        ids = [ln.strip() for ln in out.splitlines() if "1209:5741" in ln]
+        ids = [ln.strip() for ln in out.splitlines() if "1209:5740" in ln]
         return bool(ids), ids

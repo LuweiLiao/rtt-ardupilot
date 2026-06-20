@@ -8,7 +8,7 @@
 Setpoint (期望)
   ├─ main 循环 iter ≥ 50，loop_entry = 0x12345678
   ├─ usb_init = 2，configured = 1
-  └─ 主机 lsusb 出现 1209:5741 (USB CDC)
+  └─ 主机 lsusb 出现 1209:5740 (USB CDC)
 
         ↓ 误差 e(t)
 
@@ -36,7 +36,7 @@ Actuator (执行)
 
 | 设备 | 用途 | 典型 VID:PID |
 |------|------|----------------|
-| PA11/12 OTG | SERIAL0 CDC（setpoint） | 1209:5741 |
+| PA11/12 OTG | SERIAL0 CDC（setpoint） | 1209:5740 |
 | UART7 + CH340 | RT 控制台 / RTT_CTL | 1a86:55d3 → `/dev/ttyACM0` |
 | ST-Link | 烧录 + OpenOCD 传感器 | 0483:3748 |
 
@@ -91,7 +91,7 @@ python3 Tools/scripts/rtt_control_loop/rtt_control_loop.py --once --no-session
 | C5 | USB/Init | usb_init、USBRST |
 | C6 | EP0/Enum | setup_stup、configured |
 | C7 | MainLoop | iter、loop_hz、overrun |
-| C8 | HostCDC | lsusb 1209:5741 |
+| C8 | HostCDC | lsusb 1209:5740 |
 | C9 | Actuator | 编译+烧录建议/执行 |
 
 当前 C1–C8 以**诊断与行动建议**为主；自动改代码需后续把 `FIX_EP0` 等 action 接到补丁 agent。C9 在 `--auto-actuator` 下可闭环烧录。

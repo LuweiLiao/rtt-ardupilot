@@ -26,11 +26,13 @@ import sys
 import time
 from datetime import datetime, timezone
 from typing import Any
+import copy
 
 from pymavlink import mavutil
 
+from rtt_usb_port_select import MAVLINK_PORT, resolve_mavlink_port
 
-DEFAULT_PORT = "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00"
+DEFAULT_PORT = MAVLINK_PORT
 
 MSG_INTERVALS = {
     mavutil.mavlink.MAVLINK_MSG_ID_SYS_STATUS: 250000,
@@ -53,27 +55,50 @@ DRIVER_SENSOR_BITS = ("gyro", "accel", "mag", "baro", "logging")
 CALIBRATION_SENSOR_BITS = ("ahrs",)
 
 
+def install_pymavlink_instance_cache_guard() -> None:
+    """Keep pymavlink instance-message caching from tripping on RAW_IMU.
+
+    The RTT board streams instance-bearing messages such as RAW_IMU.  Some
+    pymavlink builds can leave the cached message object with ``_instances``
+    unset, which later causes ``add_message`` to crash while handling the
+    stream.  This local guard initializes the missing cache dictionary only on
+    that narrow path.
+    """
+    if getattr(mavutil, "_rtt_instance_cache_guard", False):
+        return
+
+    original_add_message = mavutil.add_message
+
+    def guarded_add_message(messages: dict[str, Any], mtype: str, msg: Any) -> None:
+        if msg._instance_field is None or getattr(msg, msg._instance_field, None) is None:
+            messages[mtype] = msg
+            return
+        instance_value = getattr(msg, msg._instance_field)
+        if mtype not in messages:
+            messages[mtype] = copy.copy(msg)
+            messages[mtype]._instances = {}
+            messages[mtype]._instances[instance_value] = msg
+            messages["%s[%s]" % (mtype, str(instance_value))] = copy.copy(msg)
+            return
+        if getattr(messages[mtype], "_instances", None) is None:
+            messages[mtype]._instances = {}
+        messages[mtype]._instances[instance_value] = msg
+        prev_instances = messages[mtype]._instances
+        messages[mtype] = copy.copy(msg)
+        messages[mtype]._instances = prev_instances
+        messages["%s[%s]" % (mtype, str(instance_value))] = copy.copy(msg)
+
+    guarded_add_message._original_add_message = original_add_message  # type: ignore[attr-defined]
+    mavutil.add_message = guarded_add_message
+    mavutil._rtt_instance_cache_guard = True
+
+
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def resolve_port(port_arg: str) -> str:
-    if port_arg != "auto":
-        return port_arg
-    if os.path.exists(DEFAULT_PORT):
-        return DEFAULT_PORT
-    for pattern in (
-        "/dev/serial/by-id/usb-APM_CUAV_V5_CDC*",
-        "/dev/serial/by-id/*CUAV*CDC*",
-        "/dev/serial/by-id/*ArduPilot*",
-    ):
-        matches = sorted(glob.glob(pattern))
-        if matches:
-            return matches[0]
-    acms = sorted(glob.glob("/dev/ttyACM*"))
-    if acms:
-        return acms[-1]
-    raise RuntimeError("no_cdc_port")
+    return resolve_mavlink_port(port_arg)
 
 
 def wait_for_port(port_arg: str, timeout_s: float, retry_s: float) -> tuple[str, float]:
@@ -94,7 +119,11 @@ def wait_for_port(port_arg: str, timeout_s: float, retry_s: float) -> tuple[str,
         time.sleep(retry_s)
 
 
-def wait_standby(conn: Any, timeout_s: float) -> tuple[bool, float, int | None]:
+def wait_accepted_status(
+    conn: Any,
+    timeout_s: float,
+    accepted_statuses: set[int],
+) -> tuple[bool, float, int | None]:
     start = time.monotonic()
     last_status = None
     while time.monotonic() - start < timeout_s:
@@ -102,12 +131,12 @@ def wait_standby(conn: Any, timeout_s: float) -> tuple[bool, float, int | None]:
         if msg is None:
             continue
         last_status = int(msg.system_status)
-        if last_status == 3:
+        if last_status in accepted_statuses:
             return True, time.monotonic() - start, last_status
     return False, time.monotonic() - start, last_status
 
 
-def connect_and_wait_standby(args: argparse.Namespace) -> tuple[Any | None, str, float, bool, float, int | None, str | None]:
+def connect_and_wait_status(args: argparse.Namespace) -> tuple[Any | None, str, float, bool, float, int | None, str | None]:
     start = time.monotonic()
     deadline = start + args.port_wait_timeout + args.settle_timeout
     last_error: str | None = None
@@ -131,8 +160,12 @@ def connect_and_wait_standby(args: argparse.Namespace) -> tuple[Any | None, str,
 
         try:
             remaining_settle = max(0.1, deadline - time.monotonic())
-            standby_ok, settle_s, last_status = wait_standby(conn, remaining_settle)
-            return conn, port, accumulated_port_wait, standby_ok, time.monotonic() - start, last_status, None
+            status_ok, settle_s, last_status = wait_accepted_status(
+                conn,
+                remaining_settle,
+                set(args.accept_status),
+            )
+            return conn, port, accumulated_port_wait, status_ok, time.monotonic() - start, last_status, None
         except Exception as exc:  # noqa: BLE001 - CDC may be mid re-enumeration after reset
             last_error = str(exc)
             try:
@@ -285,7 +318,8 @@ def evaluate(payload: dict[str, Any], strict_prearm_health: bool) -> tuple[str, 
 
 
 def run_gate(args: argparse.Namespace) -> dict[str, Any]:
-    conn, port, port_wait_s, standby_ok, settle_s, last_status, connect_error = connect_and_wait_standby(args)
+    install_pymavlink_instance_cache_guard()
+    conn, port, port_wait_s, status_ok, settle_s, last_status, connect_error = connect_and_wait_status(args)
     if conn is None:
         return {
             "timestamp_utc": iso_now(),
@@ -297,15 +331,16 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
             "last_system_status": last_status,
         }
     try:
-        if not standby_ok:
+        if not status_ok:
             return {
                 "timestamp_utc": iso_now(),
                 "port": port,
                 "port_wait_s": round(port_wait_s, 3),
                 "verdict": "RED",
-                "reason": "no_standby",
+                "reason": "no_accepted_status",
                 "settle_s": round(settle_s, 3),
                 "last_system_status": last_status,
+                "accepted_statuses": sorted(set(args.accept_status)),
             }
 
         drain(conn, 0.4)
@@ -348,6 +383,9 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
             "settle_s": round(settle_s, 3),
             "sample_s": args.sample,
             "last_system_status": last_status,
+            "standby_ok": status_ok,
+            "status_ok": status_ok,
+            "accepted_statuses": sorted(set(args.accept_status)),
             "counts": counts,
             "sensor_bits": bit_state(sys_status),
             "sensor_observations": sensor_observation_summary(sensor_observations),
@@ -391,6 +429,7 @@ def main() -> int:
     parser.add_argument("--reconnect-retry", type=float, default=0.25)
     parser.add_argument("--sample", type=float, default=15.0)
     parser.add_argument("--source-system", type=int, default=244)
+    parser.add_argument("--accept-status", type=int, action="append", default=[3, 4, 5])
     parser.add_argument("--strict-prearm-health", action="store_true",
                         help="fail the gate when AHRS/pre-arm calibration health is not green")
     args = parser.parse_args()

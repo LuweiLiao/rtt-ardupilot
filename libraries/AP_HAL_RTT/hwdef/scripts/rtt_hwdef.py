@@ -130,6 +130,44 @@ class RTTHWDef(HWDef):
         self.ram_base = 0x20000000
         self.mcu_family = ''
 
+    def write_MAG_config(self, f):
+        '''write MAG config defines.
+
+        The shared HWDef duplicate check keys only on the post-parsed device
+        expression.  ChibiOS boards such as fmuv5 legitimately probe the same
+        compass address through ALL_EXTERNAL and ALL_INTERNAL wrappers, which
+        both expand to GET_I2C_DEVICE(b,addr).  Keep those wrappers in the
+        duplicate key so RTT can use the same hwdef compass lines.
+        '''
+        devlist = []
+        seen = set()
+        for dev_in in self.compass_list:
+            dev = list(dev_in)
+            driver = dev[0]
+            probe = 'probe'
+            wrapper = ''
+            a = driver.split(':')
+            driver = a[0]
+            if len(a) > 1 and a[1].startswith('probe'):
+                probe = a[1]
+            for i in range(1, len(dev)):
+                if dev[i].startswith("SPI:"):
+                    dev[i] = self.parse_spi_device(dev[i])
+                elif dev[i].startswith("I2C:"):
+                    (wrapper, dev[i]) = self.parse_i2c_device(dev[i])
+            seen_key = str([driver, wrapper, dev[1]] + dev[2:])
+            if seen_key in seen:
+                self.error("Duplicate MAG: %s" % seen_key)
+            seen.add(seen_key)
+            n = len(devlist)+1
+            devlist.append('HAL_MAG_PROBE%u' % n)
+            f.write(
+                '#define HAL_MAG_PROBE%u %s ADD_BACKEND(DRIVER_%s, AP_Compass_%s::%s(%s))\n'
+                % (n, wrapper, driver, driver, probe, ','.join(dev[1:])))
+            f.write(f"#undef AP_COMPASS_{driver}_ENABLED\n#define AP_COMPASS_{driver}_ENABLED 1\n")
+        if len(devlist) > 0:
+            f.write('#define HAL_MAG_PROBE_LIST %s\n\n' % ';'.join(devlist))
+
     def process_line(self, line, depth=0):
         """Extend base class to handle all pin types and config keys."""
         import shlex
@@ -304,6 +342,12 @@ class RTTHWDef(HWDef):
         except ValueError:
             return default
 
+    def get_user_define(self, key, default=None):
+        for parts in self.user_defines:
+            if parts and parts[0] == key:
+                return ' '.join(parts[1:]) if len(parts) > 1 else ''
+        return default
+
     # ===================== hwdef.h generation =====================
 
     def write_hwdef_header_content(self, f):
@@ -427,9 +471,25 @@ class RTTHWDef(HWDef):
                 f.write('#define HAL_RTT_SERIAL0_OTG 0\n')
         else:
             f.write('#define HAL_RTT_SERIAL0_OTG 0\n')
-        if any(name.upper() == 'OTG2' for name in serial_order):
+        otg2_index = None
+        for i, name in enumerate(serial_order):
+            if name.upper() == 'OTG2':
+                otg2_index = i
+                break
+        if otg2_index is not None:
+            otg2_protocol = self.get_user_define('HAL_OTG2_PROTOCOL', 'SerialProtocol_MAVLink2')
             f.write('#define HAL_OTG2_CONFIG 1\n')
+            f.write('#define HAL_OTG2_UART_INDEX %d\n' % otg2_index)
             f.write('#define HAL_HAVE_DUAL_USB_CDC 1\n')
+            f.write('#ifndef HAL_OTG2_PROTOCOL\n')
+            f.write('#define HAL_OTG2_PROTOCOL %s\n' % otg2_protocol)
+            f.write('#endif\n')
+            f.write('''
+#if defined(HAL_NUM_CAN_IFACES) && HAL_NUM_CAN_IFACES
+#define DEFAULT_SERIAL%d_PROTOCOL HAL_OTG2_PROTOCOL
+#define DEFAULT_SERIAL%d_BAUD 115200
+#endif
+''' % (otg2_index, otg2_index))
 
         f.write('#define HAL_RTT_UART_DEVICE_LIST %s\n' % ', '.join(device_names))
 
@@ -598,6 +658,8 @@ class RTTHWDef(HWDef):
         """Write user-defined macros."""
         for parts in self.user_defines:
             name = parts[0]
+            if name == 'HAL_OTG2_PROTOCOL':
+                continue
             value = ' '.join(parts[1:]) if len(parts) > 1 else ''
             if value:
                 f.write('#define %s %s\n' % (name, value))

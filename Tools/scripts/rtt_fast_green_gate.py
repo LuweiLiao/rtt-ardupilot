@@ -29,6 +29,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+from rtt_usb_port_select import resolve_mavlink_port
+
 
 LOCK_PATH = "/tmp/fast_green_gate.lock"
 DEFAULT_SETTLE_MAX_S = 40.0
@@ -87,31 +89,11 @@ def resolve_port(port_arg: str) -> tuple[str | None, str | None]:
     if port_arg != "auto":
         return (port_arg, port_arg) if os.path.exists(port_arg) else (None, port_arg)
 
-    by_id_dir = "/dev/serial/by-id"
-    excluded_realpaths: set[str] = set()
-    if os.path.isdir(by_id_dir):
-        for name in os.listdir(by_id_dir):
-            # CH343/CH341 USB-TTL is the UART7 RT-Thread console, not MAVLink CDC.
-            if "1a86_USB_Single_Serial" in name or "STLink" in name or "ST-LINK" in name:
-                excluded_realpaths.add(realpath_or_self(os.path.join(by_id_dir, name)))
-
-    patterns = [
-        "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00",
-        "/dev/serial/by-id/usb-APM_CUAV_V5_CDC*",
-        "/dev/serial/by-id/*CUAV*CDC*",
-        "/dev/serial/by-id/*ArduPilot*CUAV*",
-        "/dev/serial/by-id/*ArduPilot*",
-    ]
-    for pattern in patterns:
-        matches = sorted(glob.glob(pattern))
-        if matches:
-            return matches[0], matches[0]
-
-    acms = [
-        dev for dev in sorted(glob.glob("/dev/ttyACM*"))
-        if realpath_or_self(dev) not in excluded_realpaths
-    ]
-    return (acms[0], acms[0]) if acms else (None, "auto")
+    try:
+        port = resolve_mavlink_port("auto", allow_tty_fallback=True)
+        return port, port
+    except RuntimeError:
+        return None, "auto"
 
 
 def pgrep_exact(name: str) -> list[str]:

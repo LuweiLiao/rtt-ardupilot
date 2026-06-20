@@ -3,6 +3,7 @@
  * Single OTG_FS_IRQHandler — does not link usb_glue_st.c or hal_usb_lld_rtt.c.
  */
 #include <stm32f7xx.h>
+#include <rthw.h>
 #include <rtthread.h>
 #include "usbd_core.h"
 
@@ -11,6 +12,14 @@
 #define L7_PWR_CR2_USV       (1U << 24)
 
 extern uint32_t SystemCoreClock;
+
+#if !defined(RTT_USB_PREINIT_DISCONNECT_US) && defined(RTT_USB_PREINIT_DISCONNECT_MS)
+#define RTT_USB_PREINIT_DISCONNECT_US ((uint32_t)RTT_USB_PREINIT_DISCONNECT_MS * 1000U)
+#endif
+
+#ifndef RTT_USB_PREINIT_DISCONNECT_US
+#define RTT_USB_PREINIT_DISCONNECT_US 1500U
+#endif
 
 static USB_OTG_DeviceTypeDef *l7_usb_device(void)
 {
@@ -40,6 +49,15 @@ void l7_usb_hw_preinit(void)
 {
     l7_usb_clock_gpio();
     l7_usb_soft_disconnect();
+    /*
+     * [Cybernetics Ch.4] Closed-loop: force the host to observe the handover
+     * from the ArduPilot bootloader's single CDC device to the RTT app's
+     * composite CDC device. Windows is less tolerant than Linux here and can
+     * otherwise keep the old single-COM ArduPilot node alive.
+     */
+    if (RTT_USB_PREINIT_DISCONNECT_US > 0U) {
+        rt_hw_us_delay(RTT_USB_PREINIT_DISCONNECT_US);
+    }
 }
 
 void usb_dc_low_level_init(uint8_t busid)

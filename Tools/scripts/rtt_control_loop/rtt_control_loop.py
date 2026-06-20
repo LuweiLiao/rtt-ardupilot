@@ -3,7 +3,7 @@
 RTT closed-loop control orchestrator (control-theory layout).
 
 Plant:        CUAV V5 firmware (STM32F767 RT-Thread ArduPilot)
-Setpoint:     main loop running + USB CDC 1209:5741 enumerated/configured
+Setpoint:     main loop running + USB CDC 1209:5740 enumerated/configured
 Sensors:      UART7 + OpenOCD/GDB + host lsusb (parallel agent threads)
 Controllers:  10 parallel agents (C0–C9)
 Actuator:     OpenOCD compile+flash (optional --auto-actuator)

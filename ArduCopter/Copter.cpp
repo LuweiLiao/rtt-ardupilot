@@ -83,6 +83,24 @@
 
 const AP_HAL::HAL& hal = AP_HAL::get_HAL();
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#define RTT_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+volatile uint32_t rtt_dbg_copter_read_ahrs_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_copter_read_ahrs_accum_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_copter_read_ahrs_max_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_copter_read_ahrs_slow_count RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_copter_read_ahrs_calls RTT_DBG_DTCM_BSS;
+
+#if HAL_RTT_LOOP_DIAG
+static void rtt_dbg_copter_update_max(volatile uint32_t &slot, uint32_t value)
+{
+    if (value > slot) {
+        slot = value;
+    }
+}
+#endif
+#endif
+
 #define SCHED_TASK(func, rate_hz, _max_time_micros, _prio) SCHED_TASK_CLASS(Copter, &copter, func, rate_hz, _max_time_micros, _prio)
 #define FAST_TASK(func) FAST_TASK_CLASS(Copter, &copter, func)
 
@@ -157,11 +175,6 @@ const AP_Scheduler::Task Copter::scheduler_tasks[] = {
 #if AP_OPTICALFLOW_ENABLED
     SCHED_TASK_CLASS(AP_OpticalFlow,          &copter.optflow,             update,         200, 160,  12),
 #endif
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-    // [Cybernetics Ch.4] Closed-loop: RTT USB CDC needs frequent GCS service under full flight load.
-    SCHED_TASK_CLASS(GCS,                  (GCS*)&copter._gcs,          update_receive, 400, 180,  13),
-    SCHED_TASK_CLASS(GCS,                  (GCS*)&copter._gcs,          update_send,    400, 550,  14),
-#endif
     SCHED_TASK(update_batt_compass,   10,    120, 15),
     SCHED_TASK_CLASS(RC_Channels, (RC_Channels*)&copter.g2.rc_channels, read_aux_all,    10,  50,  18),
 #if TOY_MODE_ENABLED
@@ -212,10 +225,8 @@ const AP_Scheduler::Task Copter::scheduler_tasks[] = {
 #endif
     SCHED_TASK(standby_update,        100,    75,  96),
     SCHED_TASK(lost_vehicle_check,    10,     50,  99),
-#if CONFIG_HAL_BOARD != HAL_BOARD_RTT
     SCHED_TASK_CLASS(GCS,                  (GCS*)&copter._gcs,          update_receive, 400, 180, 102),
     SCHED_TASK_CLASS(GCS,                  (GCS*)&copter._gcs,          update_send,    400, 550, 105),
-#endif
 #if HAL_MOUNT_ENABLED
     SCHED_TASK_CLASS(AP_Mount,             &copter.camera_mount,        update,          50,  75, 108),
 #endif
@@ -906,8 +917,21 @@ void Copter::update_super_simple_bearing(bool force_update)
 
 void Copter::read_AHRS(void)
 {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+    const uint32_t rtt_dbg_start_us = AP_HAL::micros();
+    rtt_dbg_copter_read_ahrs_calls++;
+#endif
     // we tell AHRS to skip INS update as we have already done it in FAST_TASK.
     ahrs.update(true);
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+    const uint32_t rtt_dbg_elapsed_us = AP_HAL::micros() - rtt_dbg_start_us;
+    rtt_dbg_copter_read_ahrs_us = rtt_dbg_elapsed_us;
+    rtt_dbg_copter_read_ahrs_accum_us += rtt_dbg_elapsed_us;
+    if (rtt_dbg_elapsed_us > 1000U) {
+        rtt_dbg_copter_read_ahrs_slow_count++;
+    }
+    rtt_dbg_copter_update_max(rtt_dbg_copter_read_ahrs_max_us, rtt_dbg_elapsed_us);
+#endif
 }
 
 // read baro and log control tuning

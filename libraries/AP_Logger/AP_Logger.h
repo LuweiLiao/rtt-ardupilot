@@ -375,6 +375,7 @@ public:
     bool vehicle_is_armed() const { return _armed; }
 
     void handle_log_send();
+    bool mavlink_log_transfer_active() const { return _log_sending_link != nullptr; }
     bool in_log_download() const;
 
     float quiet_nanf() const { return NaNf; } // "AR"

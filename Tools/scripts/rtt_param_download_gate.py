@@ -19,8 +19,9 @@ from typing import Any
 
 from pymavlink import mavutil
 
+from rtt_usb_port_select import MAVLINK_PORT, resolve_mavlink_port
 
-DEFAULT_PORT = "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00"
+DEFAULT_PORT = MAVLINK_PORT
 
 
 def iso_now() -> str:
@@ -28,22 +29,7 @@ def iso_now() -> str:
 
 
 def resolve_port(port_arg: str) -> str:
-    if port_arg != "auto":
-        return port_arg
-    if os.path.exists(DEFAULT_PORT):
-        return DEFAULT_PORT
-    for pattern in (
-        "/dev/serial/by-id/usb-APM_CUAV_V5_CDC*",
-        "/dev/serial/by-id/*CUAV*CDC*",
-        "/dev/serial/by-id/*ArduPilot*",
-    ):
-        matches = sorted(glob.glob(pattern))
-        if matches:
-            return matches[0]
-    acms = sorted(glob.glob("/dev/ttyACM*"))
-    if acms:
-        return acms[-1]
-    raise RuntimeError("no_cdc_port")
+    return resolve_mavlink_port(port_arg)
 
 
 def param_name(msg: Any) -> str:
@@ -60,7 +46,11 @@ def drain(conn: Any, seconds: float) -> None:
             time.sleep(0.01)
 
 
-def wait_standby(conn: Any, timeout_s: float) -> tuple[bool, float, int | None]:
+def wait_accepted_status(
+    conn: Any,
+    timeout_s: float,
+    accepted_statuses: set[int],
+) -> tuple[bool, float, int | None]:
     start = time.monotonic()
     last_status = None
     while time.monotonic() - start < timeout_s:
@@ -68,7 +58,7 @@ def wait_standby(conn: Any, timeout_s: float) -> tuple[bool, float, int | None]:
         if msg is None:
             continue
         last_status = int(msg.system_status)
-        if last_status == 3:
+        if last_status in accepted_statuses:
             return True, time.monotonic() - start, last_status
     return False, time.monotonic() - start, last_status
 
@@ -99,16 +89,23 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
         source_system=args.source_system,
     )
     try:
-        standby_ok, settle_s, last_status = wait_standby(conn, args.settle_timeout)
+        accepted_statuses = set(args.accept_status)
+        status_ok, settle_s, last_status = wait_accepted_status(
+            conn,
+            args.settle_timeout,
+            accepted_statuses,
+        )
         payload.update({
-            "standby_ok": standby_ok,
+            "standby_ok": status_ok,
+            "status_ok": status_ok,
             "settle_s": round(settle_s, 3),
             "last_system_status": last_status,
+            "accepted_statuses": sorted(accepted_statuses),
             "target_system": int(conn.target_system),
             "target_component": int(conn.target_component),
         })
-        if not standby_ok or conn.target_system == 0:
-            payload.update({"verdict": "RED", "reason": "no_standby"})
+        if not status_ok or conn.target_system == 0:
+            payload.update({"verdict": "RED", "reason": "no_accepted_status"})
             return payload
 
         drain(conn, args.drain)
@@ -221,6 +218,7 @@ def main() -> int:
     parser.add_argument("--max-gap", type=float, default=1.0)
     parser.add_argument("--min-rate", type=float, default=90.0)
     parser.add_argument("--source-system", type=int, default=245)
+    parser.add_argument("--accept-status", type=int, action="append", default=[3, 4, 5])
     args = parser.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)

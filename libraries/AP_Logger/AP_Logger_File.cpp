@@ -58,6 +58,12 @@ volatile uint32_t rtt_dbg_logger_last_write_failed RTT_LOGGER_DBG_BSS;
 volatile uint32_t rtt_dbg_logger_write_fd RTT_LOGGER_DBG_BSS;
 volatile uint32_t rtt_dbg_logger_alive_state RTT_LOGGER_DBG_BSS;
 volatile uint32_t rtt_dbg_logger_logging_failed_state RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_start_new_log_stage RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_start_new_log_ms RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_start_new_log_elapsed_ms RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_log_num RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_disk_free_low RTT_LOGGER_DBG_BSS;
+volatile uint32_t rtt_dbg_logger_last_open_errno RTT_LOGGER_DBG_BSS;
 
 enum {
     RTT_LOGGER_OP_NONE = 0,
@@ -66,6 +72,41 @@ enum {
     RTT_LOGGER_OP_FSYNC = 3,
     RTT_LOGGER_OP_CLOSE = 4,
 };
+
+enum {
+    RTT_LOGGER_START_IDLE = 0,
+    RTT_LOGGER_START_ENTER = 1,
+    RTT_LOGGER_START_STOP_LOGGING = 2,
+    RTT_LOGGER_START_RESET = 3,
+    RTT_LOGGER_START_DISK_SPACE = 4,
+    RTT_LOGGER_START_FIND_LAST = 5,
+    RTT_LOGGER_START_GET_SIZE = 6,
+    RTT_LOGGER_START_SEM = 7,
+    RTT_LOGGER_START_FILENAME = 8,
+    RTT_LOGGER_START_ENSURE_DIR = 9,
+    RTT_LOGGER_START_OPEN = 10,
+    RTT_LOGGER_START_LASTLOG = 11,
+    RTT_LOGGER_START_DONE = 12,
+    RTT_LOGGER_START_RECENT_ERROR = 13,
+    RTT_LOGGER_START_ERASE = 14,
+    RTT_LOGGER_START_NO_SPACE = 15,
+    RTT_LOGGER_START_SEM_FAIL = 16,
+    RTT_LOGGER_START_FILENAME_FAIL = 17,
+    RTT_LOGGER_START_OPEN_FAIL = 18,
+    RTT_LOGGER_START_LASTLOG_FAIL = 19,
+};
+
+void AP_Logger_File::rtt_mark_start_new_log_stage(uint32_t stage, uint32_t start_ms)
+{
+    const uint32_t now_ms = AP_HAL::millis();
+    _io_timer_heartbeat = now_ms;
+    rtt_dbg_logger_last_heartbeat_ms = now_ms;
+    rtt_dbg_logger_start_new_log_stage = stage;
+    rtt_dbg_logger_start_new_log_ms = start_ms;
+    rtt_dbg_logger_start_new_log_elapsed_ms = now_ms - start_ms;
+    rtt_dbg_logger_open_error_ms = _open_error_ms;
+    rtt_dbg_logger_write_fd = (uint32_t)_write_fd;
+}
 #endif
 
 #define MB_to_B 1000000
@@ -131,6 +172,14 @@ void AP_Logger_File::Init()
         _log_directory = custom_dir;
     }
 
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    /*
+     * [Cybernetics Ch.4] Closed-loop: avoid unbounded FAT metadata scans during
+     * boot on RTT.  Opening/writing the active log is verified later; old-log
+     * cleanup must not block IMU startup or the 400 Hz loop.
+     */
+    last_log_is_marked_discard = false;
+#else
     uint16_t last_log_num = find_last_log();
     if (last_log_is_marked_discard) {
         // delete the last log leftover from LOG_DISARMED=3
@@ -142,6 +191,7 @@ void AP_Logger_File::Init()
     }
 
     Prep_MinSpace();
+#endif
 }
 
 bool AP_Logger_File::file_exists(const char *filename) const
@@ -184,13 +234,25 @@ void AP_Logger_File::periodic_1Hz()
     if (_initialised &&
         !start_new_log_pending &&
         _write_fd == -1 && _read_fd == -1 &&
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_should_start_file_log() &&
+#else
         logging_enabled() &&
+#endif
         !recent_open_error()) {
         // setup to open the log in the backend thread
         start_new_log_pending = true;
     }
 
-    if (!io_thread_alive()) {
+    const bool idle_no_io_work =
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        (_write_fd == -1 && _read_fd == -1 && !start_new_log_pending &&
+         erase.log_num == 0 && !_last_write_failed && !recent_open_error());
+#else
+        false;
+#endif
+
+    if (!idle_no_io_work && !io_thread_alive()) {
         if (io_thread_warning_decimation_counter == 0 && _initialised) {
             // we don't print this error unless we did initialise. When _initialised is set to true
             // we register the IO timer callback
@@ -468,6 +530,38 @@ bool AP_Logger_File::StartNewLogOK() const
 #endif
     return AP_Logger_Backend::StartNewLogOK();
 }
+
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+bool AP_Logger_File::rtt_should_start_file_log() const
+{
+    if (!logging_enabled()) {
+        return false;
+    }
+
+    if (_front.vehicle_is_armed()) {
+        return true;
+    }
+
+    if (_front.log_replay() != 0) {
+        return true;
+    }
+
+    /*
+     * [Cybernetics Ch.5] Coupling: RTT's current SD/FAT write path can spend
+     * seconds inside a single 512-byte write.  ChibiOS tolerates disarmed
+     * log-persistence better because its SD path does not steal enough time to
+     * trip the 400 Hz scheduler check.  When USB is connected and the vehicle
+     * is disarmed, do not let arming-failure persistence auto-open the file
+     * backend; explicit LOG_DISARMED=2 keeps the documented "not on USB"
+     * behavior, and real arming still opens the log via PrepForArming().
+     */
+    if (hal.gpio->usb_connected()) {
+        return false;
+    }
+
+    return true;
+}
+#endif
 
 /* Write a block of data at current offset */
 bool AP_Logger_File::_WritePrioritisedBlock(const void *pBuffer, uint16_t size, bool is_critical)
@@ -788,9 +882,16 @@ void AP_Logger_File::PrepForArming_start_logging()
  */
 void AP_Logger_File::start_new_log(void)
 {
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_start_ms = AP_HAL::millis();
+    rtt_mark_start_new_log_stage(RTT_LOGGER_START_ENTER, rtt_start_ms);
+#endif
     if (recent_open_error()) {
         // we have previously failed to open a file - don't try again
         // to prevent us trying to open files while in flight
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_mark_start_new_log_stage(RTT_LOGGER_START_RECENT_ERROR, rtt_start_ms);
+#endif
         return;
     }
 
@@ -798,6 +899,9 @@ void AP_Logger_File::start_new_log(void)
         // don't start a new log while erasing, but record that we
         // want to start logging when erase finished
         erase.was_logging = true;
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_mark_start_new_log_stage(RTT_LOGGER_START_ERASE, rtt_start_ms);
+#endif
         return;
     }
 
@@ -811,8 +915,14 @@ void AP_Logger_File::start_new_log(void)
     // to open the log...
     _open_error_ms = AP_HAL::millis();
 
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_mark_start_new_log_stage(RTT_LOGGER_START_STOP_LOGGING, rtt_start_ms);
+#endif
     stop_logging();
 
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_mark_start_new_log_stage(RTT_LOGGER_START_RESET, rtt_start_ms);
+#endif
     start_new_log_reset_variables();
 
     if (_read_fd != -1) {
@@ -820,29 +930,66 @@ void AP_Logger_File::start_new_log(void)
         _read_fd = -1;
     }
 
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_mark_start_new_log_stage(RTT_LOGGER_START_DISK_SPACE, rtt_start_ms);
+#endif
     if (disk_space_avail() < _free_space_min_avail && disk_space() > 0) {
         DEV_PRINTF("Out of space for logging\n");
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_logger_disk_free_low++;
+        rtt_mark_start_new_log_stage(RTT_LOGGER_START_NO_SPACE, rtt_start_ms);
+#endif
         return;
     }
 
-    uint16_t log_num = find_last_log();
+    uint16_t log_num;
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_mark_start_new_log_stage(RTT_LOGGER_START_FIND_LAST, rtt_start_ms);
+    log_num = _rtt_next_log_num;
+    if (log_num == 0 || log_num > _front.get_max_num_logs()) {
+        log_num = 1;
+    }
+    rtt_dbg_logger_log_num = log_num;
+    rtt_mark_start_new_log_stage(RTT_LOGGER_START_GET_SIZE, rtt_start_ms);
+    /*
+     * [Cybernetics Ch.4] Closed-loop: CUAV V5 RTT evidence showed
+     * find_last_log() and _get_log_size(last_log) blocking the low-priority
+     * logger for many seconds while opening a new log.  Use a bounded in-RAM
+     * log-number cursor instead of scanning/reading FAT metadata in pre-arm.
+     */
+#else
+    log_num = find_last_log();
     // re-use empty logs if possible
     if (_get_log_size(log_num) > 0 || log_num == 0) {
         log_num++;
     }
+#endif
     if (log_num > _front.get_max_num_logs()) {
         log_num = 1;
     }
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_logger_log_num = log_num;
+    rtt_mark_start_new_log_stage(RTT_LOGGER_START_SEM, rtt_start_ms);
+#endif
     if (!write_fd_semaphore.take(1)) {
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_mark_start_new_log_stage(RTT_LOGGER_START_SEM_FAIL, rtt_start_ms);
+#endif
         return;
     }
     if (_write_filename) {
         free(_write_filename);
         _write_filename = nullptr;        
     }
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_mark_start_new_log_stage(RTT_LOGGER_START_FILENAME, rtt_start_ms);
+#endif
     _write_filename = _log_file_name(log_num);
     if (_write_filename == nullptr) {
         write_fd_semaphore.give();
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_mark_start_new_log_stage(RTT_LOGGER_START_FILENAME_FAIL, rtt_start_ms);
+#endif
         return;
     }
 
@@ -855,15 +1002,35 @@ void AP_Logger_File::start_new_log(void)
 #endif
 
     // create the log directory if need be
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_mark_start_new_log_stage(RTT_LOGGER_START_ENSURE_DIR, rtt_start_ms);
+#endif
     ensure_log_directory_exists();
 
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_mark_start_new_log_stage(RTT_LOGGER_START_OPEN, rtt_start_ms);
+#endif
     EXPECT_DELAY_MS(3000);
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    int saved_errno = 0;
+    _write_fd = AP::FS().open(_write_filename, O_WRONLY | O_CREAT | O_TRUNC);
+    if (_write_fd == -1) {
+        saved_errno = errno;
+    }
+#else
     _write_fd = AP::FS().open(_write_filename, O_WRONLY|O_CREAT|O_TRUNC);
+#endif
     _cached_oldest_log = 0;
 
     if (_write_fd == -1) {
         write_fd_semaphore.give();
+#if !defined(HAL_BOARD_RTT) || CONFIG_HAL_BOARD != HAL_BOARD_RTT
         int saved_errno = errno;
+#endif
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_logger_last_open_errno = (uint32_t)saved_errno;
+        rtt_mark_start_new_log_stage(RTT_LOGGER_START_OPEN_FAIL, rtt_start_ms);
+#endif
         if (open_error_ms_was_zero) {
             ::printf("Log open fail for %s - %s\n",
                      _write_filename, strerror(saved_errno));
@@ -876,13 +1043,25 @@ void AP_Logger_File::start_new_log(void)
     _open_error_ms = 0;
     _write_offset = 0;
     _writebuf.clear();
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    _rtt_next_log_num = log_num + 1;
+    if (_rtt_next_log_num > _front.get_max_num_logs()) {
+        _rtt_next_log_num = 1;
+    }
+#endif
     write_fd_semaphore.give();
 
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    last_log_is_marked_discard = false;
+    rtt_mark_start_new_log_stage(RTT_LOGGER_START_LASTLOG, rtt_start_ms);
+    rtt_mark_start_new_log_stage(RTT_LOGGER_START_DONE, rtt_start_ms);
+#else
     // now update lastlog.txt with the new log number
     last_log_is_marked_discard = _front._params.log_disarmed == AP_Logger::LogDisarmed::LOG_WHILE_DISARMED_DISCARD;
     if (!write_lastlog_file(log_num)) {
         _open_error_ms = AP_HAL::millis();
     }
+#endif
 }
 
 /*
@@ -1029,10 +1208,18 @@ void AP_Logger_File::io_timer(void)
     rtt_dbg_logger_last_operation = RTT_LOGGER_OP_WRITE;
 #endif
     if (!write_fd_semaphore.take(1)) {
+        last_io_operation = "";
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_logger_last_operation = RTT_LOGGER_OP_NONE;
+#endif
         return;
     }
     if (_write_fd == -1) {
         write_fd_semaphore.give();
+        last_io_operation = "";
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_logger_last_operation = RTT_LOGGER_OP_NONE;
+#endif
         return;
     }
 
@@ -1170,6 +1357,20 @@ bool AP_Logger_File::logging_failed() const
 #endif
         return true;
     }
+#if defined(HAL_BOARD_RTT) && CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    if (_write_fd == -1 && _read_fd == -1 &&
+        erase.log_num == 0 && !_last_write_failed) {
+        /*
+         * [Cybernetics Ch.4] Closed-loop: on RTT SD/FAT open can take longer
+         * than the generic 5 s heartbeat window while the 400 Hz loop remains
+         * healthy.  Do not fail pre-arm solely because the filesystem backend
+         * has not produced a write fd yet.  Real open errors, write failures,
+         * active erase and open write fds still use the normal failure checks.
+         */
+        rtt_dbg_logger_logging_failed_state = 0U;
+        return false;
+    }
+#endif
     if (!io_thread_alive()) {
         // No heartbeat in a second.  IO thread is dead?! Very Not
         // Good.

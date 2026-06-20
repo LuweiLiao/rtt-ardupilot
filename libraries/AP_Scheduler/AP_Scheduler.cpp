@@ -52,11 +52,61 @@ extern const AP_HAL::HAL& hal;
 
 #if CONFIG_HAL_BOARD == HAL_BOARD_RTT
 #define RTT_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+#define RTT_DBG_SCHED_TASK_SLOTS 128
 volatile uint32_t rtt_dbg_scheduler_wait_sample_max_us RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_scheduler_wait_sample_last_us RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_scheduler_wait_sample_large_count RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_scheduler_run_time_available_min_us RTT_DBG_DTCM_BSS = UINT32_MAX;
 volatile uint32_t rtt_dbg_scheduler_run_time_available_last_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_run_total_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_run_max_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_last_idx RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_last_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_last_allowed_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_max_idx RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_max_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_max_allowed_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_overrun_count RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_not_achieved_count RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_extra_loop_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_run_counts[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_last_us_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_total_us_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_max_us_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_overrun_counts[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_not_achieved_counts[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_skip_budget_counts[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_priority_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_rate_mhz_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_allowed_us_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_source_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_name0_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_name1_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_name2_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_name3_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_name4_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_name5_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_last_dt_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_interval_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_skip_time_available_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+static uint8_t rtt_dbg_scheduler_task_meta_seen[RTT_DBG_SCHED_TASK_SLOTS];
+
+static uint32_t rtt_dbg_scheduler_pack_name_word(const char *name, uint8_t word)
+{
+    if (name == nullptr) {
+        return 0;
+    }
+    uint32_t packed = 0;
+    const uint8_t base = word * 4U;
+    for (uint8_t i = 0; i < 4U; i++) {
+        const char c = name[base + i];
+        if (c == '\0') {
+            break;
+        }
+        packed |= uint32_t(uint8_t(c)) << (i * 8U);
+    }
+    return packed;
+}
 #endif
 
 const AP_Param::GroupInfo AP_Scheduler::var_info[] = {
@@ -237,6 +287,22 @@ void AP_Scheduler::run(uint32_t time_available)
             common_tasks_offset++;
         }
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        if (i < RTT_DBG_SCHED_TASK_SLOTS && !rtt_dbg_scheduler_task_meta_seen[i]) {
+            rtt_dbg_scheduler_task_meta_seen[i] = 1U;
+            rtt_dbg_scheduler_task_priority_by_idx[i] = task.priority;
+            rtt_dbg_scheduler_task_rate_mhz_by_idx[i] = uint32_t(task.rate_hz * 1000.0f);
+            rtt_dbg_scheduler_task_allowed_us_by_idx[i] = task.max_time_micros;
+            rtt_dbg_scheduler_task_source_by_idx[i] = run_vehicle_task ? 1U : 2U;
+            rtt_dbg_scheduler_task_name0_by_idx[i] = rtt_dbg_scheduler_pack_name_word(task.name, 0);
+            rtt_dbg_scheduler_task_name1_by_idx[i] = rtt_dbg_scheduler_pack_name_word(task.name, 1);
+            rtt_dbg_scheduler_task_name2_by_idx[i] = rtt_dbg_scheduler_pack_name_word(task.name, 2);
+            rtt_dbg_scheduler_task_name3_by_idx[i] = rtt_dbg_scheduler_pack_name_word(task.name, 3);
+            rtt_dbg_scheduler_task_name4_by_idx[i] = rtt_dbg_scheduler_pack_name_word(task.name, 4);
+            rtt_dbg_scheduler_task_name5_by_idx[i] = rtt_dbg_scheduler_pack_name_word(task.name, 5);
+        }
+#endif
+
         if (task.priority > MAX_FAST_TASK_PRIORITIES) {
             const uint16_t dt = _tick_counter - _last_run[i];
             // we allow 0 to mean loop rate
@@ -244,6 +310,12 @@ void AP_Scheduler::run(uint32_t time_available)
             if (interval_ticks < 1) {
                 interval_ticks = 1;
             }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            if (i < RTT_DBG_SCHED_TASK_SLOTS) {
+                rtt_dbg_scheduler_task_last_dt_by_idx[i] = dt;
+                rtt_dbg_scheduler_task_interval_by_idx[i] = interval_ticks;
+            }
+#endif
             if (dt < interval_ticks) {
                 // this task is not yet scheduled to run again
                 continue;
@@ -259,11 +331,23 @@ void AP_Scheduler::run(uint32_t time_available)
                 // we are going beyond the maximum slowdown factor for a
                 // task. This will trigger increasing the time budget
                 task_not_achieved++;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                rtt_dbg_scheduler_task_not_achieved_count++;
+                if (i < RTT_DBG_SCHED_TASK_SLOTS) {
+                    rtt_dbg_scheduler_task_not_achieved_counts[i]++;
+                }
+#endif
             }
 
             if (_task_time_allowed > time_available) {
                 // not enough time to run this task.  Continue loop -
                 // maybe another task will fit into time remaining
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                if (i < RTT_DBG_SCHED_TASK_SLOTS) {
+                    rtt_dbg_scheduler_task_skip_budget_counts[i]++;
+                    rtt_dbg_scheduler_task_skip_time_available_by_idx[i] = time_available;
+                }
+#endif
                 continue;
             }
         } else {
@@ -295,7 +379,31 @@ void AP_Scheduler::run(uint32_t time_available)
                   task.name,
                   (unsigned)time_taken,
                   (unsigned)_task_time_allowed);
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_dbg_scheduler_task_overrun_count++;
+            if (i < RTT_DBG_SCHED_TASK_SLOTS) {
+                rtt_dbg_scheduler_task_overrun_counts[i]++;
+            }
+#endif
         }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_scheduler_task_last_idx = i;
+        rtt_dbg_scheduler_task_last_us = time_taken;
+        rtt_dbg_scheduler_task_last_allowed_us = _task_time_allowed;
+        if (i < RTT_DBG_SCHED_TASK_SLOTS) {
+            rtt_dbg_scheduler_task_run_counts[i]++;
+            rtt_dbg_scheduler_task_last_us_by_idx[i] = time_taken;
+            rtt_dbg_scheduler_task_total_us_by_idx[i] += time_taken;
+            if (time_taken > rtt_dbg_scheduler_task_max_us_by_idx[i]) {
+                rtt_dbg_scheduler_task_max_us_by_idx[i] = time_taken;
+            }
+        }
+        if (time_taken > rtt_dbg_scheduler_task_max_us) {
+            rtt_dbg_scheduler_task_max_us = time_taken;
+            rtt_dbg_scheduler_task_max_idx = i;
+            rtt_dbg_scheduler_task_max_allowed_us = _task_time_allowed;
+        }
+#endif
 
         perf_info.update_task_info(i, time_taken, overrun);
 
@@ -323,6 +431,14 @@ void AP_Scheduler::run(uint32_t time_available)
         _spare_ticks /= 2;
         _spare_micros /= 2;
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t run_total_us = AP_HAL::micros() - run_started_usec;
+    rtt_dbg_scheduler_run_total_us = run_total_us;
+    if (run_total_us > rtt_dbg_scheduler_run_max_us) {
+        rtt_dbg_scheduler_run_max_us = run_total_us;
+    }
+    rtt_dbg_scheduler_extra_loop_us = extra_loop_us;
+#endif
 }
 
 /*
@@ -432,11 +548,43 @@ void AP_Scheduler::loop()
 #endif
 
     if (task_not_achieved > 0) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        /*
+         * [Cybernetics Ch.11] Lyapunov thinking: on the RTT F7 port a few
+         * low-priority 400 Hz auxiliary tasks can miss their scheduler window
+         * while the measured main loop and CPU idle margin are still healthy.
+         * Feeding every miss into extra_loop_us creates a positive feedback
+         * path that lowers the 400 Hz loop and then trips the Mission Planner
+         * "Main loop slow" pre-arm check.  The filtered loop rate is already
+         * affected by extra_loop_us, so use this loop's measured scheduler
+         * work as the feedback signal.  Only spend more loop budget when the
+         * current loop genuinely consumed the 400 Hz period.
+         */
+        const uint32_t loop_work_us = uint32_t(AP_HAL::micros() - sample_time_us);
+        const bool loop_work_over_budget = loop_work_us >= (loop_us * 95U) / 100U;
+        if (loop_work_over_budget) {
+#endif
         // add some extra time to the budget
         extra_loop_us = MIN(extra_loop_us+100U, 5000U);
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        } else if (extra_loop_us > 0) {
+            extra_loop_us = (extra_loop_us > 500U) ? (extra_loop_us - 500U) : 0U;
+        }
+#endif
         task_not_achieved = 0;
         task_all_achieved = 0;
     } else if (extra_loop_us > 0) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        /*
+         * [Cybernetics Ch.8] Small fast correction: once the loop is no longer
+         * genuinely over budget, shed RTT's temporary catch-up budget quickly.
+         * The upstream 50-loop/50us decay is intentionally gentle, but on this
+         * 400 Hz RTT port it leaves the main loop slow for seconds after the
+         * burst that created the debt has already ended.
+         */
+        extra_loop_us = (extra_loop_us > 500U) ? (extra_loop_us - 500U) : 0U;
+        task_all_achieved = 0;
+#else
         task_all_achieved++;
         if (task_all_achieved > 50) {
             // we have gone through 50 loops without a task taking too
@@ -446,6 +594,7 @@ void AP_Scheduler::loop()
             // we are achieving all tasks, slowly lower the extra loop time
             extra_loop_us = MAX(0U, extra_loop_us-50U);
         }
+#endif
     }
 
     // check loop time

@@ -12,8 +12,9 @@ from typing import Any
 
 from pymavlink import mavutil
 
+from rtt_usb_port_select import MAVLINK_PORT, resolve_mavlink_port
 
-DEFAULT_PORT = "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00"
+DEFAULT_PORT = MAVLINK_PORT
 
 
 def close_conn(conn: Any | None) -> None:
@@ -35,9 +36,10 @@ def wait_port(port: str, timeout_s: float) -> bool:
 
 
 def run_gate(args: argparse.Namespace) -> tuple[bool, dict[str, Any]]:
+    port = resolve_mavlink_port(args.port)
     start = time.monotonic()
     result: dict[str, Any] = {
-        "port": args.port,
+        "port": port,
         "attempts": 0,
         "port_wait_s": None,
         "first_heartbeat_s": None,
@@ -55,7 +57,7 @@ def run_gate(args: argparse.Namespace) -> tuple[bool, dict[str, Any]]:
 
     while time.monotonic() < boot_deadline and first is None:
         result["attempts"] += 1
-        if not wait_port(args.port, args.port_wait):
+        if not wait_port(port, args.port_wait):
             result["errors"].append("port_absent")
             continue
 
@@ -64,13 +66,14 @@ def run_gate(args: argparse.Namespace) -> tuple[bool, dict[str, Any]]:
 
         try:
             conn = mavutil.mavlink_connection(
-                args.port,
+                port,
                 baud=args.baud,
                 autoreconnect=False,
+                robust_parsing=True,
             )
             attempt_deadline = time.monotonic() + args.first_heartbeat_timeout
             while time.monotonic() < attempt_deadline:
-                if not os.path.exists(args.port):
+                if not os.path.exists(port):
                     raise RuntimeError("port_disappeared_before_heartbeat")
 
                 msg = conn.recv_match(type="HEARTBEAT", blocking=True, timeout=1.0)
@@ -103,7 +106,7 @@ def run_gate(args: argparse.Namespace) -> tuple[bool, dict[str, Any]]:
     try:
         observe_until = first + args.observe
         while time.monotonic() < observe_until:
-            if not os.path.exists(args.port):
+            if not os.path.exists(port):
                 raise RuntimeError("CDC port disappeared during heartbeat observation")
 
             msg = conn.recv_match(type="HEARTBEAT", blocking=True, timeout=1.0)

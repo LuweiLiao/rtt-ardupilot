@@ -1,0 +1,44 @@
+[Version]
+Signature="$Windows NT$"
+Class=Ports
+ClassGuid={4D36E978-E325-11CE-BFC1-08002BE10318}
+Provider=%ProviderName%
+DriverVer=06/15/2026,1.0.1.0
+
+[Manufacturer]
+%ManufacturerName%=DeviceList,NTamd64
+
+[DestinationDirs]
+DefaultDestDir=12
+
+[DeviceList.NTamd64]
+%MavlinkPort%=DriverInstall,USB\VID_1209&PID_5740&MI_00
+%SlcanPort%=DriverInstall,USB\VID_1209&PID_5740&MI_02
+
+[DriverInstall.NT]
+Include=mdmcpq.inf
+CopyFiles=FakeModemCopyFileSection
+AddReg=DriverInstall.NT.AddReg
+
+[DriverInstall.NT.AddReg]
+HKR,,DevLoader,,*ntkern
+HKR,,NTMPDriver,,usbser.sys
+HKR,,EnumPropPages32,,"MsPorts.dll,SerialPortPropPageProvider"
+
+[DriverInstall.NT.Services]
+AddService=usbser,0x00000002,DriverServiceInst
+
+[DriverServiceInst]
+DisplayName=%ServiceName%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\usbser.sys
+LoadOrderGroup=Base
+
+[Strings]
+ProviderName="ArduPilot RTT"
+ManufacturerName="ArduPilot RTT"
+MavlinkPort="ArduPilot RTT CUAV V5 MAVLink CDC (MI_00)"
+SlcanPort="ArduPilot RTT CUAV V5 SLCAN CDC (MI_02)"
+ServiceName="USB Serial Driver"

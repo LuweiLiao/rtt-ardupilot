@@ -2,7 +2,7 @@
  * test_S_mavlink_usb — Subsystem: USB CDC + MAVLink HEARTBEAT on hal.serial(0)
  *
  * CherryUSB + HAL UARTDriver serial(0), same link as D_usb_serial.
- * Host: open ACM 1209:5741 @ 921600; pymavlink wait_heartbeat or parse msgid 0.
+ * Host: open ACM 1209:5740 @ 921600; pymavlink wait_heartbeat or parse msgid 0.
  *
  * Build: scons --target=cuav_v5 --test=S_mavlink_usb -j$(nproc)
  */
@@ -111,7 +111,7 @@ static void step_mavlink_usb_smoke(void)
     s0->printf("S_mavlink_usb CDC MAVLink smoke\r\n");
     pump_usb_tx(s0, 40);
 
-    test_printf("    host: ACM 1209:5741 @921600 pymavlink wait_heartbeat\r\n");
+    test_printf("    host: ACM 1209:5740 @921600 pymavlink wait_heartbeat\r\n");
     test_printf("    note: UART7=test_runner; periodic HEARTBEAT in main loop\r\n");
 
     TEST_PASS();

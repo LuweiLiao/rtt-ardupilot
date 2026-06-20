@@ -244,6 +244,92 @@ volatile uint32_t rtt_dbg_ins_cal_i = 0;
 volatile uint32_t rtt_dbg_ins_cal_converged = 0;
 extern "C" volatile uint32_t rtt_cpu_idle_pct;
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#define RTT_DBG_THREAD_SLOTS 32
+volatile uint32_t rtt_dbg_thread_switch_counts[RTT_DBG_THREAD_SLOTS] __attribute__((section(".dtcm_bss.rtt_dbg"), used));
+volatile uint32_t rtt_dbg_thread_run_total_us_by_idx[RTT_DBG_THREAD_SLOTS] __attribute__((section(".dtcm_bss.rtt_dbg"), used));
+volatile uint32_t rtt_dbg_thread_run_last_us_by_idx[RTT_DBG_THREAD_SLOTS] __attribute__((section(".dtcm_bss.rtt_dbg"), used));
+volatile uint32_t rtt_dbg_thread_run_max_us_by_idx[RTT_DBG_THREAD_SLOTS] __attribute__((section(".dtcm_bss.rtt_dbg"), used));
+volatile uint32_t rtt_dbg_thread_priority_by_idx[RTT_DBG_THREAD_SLOTS] __attribute__((section(".dtcm_bss.rtt_dbg"), used));
+volatile uint32_t rtt_dbg_thread_name0_by_idx[RTT_DBG_THREAD_SLOTS] __attribute__((section(".dtcm_bss.rtt_dbg"), used));
+volatile uint32_t rtt_dbg_thread_name1_by_idx[RTT_DBG_THREAD_SLOTS] __attribute__((section(".dtcm_bss.rtt_dbg"), used));
+volatile uint32_t rtt_dbg_thread_name2_by_idx[RTT_DBG_THREAD_SLOTS] __attribute__((section(".dtcm_bss.rtt_dbg"), used));
+volatile uint32_t rtt_dbg_thread_name3_by_idx[RTT_DBG_THREAD_SLOTS] __attribute__((section(".dtcm_bss.rtt_dbg"), used));
+volatile uint32_t rtt_dbg_thread_hook_calls __attribute__((section(".dtcm_bss.rtt_dbg"), used));
+volatile uint32_t rtt_dbg_thread_hook_overflow __attribute__((section(".dtcm_bss.rtt_dbg"), used));
+
+static rt_thread_t rtt_dbg_thread_slots[RTT_DBG_THREAD_SLOTS];
+static uint8_t rtt_dbg_thread_slot_count;
+static rt_thread_t rtt_dbg_thread_current;
+static uint32_t rtt_dbg_thread_current_start_us;
+
+static uint32_t rtt_dbg_pack_thread_name_word(const char *name, uint8_t word)
+{
+    uint32_t packed = 0;
+    const uint8_t base = word * 4U;
+    for (uint8_t i = 0; i < 4U; i++) {
+        const char c = name ? name[base + i] : '\0';
+        if (c == '\0') {
+            break;
+        }
+        packed |= uint32_t(uint8_t(c)) << (i * 8U);
+    }
+    return packed;
+}
+
+static int8_t rtt_dbg_thread_slot(rt_thread_t thread)
+{
+    if (thread == nullptr) {
+        return -1;
+    }
+    for (uint8_t i = 0; i < rtt_dbg_thread_slot_count; i++) {
+        if (rtt_dbg_thread_slots[i] == thread) {
+            return i;
+        }
+    }
+    if (rtt_dbg_thread_slot_count >= RTT_DBG_THREAD_SLOTS) {
+        rtt_dbg_thread_hook_overflow++;
+        return -1;
+    }
+    const uint8_t idx = rtt_dbg_thread_slot_count++;
+    rtt_dbg_thread_slots[idx] = thread;
+    rtt_dbg_thread_priority_by_idx[idx] = RT_SCHED_PRIV(thread).current_priority;
+    rtt_dbg_thread_name0_by_idx[idx] = rtt_dbg_pack_thread_name_word(thread->parent.name, 0);
+    rtt_dbg_thread_name1_by_idx[idx] = rtt_dbg_pack_thread_name_word(thread->parent.name, 1);
+    rtt_dbg_thread_name2_by_idx[idx] = rtt_dbg_pack_thread_name_word(thread->parent.name, 2);
+    rtt_dbg_thread_name3_by_idx[idx] = rtt_dbg_pack_thread_name_word(thread->parent.name, 3);
+    return idx;
+}
+
+static void rtt_dbg_scheduler_hook(rt_thread_t from, rt_thread_t to)
+{
+    const uint32_t now_us = AP_HAL::micros();
+    rtt_dbg_thread_hook_calls++;
+
+    if (rtt_dbg_thread_current != nullptr) {
+        const int8_t from_idx = rtt_dbg_thread_slot(rtt_dbg_thread_current);
+        if (from_idx >= 0) {
+            const uint32_t elapsed_us = now_us - rtt_dbg_thread_current_start_us;
+            rtt_dbg_thread_run_last_us_by_idx[from_idx] = elapsed_us;
+            rtt_dbg_thread_run_total_us_by_idx[from_idx] += elapsed_us;
+            if (elapsed_us > rtt_dbg_thread_run_max_us_by_idx[from_idx]) {
+                rtt_dbg_thread_run_max_us_by_idx[from_idx] = elapsed_us;
+            }
+        }
+    } else if (from != nullptr) {
+        (void)rtt_dbg_thread_slot(from);
+    }
+
+    const int8_t to_idx = rtt_dbg_thread_slot(to);
+    if (to_idx >= 0) {
+        rtt_dbg_thread_switch_counts[to_idx]++;
+        rtt_dbg_thread_priority_by_idx[to_idx] = RT_SCHED_PRIV(to).current_priority;
+    }
+    rtt_dbg_thread_current = to;
+    rtt_dbg_thread_current_start_us = now_us;
+}
+#endif
+
 #ifndef HAL_RTT_UART7_PERIODIC_TELEMETRY
 #define HAL_RTT_UART7_PERIODIC_TELEMETRY 0
 #endif
@@ -322,7 +408,6 @@ static void _main_loop_entry(void* arg)
     rtt_dbg_hal_run_called = 0x11111111;  /* Second magic number after setup */
 
     uint32_t last_loop_us = AP_HAL::micros();
-    uint8_t service_yield_counter = 0;
     for (;;) {
         rtt_dbg_boost_calls_per_loop = 0;
         rtt_dbg_boost_total_us_per_loop = 0;
@@ -339,22 +424,14 @@ static void _main_loop_entry(void* arg)
         rtt_dbg_work_time_us = work;
         if (work > rtt_dbg_work_time_max_us) rtt_dbg_work_time_max_us = work;
         if (work > 2500) rtt_dbg_overrun_count++;
-        if (!schedulerInstance.check_called_boost()) {
-            /*
-             * [Cybernetics Ch.4] Closed-loop: RTT sub-200us delays are DWT
-             * busy-waits, unlike ChibiOS chThdSleep() calls.  Periodically
-             * yield a real RT-Thread tick so lower-priority IO/storage/logger
-             * threads can update heartbeats without promoting them above the
-             * 400Hz main loop budget.
-             */
-            if (++service_yield_counter >= 32) {
-                service_yield_counter = 0;
-                rtt_dbg_main_loop_service_yield_count++;
-                rt_thread_mdelay(1);
-            } else {
-                hal.scheduler->delay_microseconds(50);
-            }
-        }
+        /*
+         * [Cybernetics Ch.15] Extremum seeking: match ChibiOS' main-loop
+         * contract.  The 400Hz scheduler already waits in wait_for_sample()
+         * and RT-Thread can run other ready threads while the main loop blocks
+         * there.  A fixed post-loop sleep injects open-loop phase delay into
+         * every cycle and makes AP_Scheduler's extra_loop_us controller lower
+         * the effective loop rate under normal GCS/logging load.
+         */
         schedulerInstance.watchdog_pat();
         uint32_t now_us = AP_HAL::micros();
         uint32_t dt = now_us - last_loop_us;
@@ -419,6 +496,12 @@ void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
     ((RTT::Scheduler*)scheduler)->set_callbacks(callbacks);
 
     scheduler->init();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && defined(RT_USING_HOOK) && 0
+    rt_scheduler_sethook(rtt_dbg_scheduler_hook);
+    rtt_dbg_thread_current = rt_thread_self();
+    rtt_dbg_thread_current_start_us = AP_HAL::micros();
+    (void)rtt_dbg_thread_slot(rtt_dbg_thread_current);
+#endif
 
     /*
      * Init GPIO output pins (sensor power rails, etc.) BEFORE any

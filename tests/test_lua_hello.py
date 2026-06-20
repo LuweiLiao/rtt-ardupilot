@@ -18,7 +18,7 @@ from test_mavftp import MavFTP, FTP_OP_Ack, FTP_OP_Nack  # noqa: E402
 DEFAULT_PORT = os.environ.get("MAVFTP_PORT", "/dev/ttyACM1")
 HELLO_SCRIPT = Path("libraries/AP_Scripting/examples/hello_world.lua")
 SCRIPT_DIR = "/APM/scripts"
-CDC_SYMLINK_PATTERN = "usb-ArduPilot_CUAVv5_RTT_"
+CDC_SYMLINK_PATTERN = "usb-ArduPilot_CUAVv5_"
 
 
 def find_rtt_cdc_port():

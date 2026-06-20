@@ -34,6 +34,16 @@
 
 extern const AP_HAL::HAL& hal;
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#define RTT_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+volatile uint32_t rtt_dbg_slcan_report_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_slcan_report_sent RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_slcan_report_no_space RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_slcan_report_low_space_drops RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_slcan_report_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_slcan_report_max_us RTT_DBG_DTCM_BSS;
+#endif
+
 const AP_Param::GroupInfo SLCAN::CANIface::var_info[] = {
     // @Param: CPORT
     // @DisplayName: SLCAN Route
@@ -314,6 +324,21 @@ int16_t SLCAN::CANIface::reportFrame(const AP_HAL::CANFrame& frame, uint64_t tim
 #endif
     uint8_t buffer[SLCANMaxFrameSize] = {'\0'};
     uint8_t* p = &buffer[0];
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_start_us = AP_HAL::micros();
+    rtt_dbg_slcan_report_calls++;
+    /*
+     * [Cybernetics Ch.4] Closed-loop: SLCAN is a diagnostic bridge, not a
+     * flight-critical data path.  If the USB CDC host stops draining after a
+     * SocketCAN/slcand session, do not keep formatting every CAN frame and
+     * feeding a growing USB backlog.  Drop bridge output until the host catches
+     * up; CAN traffic and DroneCAN handling on the real bus continue normally.
+     */
+    if (_port->txspace() < 256U) {
+        rtt_dbg_slcan_report_low_space_drops++;
+        return 0;
+    }
+#endif
     /*
     * Frame type
     */
@@ -381,12 +406,26 @@ int16_t SLCAN::CANIface::reportFrame(const AP_HAL::CANFrame& frame, uint64_t tim
     const auto frame_size = unsigned(p - &buffer[0]);
 
     if (_port->txspace() < frame_size) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_slcan_report_no_space++;
+#endif
         return 0;
     }
     //Write to Serial
     if (!_port->write_locked(&buffer[0], frame_size, _serial_lock_key)) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_slcan_report_no_space++;
+#endif
         return 0;
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_us = AP_HAL::micros() - rtt_start_us;
+    rtt_dbg_slcan_report_us = rtt_us;
+    if (rtt_us > rtt_dbg_slcan_report_max_us) {
+        rtt_dbg_slcan_report_max_us = rtt_us;
+    }
+    rtt_dbg_slcan_report_sent++;
+#endif
     return 1;
 }
 

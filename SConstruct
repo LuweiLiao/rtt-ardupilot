@@ -245,8 +245,9 @@ if canonical_target:
     # 4) If build (not clean), optionally copy rtthread.bin to build/rtt_<target>/
     if not is_clean:
         _copy_bin_to_build(ap_root, canonical_target, bsp_deploy_abspath)
-        # 5) If --upload: rtthread.bin -> rtt_bin_to_apj.py -> uploader.py
-        if GetOption('upload'):
+        # 5) Always refresh APJ packaging after a full app build.  --upload only
+        #    controls whether uploader.py is run afterwards.
+        if not test_name:
             rtthread_bin = os.path.join(bsp_deploy_abspath, 'rtthread.bin')
             if not os.path.isfile(rtthread_bin):
                 print('error: rtthread.bin not found at %s' % rtthread_bin, file=sys.stderr)
@@ -254,9 +255,11 @@ if canonical_target:
             board_apj = RTT_TARGETS[canonical_target]['board']
             rtt_bin_to_apj = os.path.join(ap_root, 'Tools', 'scripts', 'rtt_bin_to_apj.py')
             apj_path = os.path.join(bsp_deploy_abspath, 'arducopter.apj')
-            cmd = [sys.executable, rtt_bin_to_apj, rtthread_bin, '--board', board_apj, '-o', apj_path, '--upload']
-            if GetOption('upload_port'):
-                cmd += ['--port', GetOption('upload_port')]
+            cmd = [sys.executable, rtt_bin_to_apj, rtthread_bin, '--board', board_apj, '-o', apj_path]
+            if GetOption('upload'):
+                cmd += ['--upload']
+                if GetOption('upload_port'):
+                    cmd += ['--port', GetOption('upload_port')]
             ret = subprocess.call(cmd)
             if ret != 0:
                 Exit(ret)

@@ -31,12 +31,30 @@
 #include <AP_Filesystem/AP_Filesystem.h>
 #include <AP_Logger/AP_Logger.h>
 #include <rtthread.h>
+#include <cstring>
 /* STM32F7 HAL/CMSIS registers for RCC/PWR/RTC backup domain access */
 #include <stm32f7xx.h>
 
 #include "rtt_dbg_bkp.h"
 
 volatile uint32_t rtt_dbg_sw_reboot_count = 0;
+volatile uint32_t rtt_dbg_monitor_loop_delay_ms = 0;
+volatile uint32_t rtt_dbg_monitor_loop_delay_max_ms = 0;
+volatile uint32_t rtt_dbg_monitor_stuck_count = 0;
+volatile uint32_t rtt_dbg_monitor_stuck_task = 0;
+volatile uint32_t rtt_dbg_monitor_stuck_semline = 0;
+
+extern volatile uint32_t rtt_dbg_boost_calls_per_loop;
+extern volatile uint32_t rtt_dbg_boost_total_us_per_loop;
+volatile uint32_t rtt_dbg_boost_calls_total = 0;
+volatile uint32_t rtt_dbg_boost_requested_us_total = 0;
+volatile uint32_t rtt_dbg_boost_elapsed_us_total = 0;
+volatile uint32_t rtt_dbg_boost_yield_count_total = 0;
+volatile uint32_t rtt_dbg_boost_last_requested_us = 0;
+volatile uint32_t rtt_dbg_boost_last_elapsed_us = 0;
+volatile uint32_t rtt_dbg_boost_last_yield_elapsed_us = 0;
+volatile uint32_t rtt_dbg_boost_lowprio_sleep_count = 0;
+volatile uint32_t rtt_dbg_boost_lowprio_sleep_last_ms = 0;
 
 static bool rtt_stack_range_valid(const void *stack_addr, uint32_t stack_size)
 {
@@ -94,8 +112,9 @@ void Scheduler::_delay_microseconds_dwt(uint16_t us)
     const uint32_t cycles = us * (SystemCoreClock / 1000000U);
     const uint32_t start = DWT_CYCCNT_REG;
     uint32_t poll_div = 0;
+    const bool poll_usb = !usb_lld_is_configured_rtt();
     while ((DWT_CYCCNT_REG - start) < cycles) {
-        if (!usb_lld_is_configured_rtt() && ((++poll_div & 0x3FU) == 0U)) {
+        if (poll_usb && ((++poll_div & 0x3FU) == 0U)) {
             _poll_usb_if_active();
         }
         /* spin — compiler barrier only, no DSB.
@@ -303,8 +322,15 @@ void Scheduler::_monitor_thread_entry(void *arg)
 
         uint32_t now = AP_HAL::millis();
         uint32_t loop_delay = now - sched->last_watchdog_pat_ms;
+        rtt_dbg_monitor_loop_delay_ms = loop_delay;
+        if (loop_delay > rtt_dbg_monitor_loop_delay_max_ms) {
+            rtt_dbg_monitor_loop_delay_max_ms = loop_delay;
+        }
 
         if (loop_delay >= 500 && !sched->in_expected_delay()) {
+            rtt_dbg_monitor_stuck_count++;
+            rtt_dbg_monitor_stuck_task = uint32_t(hal.util->persistent_data.scheduler_task);
+            rtt_dbg_monitor_stuck_semline = hal.util->persistent_data.semaphore_line;
             AP::internalerror().error(AP_InternalError::error_t::main_loop_stuck,
                                      hal.util->persistent_data.semaphore_line);
         }
@@ -538,6 +564,12 @@ void Scheduler::delay_microseconds(uint16_t us)
  * ---------------------------------------------------------------- */
 void Scheduler::delay_microseconds_boost(uint16_t us)
 {
+    const uint32_t rtt_dbg_start_us = AP_HAL::micros();
+    rtt_dbg_boost_calls_per_loop++;
+    rtt_dbg_boost_calls_total++;
+    rtt_dbg_boost_requested_us_total += us;
+    rtt_dbg_boost_last_requested_us = us;
+
     if (!_initialized && in_main_thread()) {
         /*
          * [Cybernetics Ch.4] Closed-loop: setup waits depend on SPI/timer
@@ -546,10 +578,17 @@ void Scheduler::delay_microseconds_boost(uint16_t us)
          */
         _poll_usb_if_active();
         if (us > 0) {
+            const uint32_t yield_start_us = AP_HAL::micros();
             rt_thread_delay(1);
+            rtt_dbg_boost_last_yield_elapsed_us = AP_HAL::micros() - yield_start_us;
+            rtt_dbg_boost_yield_count_total++;
         }
         call_delay_cb();
         _called_boost = true;
+        const uint32_t elapsed_us = AP_HAL::micros() - rtt_dbg_start_us;
+        rtt_dbg_boost_last_elapsed_us = elapsed_us;
+        rtt_dbg_boost_total_us_per_loop += elapsed_us;
+        rtt_dbg_boost_elapsed_us_total += elapsed_us;
         return;
     }
 
@@ -563,21 +602,43 @@ void Scheduler::delay_microseconds_boost(uint16_t us)
         _called_boost = true;
     }
     /*
-     * When boosted, yield to let DeviceBus threads (prio below boost)
-     * dispatch IMU periodic callbacks (_poll_data) so FIFO data
-     * accumulates.  Without this yield the DWT busy-wait loop in
-     * delay_microseconds() starves all lower-priority threads,
-     * wait_for_sample() never sees new data and the main loop hangs.
-     *
-     * ChibiOS delay_microseconds(100) -> chThdSleep(100) always yields.
-     * RTT DWT busy-wait does not, so we need an explicit yield here.
+     * [Cybernetics Ch.15] Extremum seeking: ChibiOS' boosted wait suspends the
+     * main thread on a microsecond timer.  RTT cannot represent the common
+     * 100 us wait as a sleep at a 1 kHz OS tick, so a full rt_thread_delay(1)
+     * costs 1 ms and pulls the 400 Hz loop down.  Drop main back to its normal
+     * priority, yield to same-priority persistence workers and ready producers,
+     * then restore boost and busy-wait only the remaining requested time.
      */
     if (in_main_thread() && _priority_boosted) {
-        rt_thread_delay(1);
+        rt_thread_t self = rt_thread_self();
+        const uint32_t yield_start_us = AP_HAL::micros();
+        if (self) {
+            rt_uint8_t normal_prio = (rt_uint8_t)APM_RTT_MAIN_PRIORITY;
+            rt_thread_control(self, RT_THREAD_CTRL_CHANGE_PRIORITY, &normal_prio);
+        }
+        rt_thread_yield();
+        if (self) {
+            rt_uint8_t boost_prio = (rt_uint8_t)APM_RTT_MAIN_BOOST;
+            rt_thread_control(self, RT_THREAD_CTRL_CHANGE_PRIORITY, &boost_prio);
+        }
+        const uint32_t yield_elapsed_us = AP_HAL::micros() - yield_start_us;
+        rtt_dbg_boost_last_yield_elapsed_us = yield_elapsed_us;
+        rtt_dbg_boost_yield_count_total++;
+        if (yield_elapsed_us < us) {
+            _delay_microseconds_dwt(us - yield_elapsed_us);
+        }
         _called_boost = true;
+        const uint32_t elapsed_us = AP_HAL::micros() - rtt_dbg_start_us;
+        rtt_dbg_boost_last_elapsed_us = elapsed_us;
+        rtt_dbg_boost_total_us_per_loop += elapsed_us;
+        rtt_dbg_boost_elapsed_us_total += elapsed_us;
         return;
     }
     delay_microseconds(us);
+    const uint32_t elapsed_us = AP_HAL::micros() - rtt_dbg_start_us;
+    rtt_dbg_boost_last_elapsed_us = elapsed_us;
+    rtt_dbg_boost_total_us_per_loop += elapsed_us;
+    rtt_dbg_boost_elapsed_us_total += elapsed_us;
 }
 
 bool Scheduler::check_called_boost(void)

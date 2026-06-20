@@ -1,0 +1,13 @@
+# ChibiOS-like USB reconnect timing diagnostic for Windows/Mission Planner.
+#
+# Build with:
+#   scons --v=ArduCopter --target=cuav_v5 \
+#     --extra-hwdef=libraries/AP_HAL_RTT/hwdef/extras/windows_chibios_usb_timing.dat
+#
+# ChibiOS disconnects the USB bus and waits about 1.5 ms before usbStart() and
+# usbConnectBus().  RTT default dual CDC uses the same 1500 us preinit
+# soft-disconnect window.  This fragment remains an explicit compatibility
+# entry that keeps the normal 1209:5740 dual-CDC descriptor and requests the
+# ChibiOS-like reconnect timing.  Use windows_long_usb_disconnect.dat for the
+# older 750 ms comparison image.
+define RTT_USB_PREINIT_DISCONNECT_US 1500

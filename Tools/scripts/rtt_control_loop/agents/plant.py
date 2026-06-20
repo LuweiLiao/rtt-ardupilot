@@ -11,7 +11,7 @@ SETPOINT = {
     "usb_configured": True,
     "main_loop_iters_min": 50,
     "boot_wait_seconds": 12,
-    "cdc_usb_id": "1209:5741",
+    "cdc_usb_id": "1209:5740",
     "no_hardfault_pc": True,
 }
 

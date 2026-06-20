@@ -4,7 +4,7 @@
  * Exercises hal.serial(0) over CherryUSB CDC (hal_usb_cherryusb_shim.c).
  * Console / test_runner remains on UART7 via test_runner.c.
  *
- * Host: connect USB; open /dev/ttyACM* (VID 0x1209 PID 0x5741); expect banner
+ * Host: connect USB; open /dev/ttyACM* (VID 0x1209 PID 0x5740); expect banner
  * line after DTR. Optional: type bytes for echo on SERIAL0.
  *
  * Build: scons --target=cuav_v5 --test=D_usb_serial -j$(nproc)
@@ -98,7 +98,7 @@ static void step_usb_serial_hal_smoke(void)
         test_printf("    serial(0): read %lu bytes\r\n", (unsigned long)got);
     }
 
-    test_printf("    host: open ACM 1209:5741 for banner + optional echo\r\n");
+    test_printf("    host: open ACM 1209:5740 for banner + optional echo\r\n");
     test_printf("    note: UART7=test_runner; no scheduler->init()\r\n");
 
     TEST_PASS();

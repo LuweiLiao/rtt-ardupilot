@@ -175,6 +175,32 @@
 #define HAL_WITH_IO_MCU 0
 #endif
 
+/*
+ * Deep loop instrumentation is useful while locating RTT timing faults, but
+ * it adds many AP_HAL::micros() calls and DTCM writes to 400 Hz hot paths.
+ * Keep the debug symbols present for OpenOCD snapshots and enable the heavy
+ * per-stage timing only when a diagnostic build explicitly asks for it.
+ */
+#ifndef HAL_RTT_LOOP_DIAG
+#define HAL_RTT_LOOP_DIAG 0
+#endif
+
+/*
+ * [Cybernetics Ch.4] Closed-loop: mirror ChibiOS' rate-loop capability
+ * gate on F7/H7 targets so Copter can compile and test the fast-rate thread
+ * instead of forcing all rate-control work into the 400Hz main loop.
+ */
+#ifndef HAL_INS_RATE_LOOP
+#if defined(STM32H7) || defined(STM32F7) || defined(SOC_SERIES_STM32H7) || defined(SOC_SERIES_STM32F7) \
+    || defined(HAL_MCU_STM32H7XX) || defined(HAL_MCU_STM32F7XX) \
+    || ((defined(STM32F4) || defined(SOC_SERIES_STM32F4) || defined(HAL_MCU_STM32F4XX)) \
+        && defined(INS_MAX_INSTANCES) && INS_MAX_INSTANCES == 1)
+#define HAL_INS_RATE_LOOP 1
+#else
+#define HAL_INS_RATE_LOOP 0
+#endif
+#endif
+
 /* 与 ChibiOS 一致：默认关闭 RAMTRON；具体板子在 hwdef.dat 中 define HAL_WITH_RAMTRON 1 */
 #ifndef HAL_WITH_RAMTRON
 #define HAL_WITH_RAMTRON 0

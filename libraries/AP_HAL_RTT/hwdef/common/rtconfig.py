@@ -54,7 +54,9 @@ if PLATFORM == 'gcc':
         CFLAGS += ' -O0 -gdwarf-2'
         AFLAGS += ' -gdwarf-2'
     else:
-        CFLAGS += ' -O2 -Os'
+        # [Cybernetics Ch.15] Extremum seeking: match flight-control timing needs
+        # before code-size optimisation.  EKF and scheduler hot paths need speed.
+        CFLAGS += ' -O2'
 
     CXXFLAGS = CFLAGS + ' -Woverloaded-virtual -fno-exceptions -fno-rtti'
 

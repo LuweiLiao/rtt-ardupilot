@@ -18,6 +18,20 @@
 
 #pragma GCC optimize("O2")
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+/*
+ * [Cybernetics Ch.11] Lyapunov thinking: the RTT F7 port has higher USB/GCS
+ * and storage scheduling jitter than ChibiOS.  The upstream 100 ms dynamic
+ * fast-rate controller can chase that jitter and repeatedly jump between
+ * 250/333/500/1000 Hz, which keeps AP_Scheduler::extra_loop_us non-zero and
+ * lowers the effective 400 Hz main loop.  Keep the scheduler rate unchanged,
+ * but make the fast-rate controller slower to re-increase and cap the disarmed
+ * bench-test rate to a value this port can prove stable.
+ */
+#define RTT_FAST_RATE_DYNAMIC_MAX_HZ 250U
+#define RTT_FAST_RATE_INCREASE_HOLDOFF_MS 3000U
+#endif
+
 /*
  Attitude Rate controller thread design.
 
@@ -155,6 +169,17 @@ uint8_t Copter::calc_gyro_decimation(uint8_t gyro_decimation, uint16_t rate_hz)
     return MAX(uint8_t(DIV_ROUND_INT(ins.get_raw_gyro_rate_hz() / gyro_decimation, rate_hz)), 1U);
 }
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+static uint8_t rtt_fast_rate_min_dynamic_decimation(uint16_t raw_gyro_rate_hz, uint8_t target_rate_decimation)
+{
+    if (raw_gyro_rate_hz == 0) {
+        return target_rate_decimation;
+    }
+    const uint8_t max_rate_decimation = MAX(uint8_t(DIV_ROUND_INT(raw_gyro_rate_hz, RTT_FAST_RATE_DYNAMIC_MAX_HZ)), 1U);
+    return MAX(target_rate_decimation, max_rate_decimation);
+}
+#endif
+
 static inline bool run_decimated_callback(uint8_t decimation_rate, uint8_t& decimation_count)
 {
     return decimation_rate > 0 && ++decimation_count >= decimation_rate;
@@ -168,6 +193,9 @@ void Copter::rate_controller_thread()
 {
     uint8_t target_rate_decimation = constrain_int16(g2.att_decimation.get(), 1,
                                                      DIV_ROUND_INT(ins.get_raw_gyro_rate_hz(), AP::scheduler().get_loop_rate_hz()));
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    target_rate_decimation = rtt_fast_rate_min_dynamic_decimation(ins.get_raw_gyro_rate_hz(), target_rate_decimation);
+#endif
     uint8_t rate_decimation = target_rate_decimation;
 
     // set up the decimation rates
@@ -325,6 +353,9 @@ void Copter::rate_controller_thread()
         // make sure we have the latest target rate
         target_rate_decimation = constrain_int16(g2.att_decimation.get(), 1,
                                                  DIV_ROUND_INT(ins.get_raw_gyro_rate_hz(), AP::scheduler().get_loop_rate_hz()));
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        target_rate_decimation = rtt_fast_rate_min_dynamic_decimation(ins.get_raw_gyro_rate_hz(), target_rate_decimation);
+#endif
         if (now_ms - last_notch_sample_ms >= 1000 || !was_using_rate_thread) {
             // update the PID notch sample rate at 1Hz if we are
             // enabled at runtime
@@ -375,7 +406,11 @@ void Copter::rate_controller_thread()
             } else if (rate_decimation > target_rate_decimation && rate_loop_count > att_rate/10 // ensure 100ms worth of good readings
                 && (prev_loop_count > att_rate/10   // ensure there was 100ms worth of good readings at the higher rate
                     || prev_loop_count == 0         // last rate was actually a lower rate so keep going quickly
-                    || now_ms - last_rate_increase_ms >= 10000)) { // every 10s retry
+                    || now_ms - last_rate_increase_ms >= 10000) // every 10s retry
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                && now_ms - last_rate_increase_ms >= RTT_FAST_RATE_INCREASE_HOLDOFF_MS
+#endif
+                ) {
                 rate_decimation = rate_decimation - 1;
 
                 rate_controller_set_rates(rate_decimation, rates, false);

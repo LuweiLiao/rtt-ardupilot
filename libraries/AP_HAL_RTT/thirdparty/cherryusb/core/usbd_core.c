@@ -91,6 +91,13 @@ USB_NOCACHE_RAM_SECTION struct usbd_core_priv {
 
 struct usbd_bus g_usbdev_bus[CONFIG_USBDEV_MAX_BUS];
 
+volatile uint32_t rtt_dbg_usbd_set_interface_calls = 0;
+volatile uint32_t rtt_dbg_usbd_set_interface_same_alt_ack = 0;
+volatile uint32_t rtt_dbg_usbd_set_interface_reconfigure = 0;
+volatile uint32_t rtt_dbg_usbd_set_interface_last_intf = 0;
+volatile uint32_t rtt_dbg_usbd_set_interface_last_alt = 0;
+volatile uint32_t rtt_dbg_usbd_set_interface_last_prev_alt = 0;
+
 static void usbd_class_event_notify_handler(uint8_t busid, uint8_t event, void *arg);
 
 static void usbd_print_setup(struct usb_setup_packet *setup)
@@ -750,8 +757,24 @@ static bool usbd_std_interface_req_handler(uint8_t busid, struct usb_setup_packe
             break;
 
         case USB_REQUEST_SET_INTERFACE:
-            g_usbd_core[busid].intf_altsetting[intf_num] = LO_BYTE(setup->wValue);
-            usbd_set_interface(busid, setup->wIndex, setup->wValue);
+            rtt_dbg_usbd_set_interface_calls++;
+            rtt_dbg_usbd_set_interface_last_intf = intf_num;
+            rtt_dbg_usbd_set_interface_last_alt = LO_BYTE(setup->wValue);
+            rtt_dbg_usbd_set_interface_last_prev_alt = g_usbd_core[busid].intf_altsetting[intf_num];
+            /*
+             * ChibiOS ACKs SET_INTERFACE for the CDC interfaces without
+             * disturbing endpoints when the alternate setting is unchanged.
+             * Windows may send SET_INTERFACE(alt=0) during composite CDC
+             * binding; tearing down the already-configured bulk endpoints here
+             * leaves a visible COM port with no MAVLink data path.
+             */
+            if (g_usbd_core[busid].intf_altsetting[intf_num] != LO_BYTE(setup->wValue)) {
+                rtt_dbg_usbd_set_interface_reconfigure++;
+                g_usbd_core[busid].intf_altsetting[intf_num] = LO_BYTE(setup->wValue);
+                usbd_set_interface(busid, setup->wIndex, setup->wValue);
+            } else {
+                rtt_dbg_usbd_set_interface_same_alt_ack++;
+            }
             *len = 0;
             break;
 

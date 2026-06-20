@@ -129,10 +129,27 @@ volatile uint32_t rtt_dbg_gcs_global_update_send_gap_max_ms RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_gcs_global_update_send_gap_last_ms RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_gcs_global_update_send_gap_large_count RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_gcs_global_update_send_last_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_global_update_send_total_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_global_update_send_total_max_us RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_gcs_chan0_update_send_gap_max_ms RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_gcs_chan0_update_send_gap_last_ms RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_gcs_chan0_update_send_gap_large_count RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_gcs_chan0_update_send_last_ms RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_total_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_total_max_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_log_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_log_max_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_check_tasks_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_check_tasks_max_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_loop_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_loop_max_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_loop_iters RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_update_send_loop_iters_max RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_service_statustext_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_service_statustext_max_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_service_statustext_sent RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_service_statustext_sent_max RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_service_statustext_budget_breaks RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_gcs_bucket_selected[10] RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_gcs_bucket_last_interval[10] RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_gcs_bucket_last_resched[10] RTT_DBG_DTCM_BSS;
@@ -1668,7 +1685,8 @@ void GCS_MAVLINK_InProgress::check_tasks()
 
 void GCS_MAVLINK::update_send()
 {
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+    const uint32_t rtt_update_send_total_start_us = AP_HAL::micros();
     if (chan == MAVLINK_COMM_0) {
         const uint32_t now_ms = AP_HAL::millis();
         if (rtt_dbg_gcs_chan0_update_send_last_ms != 0U) {
@@ -1690,9 +1708,19 @@ void GCS_MAVLINK::update_send()
     rtt_dbg_gcs_update_send_last_queued_param = _queued_parameter != nullptr ? 1U : 0U;
 #endif
 #if HAL_LOGGING_ENABLED
-    if (!hal.scheduler->in_delay_callback()) {
+    if (!hal.scheduler->in_delay_callback() && AP::logger().mavlink_log_transfer_active()) {
         // AP_Logger will not send log data if we are armed.
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+        const uint32_t rtt_log_start_us = AP_HAL::micros();
+#endif
         AP::logger().handle_log_send();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+        const uint32_t rtt_log_us = AP_HAL::micros() - rtt_log_start_us;
+        rtt_dbg_gcs_update_send_log_us = rtt_log_us;
+        if (rtt_log_us > rtt_dbg_gcs_update_send_log_max_us) {
+            rtt_dbg_gcs_update_send_log_max_us = rtt_log_us;
+        }
+#endif
     }
 #endif
     if (!deferred_messages_initialised) {
@@ -1708,14 +1736,57 @@ void GCS_MAVLINK::update_send()
 #endif
 
     // check for any in-progress tasks; check_tasks does its own rate-limiting
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+    const uint32_t rtt_check_tasks_start_us = AP_HAL::micros();
+#endif
     GCS_MAVLINK_InProgress::check_tasks();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+    const uint32_t rtt_check_tasks_us = AP_HAL::micros() - rtt_check_tasks_start_us;
+    rtt_dbg_gcs_update_send_check_tasks_us = rtt_check_tasks_us;
+    if (rtt_check_tasks_us > rtt_dbg_gcs_update_send_check_tasks_max_us) {
+        rtt_dbg_gcs_update_send_check_tasks_max_us = rtt_check_tasks_us;
+    }
+#endif
 
     const uint32_t start = AP_HAL::millis();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_start_us = AP_HAL::micros();
+    uint32_t rtt_loop_iters = 0;
+    constexpr uint32_t rtt_update_send_budget_us = 300U;
+#endif
     const uint16_t start16 = start & 0xFFFF;
 #if CONFIG_HAL_BOARD == HAL_BOARD_RTT
     uint8_t rtt_overtime_grace_used = 0;
+    auto rtt_budget_exhausted = [&]() {
+        const bool rtt_param_active = _queued_parameter != nullptr;
+        const bool rtt_ftp_active =
+#if AP_MAVLINK_FTP_ENABLED
+            AP_HAL::millis() - ftp.last_send_ms < 1000
+#else
+            false
+#endif
+            ;
+        if (rtt_param_active || rtt_ftp_active) {
+            return false;
+        }
+        return AP_HAL::micros() - rtt_start_us >= rtt_update_send_budget_us;
+    };
 #endif
     while (AP_HAL::millis() - start < 5) { // spend a max of 5ms sending messages.  This should never trigger - out_of_time() should become true
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_loop_iters++;
+        /*
+         * The Copter main loop is 400 Hz, so spending ChibiOS' full 5 ms
+         * GCS wall budget inside the RTT main thread forces a slow loop even
+         * when USB writes are non-blocking.  Keep the caller-context budget
+         * short and let the 400 Hz schedule plus UART/USB service path provide
+         * throughput over multiple ticks.
+         */
+        if (rtt_budget_exhausted()) {
+            rtt_dbg_gcs_update_send_break_out_of_time++;
+            break;
+        }
+#endif
         if (gcs().out_of_time()) {
 #if CONFIG_HAL_BOARD == HAL_BOARD_RTT
             /*
@@ -1741,7 +1812,7 @@ void GCS_MAVLINK::update_send()
              * one full update behind.  Keep the per-call PARAM quantum small,
              * but allow a bounded catch-up window while the list is active.
              */
-            const uint8_t rtt_grace_limit = rtt_param_active ? 4U : (rtt_ftp_active ? 1U : 8U);
+            const uint8_t rtt_grace_limit = rtt_param_active ? 2U : (rtt_ftp_active ? 1U : 0U);
             rtt_dbg_gcs_update_send_param_grace_limit = rtt_grace_limit;
             if (rtt_param_active && chan == MAVLINK_COMM_0) {
                 rtt_dbg_gcs_update_send_param_overtime_active++;
@@ -1809,6 +1880,10 @@ void GCS_MAVLINK::update_send()
                         }
                     }
                     next_deferred_message_to_send_cache = -1;
+                    if (rtt_budget_exhausted()) {
+                        rtt_dbg_gcs_update_send_break_out_of_time++;
+                        break;
+                    }
                     continue;
                 }
                 rtt_dbg_gcs_update_send_param_priority_not_due++;
@@ -1872,6 +1947,10 @@ void GCS_MAVLINK::update_send()
                     try_send_message_stats.max_retry_deferred_body_type = 1;
                 }
 #endif
+                if (rtt_budget_exhausted()) {
+                    rtt_dbg_gcs_update_send_break_out_of_time++;
+                    break;
+                }
                 continue;
             }
         }
@@ -1913,6 +1992,10 @@ void GCS_MAVLINK::update_send()
                 try_send_message_stats.max_retry_deferred_body_type = 2;
             }
 #endif
+            if (rtt_budget_exhausted()) {
+                rtt_dbg_gcs_update_send_break_out_of_time++;
+                break;
+            }
             continue;
         }
 
@@ -1953,10 +2036,32 @@ void GCS_MAVLINK::update_send()
                 try_send_message_stats.max_retry_deferred_body_type = 3;
             }
 #endif
+            if (rtt_budget_exhausted()) {
+                rtt_dbg_gcs_update_send_break_out_of_time++;
+                break;
+            }
             continue;
         }
         break;
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_gcs_update_send_loop_iters = rtt_loop_iters;
+    if (rtt_loop_iters > rtt_dbg_gcs_update_send_loop_iters_max) {
+        rtt_dbg_gcs_update_send_loop_iters_max = rtt_loop_iters;
+    }
+#if HAL_RTT_LOOP_DIAG
+    const uint32_t rtt_loop_us = AP_HAL::micros() - rtt_start_us;
+    rtt_dbg_gcs_update_send_loop_us = rtt_loop_us;
+    if (rtt_loop_us > rtt_dbg_gcs_update_send_loop_max_us) {
+        rtt_dbg_gcs_update_send_loop_max_us = rtt_loop_us;
+    }
+    const uint32_t rtt_total_us = AP_HAL::micros() - rtt_update_send_total_start_us;
+    rtt_dbg_gcs_update_send_total_us = rtt_total_us;
+    if (rtt_total_us > rtt_dbg_gcs_update_send_total_max_us) {
+        rtt_dbg_gcs_update_send_total_max_us = rtt_total_us;
+    }
+#endif
+#endif
 #if GCS_DEBUG_SEND_MESSAGE_TIMINGS
     const uint32_t stop = AP_HAL::micros();
     const uint32_t delta = stop - retry_deferred_body_start;
@@ -2982,11 +3087,22 @@ void GCS_MAVLINK::service_statustext(void)
     GCS::StatusTextQueue &_statustext_queue = gcs().statustext_queue();
 
     const uint8_t chan_bit = (1U<<chan);
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_start_us = AP_HAL::micros();
+    uint32_t rtt_sent = 0;
+    constexpr uint32_t rtt_statustext_budget_us = 300U;
+#endif
     // note the lack of idx++ here.  We may remove the iteration item
     // from the queue as the last thing we do, in which case we don't
     // want to move idx.
     const uint16_t payload_size = PAYLOAD_SIZE(chan, STATUSTEXT);
     for (uint8_t idx=0; idx<_statustext_queue.available(); ) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        if (rtt_sent > 0 && AP_HAL::micros() - rtt_start_us >= rtt_statustext_budget_us) {
+            rtt_dbg_gcs_service_statustext_budget_breaks++;
+            break;
+        }
+#endif
         WITH_SEMAPHORE(comm_chan_lock(chan));
 
         if (txspace() < payload_size) {
@@ -3005,6 +3121,9 @@ void GCS_MAVLINK::service_statustext(void)
                                         statustext->msg.text,
                                         statustext->msg.id,
                                         statustext->msg.chunk_seq);
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_sent++;
+#endif
             // indicate we've sent the message:
             statustext->bitmask &= ~chan_bit;
 
@@ -3020,6 +3139,17 @@ void GCS_MAVLINK::service_statustext(void)
         // this item still has places to go.  Continue to iterate over the queue
         idx++;
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_us = AP_HAL::micros() - rtt_start_us;
+    rtt_dbg_gcs_service_statustext_us = rtt_us;
+    if (rtt_us > rtt_dbg_gcs_service_statustext_max_us) {
+        rtt_dbg_gcs_service_statustext_max_us = rtt_us;
+    }
+    rtt_dbg_gcs_service_statustext_sent = rtt_sent;
+    if (rtt_sent > rtt_dbg_gcs_service_statustext_sent_max) {
+        rtt_dbg_gcs_service_statustext_sent_max = rtt_sent;
+    }
+#endif
 }
 
 void GCS::send_message(enum ap_message id)
@@ -3031,7 +3161,8 @@ void GCS::send_message(enum ap_message id)
 
 void GCS::update_send()
 {
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+    const uint32_t rtt_global_update_send_start_us = AP_HAL::micros();
     const uint32_t rtt_now_ms = AP_HAL::millis();
     if (rtt_dbg_gcs_global_update_send_last_ms != 0U) {
         const uint32_t gap_ms = rtt_now_ms - rtt_dbg_gcs_global_update_send_last_ms;
@@ -3096,6 +3227,13 @@ void GCS::update_send()
     if (first_backend_to_send >= num_gcs()) {
         first_backend_to_send = 0;
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+    const uint32_t rtt_global_update_send_total_us = AP_HAL::micros() - rtt_global_update_send_start_us;
+    rtt_dbg_gcs_global_update_send_total_us = rtt_global_update_send_total_us;
+    if (rtt_global_update_send_total_us > rtt_dbg_gcs_global_update_send_total_max_us) {
+        rtt_dbg_gcs_global_update_send_total_max_us = rtt_global_update_send_total_us;
+    }
+#endif
 }
 
 void GCS::update_receive(void)

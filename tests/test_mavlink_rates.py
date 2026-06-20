@@ -10,7 +10,7 @@ from pymavlink import mavutil
 
 
 DEFAULT_PORT = "/dev/ttyACM1"
-CDC_SYMLINK_PATTERN = "usb-ArduPilot_CUAVv5_RTT_"
+CDC_SYMLINK_PATTERN = "usb-ArduPilot_CUAVv5_"
 
 
 def find_rtt_cdc_port():

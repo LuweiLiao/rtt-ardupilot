@@ -125,9 +125,9 @@ def c7_main_loop(state: PlantState, err: Dict[str, float], **_) -> ControllerRep
 def c8_host_cdc(state: PlantState, err: Dict[str, float], **_) -> ControllerReport:
     if state.host_cdc_present:
         return ControllerReport("C8", "HostCDC", 0, "ok", "MAVLINK_TEST",
-                                f"lsusb 1209:5741 OK: {state.host_cdc_ids[:1]}")
+                                f"lsusb 1209:5740 OK: {state.host_cdc_ids[:1]}")
     return ControllerReport("C8", "HostCDC", 1.0, "fail", "FIX_PLANT_USB",
-                            "Host missing 1209:5741 (note: /dev/ttyACM0 may be CH340 UART7)")
+                            "Host missing 1209:5740 (note: /dev/ttyACM0 may be CH340 UART7)")
 
 
 def c9_actuator(state: PlantState, err: Dict[str, float], *, code_dirty: bool = False, **_) -> ControllerReport:

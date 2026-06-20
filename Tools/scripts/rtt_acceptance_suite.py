@@ -17,8 +17,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from rtt_usb_port_select import MAVLINK_PORT
 
-DEFAULT_PORT = "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00"
+DEFAULT_PORT = MAVLINK_PORT
 
 
 def iso_now() -> str:

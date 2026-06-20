@@ -27,11 +27,25 @@ extern "C" {
 #if CONFIG_HAL_BOARD == HAL_BOARD_RTT
 #define RTT_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
 extern volatile uint32_t rtt_dbg_mav_send_lock_depth_total __attribute__((weak));
+volatile uint32_t rtt_dbg_uart_wait_timeout_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_uart_wait_timeout_iomcu_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_uart_wait_timeout_iomcu_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_uart_wait_timeout_iomcu_accum_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_uart_wait_timeout_iomcu_max_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_uart_wait_timeout_iomcu_yields RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_uart_wait_timeout_iomcu_spin_loops RTT_DBG_DTCM_BSS;
 
 static bool rtt_uart_mavlink_send_locked()
 {
     return (&rtt_dbg_mav_send_lock_depth_total != nullptr) &&
            (rtt_dbg_mav_send_lock_depth_total > 0U);
+}
+
+static inline void rtt_dbg_uart_update_max(volatile uint32_t &target, uint32_t value)
+{
+    if (value > target) {
+        target = value;
+    }
 }
 #endif
 
@@ -1129,6 +1143,9 @@ bool UARTDriver::wait_timeout(uint16_t n, uint32_t timeout_ms)
     if (!_initialized) {
         return false;
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_uart_wait_timeout_calls++;
+#endif
 
     if (_is_usb) {
         /* USB path: use semaphore-based notification */
@@ -1156,19 +1173,56 @@ bool UARTDriver::wait_timeout(uint16_t n, uint32_t timeout_ms)
         }
         return true;
     } else {
-        /* UART path: poll hardware, yield like ChibiOS chEvtWaitAnyTimeout() */
-        uint32_t t0 = AP_HAL::millis();
+        /* UART path: poll hardware, yielding in whole RT-Thread ticks. */
+        const uint32_t t0_us = AP_HAL::micros();
+        const uint32_t t0_ms = AP_HAL::millis();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && defined(HAL_UART_IOMCU_IDX)
+        const bool is_iomcu = (_port_num == HAL_UART_IOMCU_IDX);
+        if (is_iomcu) {
+            rtt_dbg_uart_wait_timeout_iomcu_calls++;
+        }
+#else
+        const bool is_iomcu = false;
+#endif
         while (_readbuf.available() < n) {
             _drain_rx_to_readbuf();
             if (_readbuf.available() >= n) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                if (is_iomcu) {
+                    const uint32_t elapsed_us = AP_HAL::micros() - t0_us;
+                    rtt_dbg_uart_wait_timeout_iomcu_us = elapsed_us;
+                    rtt_dbg_uart_wait_timeout_iomcu_accum_us += elapsed_us;
+                    rtt_dbg_uart_update_max(rtt_dbg_uart_wait_timeout_iomcu_max_us, elapsed_us);
+                }
+#endif
                 return true;
             }
-            uint32_t elapsed = AP_HAL::millis() - t0;
-            if (elapsed >= timeout_ms) {
+            if ((AP_HAL::millis() - t0_ms) >= timeout_ms) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+                if (is_iomcu) {
+                    const uint32_t elapsed_us = AP_HAL::micros() - t0_us;
+                    rtt_dbg_uart_wait_timeout_iomcu_us = elapsed_us;
+                    rtt_dbg_uart_wait_timeout_iomcu_accum_us += elapsed_us;
+                    rtt_dbg_uart_update_max(rtt_dbg_uart_wait_timeout_iomcu_max_us, elapsed_us);
+                }
+#endif
                 return false;
             }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            if (is_iomcu) {
+                rtt_dbg_uart_wait_timeout_iomcu_yields++;
+            }
+#endif
             rt_thread_mdelay(1);
         }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        if (is_iomcu) {
+            const uint32_t elapsed_us = AP_HAL::micros() - t0_us;
+            rtt_dbg_uart_wait_timeout_iomcu_us = elapsed_us;
+            rtt_dbg_uart_wait_timeout_iomcu_accum_us += elapsed_us;
+            rtt_dbg_uart_update_max(rtt_dbg_uart_wait_timeout_iomcu_max_us, elapsed_us);
+        }
+#endif
         return true;
     }
 }
@@ -1219,40 +1273,16 @@ size_t UARTDriver::_write(const uint8_t *buffer, size_t size)
     rt_hw_interrupt_enable(level);
     if (need_space) {
         if (_is_usb) {
-            uint32_t waited_ms = 0;
-            for (int i = 0; i < 100; i++) {
-                level = rt_hw_interrupt_disable();
-                need_space = _writebuf.space() < size;
-                rt_hw_interrupt_enable(level);
-                if (!need_space) {
-                    break;
-                }
-                _drain_writebuf_to_dev();
+            /*
+             * Match ChibiOS SerialUSB semantics: _write() runs in the caller
+             * context, often the 400 Hz main loop, so it must never sleep while
+             * waiting for USB IN completions.  Offer queued bytes to CherryUSB
+             * once, then let the UART timer/USB completion path provide
+             * backpressure through txspace().
+             */
+            _drain_writebuf_to_dev();
 #if HAL_RTT_SERIAL0_OTG
-                rtt_uart_dbg_usb_write_drain_loops++;
-#endif
-                level = rt_hw_interrupt_disable();
-                need_space = _writebuf.space() < size;
-                const bool drain_active = _tx_drain_active;
-                rt_hw_interrupt_enable(level);
-                if (need_space && (drain_active || usb_lld_txspace_rtt(_usb_in_ep) == 0U)) {
-                    /*
-                     * [Cybernetics Ch.4] Closed-loop: give the active drain or
-                     * USB IN completion chain one scheduler tick to free queue
-                     * space.  Falling through immediately can turn a MAVLink
-                     * fragment into a partial ByteBuffer write.
-                     */
-                    rt_thread_mdelay(1);
-                    waited_ms++;
-                }
-            }
-#if HAL_RTT_SERIAL0_OTG
-            if (waited_ms > 0U) {
-                rtt_uart_dbg_usb_write_wait_ms += waited_ms;
-                if (waited_ms > rtt_uart_dbg_usb_write_max_wait_ms) {
-                    rtt_uart_dbg_usb_write_max_wait_ms = waited_ms;
-                }
-            }
+            rtt_uart_dbg_usb_write_drain_loops++;
 #endif
         } else {
             _drain_writebuf_to_dev();

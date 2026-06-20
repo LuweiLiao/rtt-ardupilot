@@ -8,8 +8,8 @@
 |-------|------|------|
 | Vendor | `thirdparty/cherryusb/` | CherryUSB subset (core, CDC class, DWC2 port, RT-Thread OSAL). See `README.vendor`. |
 | Board glue | `cherryusb_board/` | `usb_config.h`, `usb_dc_glue.c` — **OTG_FS_IRQHandler**, PHY/clock/pins for CUAV-class boards. |
-| HAL shim | `hal_usb_cherryusb_shim.c` | `RTT_USB_BACKEND=cherryusb`: CDC read/write, init, ties UARTDriver to Cherry stack. |
-| Native stack | `hal_usb_lld_rtt.c`, `usb_cdc_rtt.c` | Default production backend (`RTT_USB_BACKEND` unset or `native`). |
+| HAL shim | `hal_usb_cherryusb_shim.c` | Default production backend (`RTT_USB_BACKEND` unset or `cherryusb`): CDC read/write, init, ties UARTDriver to Cherry stack. |
+| Native stack | `hal_usb_lld_rtt.c`, `usb_cdc_rtt.c` | Explicit fallback/backend isolation path (`RTT_USB_BACKEND=native`). |
 | Backend selector | `Tools/scripts/rtt_usb_backend.py` | `filter_ap_hal_rtt_source()`, `cherryusb_extra_sources()`, BSP USB Kconfig undef when app owns USB. |
 
 ## Not in the build (archived / removed)

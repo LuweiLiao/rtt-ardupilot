@@ -30,6 +30,27 @@ extern const AP_HAL::HAL& hal;
 extern AP_IOMCU iomcu;
 #endif
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#define RTT_RCOUT_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
+volatile uint32_t rtt_dbg_rcout_push_calls RTT_RCOUT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_rcout_push_local_us RTT_RCOUT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_rcout_push_local_accum_us RTT_RCOUT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_rcout_push_local_max_us RTT_RCOUT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_rcout_push_iomcu_us RTT_RCOUT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_rcout_push_iomcu_accum_us RTT_RCOUT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_rcout_push_iomcu_max_us RTT_RCOUT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_rcout_push_total_us RTT_RCOUT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_rcout_push_total_accum_us RTT_RCOUT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_rcout_push_total_max_us RTT_RCOUT_DBG_DTCM_BSS;
+
+static inline void rtt_dbg_rcout_update_max(volatile uint32_t &target, uint32_t value)
+{
+    if (value > target) {
+        target = value;
+    }
+}
+#endif
+
 namespace RTT
 {
 
@@ -474,6 +495,10 @@ void RCOutput::cork()
 
 void RCOutput::push()
 {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_dbg_start_us = AP_HAL::micros();
+    rtt_dbg_rcout_push_calls++;
+#endif
     // Reference: ChibiOS RCOutput.cpp:1349-1351
     if (!_corked) {
         INTERNAL_ERROR(AP_InternalError::error_t::flow_of_control);
@@ -485,11 +510,33 @@ void RCOutput::push()
             _write_hw(i, _period_us[i]);
         }
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_dbg_after_local_us = AP_HAL::micros();
+    const uint32_t rtt_dbg_local_us = rtt_dbg_after_local_us - rtt_dbg_start_us;
+    rtt_dbg_rcout_push_local_us = rtt_dbg_local_us;
+    rtt_dbg_rcout_push_local_accum_us += rtt_dbg_local_us;
+    rtt_dbg_rcout_update_max(rtt_dbg_rcout_push_local_max_us, rtt_dbg_local_us);
+#endif
     // Reference: ChibiOS RCOutput.cpp:1355-1358
 #if HAL_WITH_IO_MCU
     if (iomcu_enabled) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        const uint32_t rtt_dbg_iomcu_start_us = AP_HAL::micros();
+#endif
         iomcu.push();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        const uint32_t rtt_dbg_iomcu_us = AP_HAL::micros() - rtt_dbg_iomcu_start_us;
+        rtt_dbg_rcout_push_iomcu_us = rtt_dbg_iomcu_us;
+        rtt_dbg_rcout_push_iomcu_accum_us += rtt_dbg_iomcu_us;
+        rtt_dbg_rcout_update_max(rtt_dbg_rcout_push_iomcu_max_us, rtt_dbg_iomcu_us);
+#endif
     }
+#endif
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_dbg_total_us = AP_HAL::micros() - rtt_dbg_start_us;
+    rtt_dbg_rcout_push_total_us = rtt_dbg_total_us;
+    rtt_dbg_rcout_push_total_accum_us += rtt_dbg_total_us;
+    rtt_dbg_rcout_update_max(rtt_dbg_rcout_push_total_max_us, rtt_dbg_total_us);
 #endif
 }
 

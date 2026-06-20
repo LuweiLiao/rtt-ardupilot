@@ -38,6 +38,34 @@ volatile uint32_t rtt_dbg_iomcu_last_timestamp_delta_ms RTT_IOMCU_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_iomcu_max_timestamp_delta_ms RTT_IOMCU_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_iomcu_last_protocol_fail_count RTT_IOMCU_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_iomcu_last_total_errors RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_thread_loops RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_thread_loop_us RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_thread_loop_accum_us RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_thread_loop_max_us RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_wait_event_us RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_wait_event_accum_us RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_send_servo_us RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_send_servo_accum_us RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_send_servo_calls RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_send_servo_event_calls RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_periodic_us RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_periodic_accum_us RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_write_registers_calls RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_write_registers_accum_us RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_write_registers_max_us RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_read_registers_calls RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_read_registers_accum_us RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_read_registers_max_us RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_push_calls RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_push_dirty_events RTT_IOMCU_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_iomcu_push_clean_skips RTT_IOMCU_DBG_DTCM_BSS;
+
+static inline void rtt_dbg_iomcu_update_max(volatile uint32_t &target, uint32_t value)
+{
+    if (value > target) {
+        target = value;
+    }
+}
 #endif
 
 // pending IO events to send, used as an event mask
@@ -152,6 +180,10 @@ void AP_IOMCU::thread_main(void)
     trigger_event(IOEVENT_INIT);
 
     while (!do_shutdown) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        const uint32_t rtt_dbg_loop_start_us = AP_HAL::micros();
+        rtt_dbg_iomcu_thread_loops++;
+#endif
         // check if we have lost contact with the IOMCU
         const uint32_t now_ms = AP_HAL::millis();
         if (last_reg_access_ms != 0 && now_ms - last_reg_access_ms > 1000) {
@@ -169,11 +201,26 @@ void AP_IOMCU::thread_main(void)
             last_reg_access_ms = 0;
         }
 
+        const uint32_t rtt_dbg_wait_start_us = AP_HAL::micros();
         eventmask_t mask = chEvtWaitAnyTimeout(~0, chTimeMS2I(10));
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        const uint32_t rtt_dbg_wait_us = AP_HAL::micros() - rtt_dbg_wait_start_us;
+        rtt_dbg_iomcu_wait_event_us = rtt_dbg_wait_us;
+        rtt_dbg_iomcu_wait_event_accum_us += rtt_dbg_wait_us;
+#endif
 
         // check for pending IO events
         if (mask & EVENT_MASK(IOEVENT_SEND_PWM_OUT)) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            const uint32_t rtt_dbg_send_start_us = AP_HAL::micros();
+            rtt_dbg_iomcu_send_servo_event_calls++;
+#endif
             send_servo_out();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            const uint32_t rtt_dbg_send_us = AP_HAL::micros() - rtt_dbg_send_start_us;
+            rtt_dbg_iomcu_send_servo_us = rtt_dbg_send_us;
+            rtt_dbg_iomcu_send_servo_accum_us += rtt_dbg_send_us;
+#endif
         }
         mask &= ~EVENT_MASK(IOEVENT_SEND_PWM_OUT);
 
@@ -343,6 +390,9 @@ void AP_IOMCU::thread_main(void)
 #endif
 
         // check for regular timed events
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        const uint32_t rtt_dbg_periodic_start_us = AP_HAL::micros();
+#endif
         uint32_t now = AP_HAL::millis();
         if (now - last_rc_read_ms > 20) {
             // read RC input at 50Hz
@@ -394,6 +444,15 @@ void AP_IOMCU::thread_main(void)
         }
 
         send_rc_protocols();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        const uint32_t rtt_dbg_periodic_us = AP_HAL::micros() - rtt_dbg_periodic_start_us;
+        rtt_dbg_iomcu_periodic_us = rtt_dbg_periodic_us;
+        rtt_dbg_iomcu_periodic_accum_us += rtt_dbg_periodic_us;
+        const uint32_t rtt_dbg_loop_us = AP_HAL::micros() - rtt_dbg_loop_start_us;
+        rtt_dbg_iomcu_thread_loop_us = rtt_dbg_loop_us;
+        rtt_dbg_iomcu_thread_loop_accum_us += rtt_dbg_loop_us;
+        rtt_dbg_iomcu_update_max(rtt_dbg_iomcu_thread_loop_max_us, rtt_dbg_loop_us);
+#endif
     }
     done_shutdown = true;
 }
@@ -403,6 +462,9 @@ void AP_IOMCU::thread_main(void)
  */
 void AP_IOMCU::send_servo_out()
 {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_iomcu_send_servo_calls++;
+#endif
 #if 0
     // simple method to test IO failsafe
     if (AP_HAL::millis() > 30000) {
@@ -670,6 +732,9 @@ bool AP_IOMCU::read_registers(uint8_t page, uint8_t offset, uint8_t count, uint1
         regs += PKT_MAX_REGS;
     }
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_dbg_read_start_us = AP_HAL::micros();
+#endif
     IOPacket pkt;
 
     discard_input();
@@ -755,6 +820,12 @@ bool AP_IOMCU::read_registers(uint8_t page, uint8_t offset, uint8_t count, uint1
     protocol_fail_count = 0;
     protocol_count++;
     last_reg_access_ms = AP_HAL::millis();
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_dbg_read_us = AP_HAL::micros() - rtt_dbg_read_start_us;
+    rtt_dbg_iomcu_read_registers_calls++;
+    rtt_dbg_iomcu_read_registers_accum_us += rtt_dbg_read_us;
+    rtt_dbg_iomcu_update_max(rtt_dbg_iomcu_read_registers_max_us, rtt_dbg_read_us);
+#endif
     return true;
 }
 
@@ -774,6 +845,9 @@ bool AP_IOMCU::write_registers(uint8_t page, uint8_t offset, uint8_t count, cons
         count -= PKT_MAX_REGS;
         regs += PKT_MAX_REGS;
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_dbg_write_start_us = AP_HAL::micros();
+#endif
     IOPacket pkt;
 
     discard_input();
@@ -836,6 +910,12 @@ bool AP_IOMCU::write_registers(uint8_t page, uint8_t offset, uint8_t count, cons
 
     last_reg_access_ms = AP_HAL::millis();
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    const uint32_t rtt_dbg_write_us = AP_HAL::micros() - rtt_dbg_write_start_us;
+    rtt_dbg_iomcu_write_registers_calls++;
+    rtt_dbg_iomcu_write_registers_accum_us += rtt_dbg_write_us;
+    rtt_dbg_iomcu_update_max(rtt_dbg_iomcu_write_registers_max_us, rtt_dbg_write_us);
+#endif
     return true;
 }
 
@@ -857,6 +937,9 @@ void AP_IOMCU::write_channel(uint8_t chan, uint16_t pwm)
 {
     if (chan >= IOMCU_MAX_RC_CHANNELS) {    // could be SBUS out
         return;
+    }
+    if (chan >= pwm_out.num_channels || pwm_out.pwm[chan] != pwm) {
+        pwm_out_dirty = true;
     }
     if (chan >= pwm_out.num_channels) {
         pwm_out.num_channels = chan+1;
@@ -909,13 +992,27 @@ uint16_t AP_IOMCU::read_channel(uint8_t chan)
 void AP_IOMCU::cork(void)
 {
     corked = true;
+    pwm_out_dirty = false;
 }
 
 // push output
 void AP_IOMCU::push(void)
 {
-    trigger_event(IOEVENT_SEND_PWM_OUT);
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_iomcu_push_calls++;
+#endif
+    if (pwm_out_dirty || AP_BoardConfig::io_dshot()) {
+        trigger_event(IOEVENT_SEND_PWM_OUT);
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_iomcu_push_dirty_events++;
+#endif
+    } else {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_iomcu_push_clean_skips++;
+#endif
+    }
     corked = false;
+    pwm_out_dirty = false;
 }
 
 // set output frequency

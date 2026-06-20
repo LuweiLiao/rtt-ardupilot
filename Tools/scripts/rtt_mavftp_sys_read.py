@@ -14,8 +14,10 @@ from typing import Any
 
 from pymavlink import mavftp, mavutil
 
+from rtt_usb_port_select import MAVLINK_PORT, resolve_mavlink_port
 
-DEFAULT_PORT = "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00"
+DEFAULT_PORT = MAVLINK_PORT
+DEFAULT_TARGET_COMPONENT = mavutil.mavlink.MAV_COMP_ID_AUTOPILOT1
 
 
 def iso_now() -> str:
@@ -77,20 +79,26 @@ def read_file(ftp: mavftp.MAVFTP, remote_path: str, outdir: Path,
 def run(args: argparse.Namespace) -> dict[str, Any]:
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    conn = mavutil.mavlink_connection(args.port, baud=115200, robust_parsing=True,
+    port = resolve_mavlink_port(args.port)
+    payload: dict[str, Any] = {
+        "timestamp_utc": iso_now(),
+        "port": port,
+        "target_system": None,
+        "target_component": None,
+        "files": {},
+    }
+    conn = mavutil.mavlink_connection(port, baud=115200, robust_parsing=True,
                                       source_system=args.source_system)
     try:
         hb = conn.wait_heartbeat(timeout=args.heartbeat_timeout)
         if hb is None or conn.target_system == 0:
             raise RuntimeError("no_heartbeat")
-        ftp = mavftp.MAVFTP(conn, conn.target_system, conn.target_component)
-        payload: dict[str, Any] = {
-            "timestamp_utc": iso_now(),
-            "port": args.port,
-            "target_system": int(conn.target_system),
-            "target_component": int(conn.target_component),
-            "files": {},
-        }
+        heartbeat_component = int(hb.get_srcComponent())
+        target_component = int(conn.target_component or heartbeat_component or DEFAULT_TARGET_COMPONENT)
+        ftp = mavftp.MAVFTP(conn, conn.target_system, target_component)
+        payload["target_system"] = int(conn.target_system)
+        payload["target_component"] = int(target_component)
+        payload["pymavlink_target_component"] = int(conn.target_component)
         for remote_path in args.paths:
             payload["files"][remote_path] = read_file(ftp, remote_path, outdir, args.timeout)
         payload["verdict"] = (
@@ -99,6 +107,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             else "RED"
         )
         payload["reason"] = "sys_read_ok" if payload["verdict"] == "GREEN" else "sys_read_failed"
+        return payload
+    except Exception as exc:
+        payload["verdict"] = "RED"
+        payload["reason"] = str(exc)
         return payload
     finally:
         conn.close()

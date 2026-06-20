@@ -1,0 +1,127 @@
+{
+  "branch": "issue/rtt-spi-lld-real-activation",
+  "build": {
+    "command": "python3 -m SCons --target=cuav-v5 -j16",
+    "log": "results/execution/loop_rate_goal_20260620T095201Z/final_build_20260620T182452Z.log",
+    "verdict": "GREEN"
+  },
+  "can_slcan": {
+    "dronecan_fallback": {
+      "extended_frame_count": 4,
+      "reason": "extended_dronecan_class_frames_seen",
+      "required_source_node_id": null,
+      "source_node_ids": [
+        10
+      ],
+      "verdict": "GREEN"
+    },
+    "extended_ok": true,
+    "json": "results/execution/loop_rate_goal_20260620T095201Z/socketcan_dronecan_sudo_20260620T182307Z/socketcan_dronecan_gate.json",
+    "reason": "socketcan_slcan_dronecan_gate_ok",
+    "standard_ok": true,
+    "verdict": "GREEN"
+  },
+  "evidence_root": "results/execution/loop_rate_goal_20260620T095201Z",
+  "goal": "RTT CUAV V5 ArduPilot main-loop, USB, CAN, peripherals full bench acceptance",
+  "known_boundaries": [
+    "AHRS/pre-arm calibration remains pending on bench setup.",
+    "RC and hardware safety switch are not connected/cleared in this bench acceptance.",
+    "Official dronecan library did not decode NodeStatus in this run; candump DroneCAN-like extended-frame fallback passed with source node id 10."
+  ],
+  "log_download": {
+    "download": {
+      "bytes": 93696,
+      "path": "results/execution/loop_rate_goal_20260620T095201Z/log_download_20260620T181524Z/downloads/log_00000497.bin",
+      "sha256": "c8ea67dddaddc569359ef621ff7a4e3dadda2576d47f922b6c9c9ceb7f30ca16"
+    },
+    "json": "results/execution/loop_rate_goal_20260620T095201Z/log_download_20260620T181524Z/log_download_gate.json",
+    "reason": "log_list_download_restore_ok",
+    "selected_log": {
+      "id": 497,
+      "last_log_num": 500,
+      "num_logs": 500,
+      "size": 93696,
+      "time_utc": 134447189
+    },
+    "verdict": "GREEN"
+  },
+  "loop_rate": {
+    "debug_loop_hz": 794.9,
+    "imu_banner_text": [],
+    "ins_loop_rate": 400,
+    "json": "results/execution/loop_rate_goal_20260620T095201Z/loop_rate_gate_long_20260620T180025Z/loop_rate_gate.json",
+    "main_loop_slow_text": [],
+    "min_loop_rate_hz": 380.0,
+    "monitor_stuck_count": 0,
+    "reason": "loop_rate_ok",
+    "target_loop_rate_hz": 400,
+    "verdict": "GREEN"
+  },
+  "mavftp": {
+    "json": "results/execution/loop_rate_goal_20260620T095201Z/mavftp_retry_guard_20260620T181233Z/mavftp_gate.json",
+    "param_pck_bytes": 10653,
+    "param_pck_decoded_count": 947,
+    "post_ftp_stability": true,
+    "reason": "mavftp_ok",
+    "verdict": "GREEN"
+  },
+  "param_download": {
+    "elapsed_s": 1.406,
+    "json": "results/execution/loop_rate_goal_20260620T095201Z/acceptance_suite_20260620T180635Z/param_download/param_download.json",
+    "missing_count": 0,
+    "rate_params_s": 673.3,
+    "reason": "complete_fast",
+    "reported_count": 947,
+    "unique_indices": 947,
+    "verdict": "GREEN"
+  },
+  "peripherals": {
+    "calibration_verdict": "RED",
+    "driver_verdict": "GREEN",
+    "json": "results/execution/loop_rate_goal_20260620T095201Z/peripheral_health_20260620T181420Z/peripheral_health.json",
+    "reason": "peripheral_driver_ok_calibration_pending",
+    "sensor_bits": {
+      "accel": {
+        "enabled": true,
+        "healthy": true,
+        "present": true
+      },
+      "ahrs": {
+        "enabled": true,
+        "healthy": false,
+        "present": true
+      },
+      "baro": {
+        "enabled": true,
+        "healthy": true,
+        "present": true
+      },
+      "gyro": {
+        "enabled": true,
+        "healthy": true,
+        "present": true
+      },
+      "logging": {
+        "enabled": true,
+        "healthy": true,
+        "present": true
+      },
+      "mag": {
+        "enabled": true,
+        "healthy": true,
+        "present": true
+      }
+    },
+    "verdict": "GREEN"
+  },
+  "timestamp_utc": "2026-06-20T18:26:54Z",
+  "usb_descriptor": {
+    "json": "results/execution/loop_rate_goal_20260620T095201Z/usb_descriptor_20260620T180219Z/usb_descriptor_gate.json",
+    "verdict": "GREEN"
+  },
+  "verdict": "GREEN",
+  "workspace_cleanup": {
+    "moved_process_artifacts": 262,
+    "recycle_dir": "results/recycle_bin/20260620T182654Z_loop_rate_goal_process_artifacts"
+  }
+}

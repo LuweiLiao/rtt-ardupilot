@@ -2,10 +2,15 @@
  * CherryUSB CDC ACM shim — implements hal_usb_lld_rtt.h compatibility API for UARTDriver.
  *
  * Single OTG_FS_IRQHandler lives in cherryusb_board/usb_dc_glue.c.
- * Production VID/PID 0x1209:0x5741 (matches usb_cdc_rtt.c). Dual CDC only.
+ * Production VID/PID 0x1209:0x5740. Dual CDC by default.
+ *
+ * The RTT app uses ArduPilot's pid.codes composite CDC PID.  The bootloader
+ * and non-composite diagnostic devices use 0x5741, while 0x5740 is the
+ * official dual CDC identity with MI_00 for MAVLink and MI_02 for SLCAN.
  */
 #include "hal_usb_lld_rtt.h"
 #include "usb_dc_glue.h"
+#include "hwdef.h"
 
 #include <string.h>
 #include <stdbool.h>
@@ -49,12 +54,27 @@
 #define CHERRY_GRSTCTL_TXFFLSH  (1UL << 5)
 #define CHERRY_GRSTCTL_TXFNUM(ep) (((uint32_t)(ep) & 0x1FU) << 6)
 
-#define CHERRY_TX_BUSY_TIMEOUT_MS  73U
+#define CHERRY_TX_BUSY_TIMEOUT_MS  500U
 
-/* Match ChibiOS dual CDC endpoint layout: CDC0 int EP1/data EP2, CDC1 int EP3/data EP4. */
+/*
+ * Match ArduPilot/ChibiOS endpoint layout for the mode being tested.
+ *
+ * The normal RTT build is a dual CDC composite device:
+ *   CDC0 interrupt EP1, data EP2; CDC1 interrupt EP3, data EP4.
+ *
+ * The Windows MAVLink-only diagnostic build intentionally mirrors the
+ * long-proven ChibiOS single CDC shape:
+ *   data IN/OUT EP1, interrupt EP2, no IAD.
+ */
+#if RTT_USB_MAVLINK_ONLY
+#define CDC_IN_EP   0x81
+#define CDC_OUT_EP  0x01
+#define CDC_INT_EP  0x82
+#else
 #define CDC_IN_EP   0x82
 #define CDC_OUT_EP  0x02
 #define CDC_INT_EP  0x81
+#endif
 #define CDC2_IN_EP  0x84
 #define CDC2_OUT_EP 0x04
 #define CDC2_INT_EP 0x83
@@ -63,55 +83,153 @@
 #define CHERRY_CDC_IN_EP_IDX       (CDC_IN_EP & 0x0FU)
 #define CHERRY_CDC2_IN_EP_IDX      (CDC2_IN_EP & 0x0FU)
 
-#define CDC_ACM_CHIBIOS_DESCRIPTOR_LEN CDC_ACM_DESCRIPTOR_LEN
-#define CDC_ACM_CHIBIOS_DESCRIPTOR_INIT(bFirstInterface, int_ep, out_ep, in_ep, wMaxPacketSize) \
-    0x08, USB_DESCRIPTOR_TYPE_INTERFACE_ASSOCIATION, (bFirstInterface), 0x02, \
-    USB_DEVICE_CLASS_CDC, CDC_ABSTRACT_CONTROL_MODEL, 0x01, 0x00, \
+#if RTT_USB_MAVLINK_ONLY
+#define CDC_ACM_CHIBIOS_DESCRIPTOR_LEN 58
+#define CDC_ACM_CHIBIOS_DESCRIPTOR_INIT(bFirstInterface, int_ep, out_ep, in_ep, wMaxPacketSize, iFunction) \
     0x09, USB_DESCRIPTOR_TYPE_INTERFACE, (bFirstInterface), 0x00, 0x01, \
-    USB_DEVICE_CLASS_CDC, CDC_ABSTRACT_CONTROL_MODEL, 0x01, 0x00, \
+    USB_DEVICE_CLASS_CDC, CDC_ABSTRACT_CONTROL_MODEL, 0x01, (iFunction), \
     0x05, CDC_CS_INTERFACE, CDC_FUNC_DESC_HEADER, WBVAL(CDC_V1_10), \
-    0x05, CDC_CS_INTERFACE, CDC_FUNC_DESC_CALL_MANAGEMENT, 0x03, (uint8_t)((bFirstInterface) + 1U), \
+    0x05, CDC_CS_INTERFACE, CDC_FUNC_DESC_CALL_MANAGEMENT, 0x00, (uint8_t)((bFirstInterface) + 1U), \
     0x04, CDC_CS_INTERFACE, CDC_FUNC_DESC_ABSTRACT_CONTROL_MANAGEMENT, 0x02, \
     0x05, CDC_CS_INTERFACE, CDC_FUNC_DESC_UNION, (bFirstInterface), (uint8_t)((bFirstInterface) + 1U), \
-    0x07, USB_DESCRIPTOR_TYPE_ENDPOINT, (int_ep), 0x03, 0x08, 0x00, 0x01, \
+    0x07, USB_DESCRIPTOR_TYPE_ENDPOINT, (int_ep), 0x03, WBVAL(CDC_INT_MPS), 0xFF, \
     0x09, USB_DESCRIPTOR_TYPE_INTERFACE, (uint8_t)((bFirstInterface) + 1U), 0x00, 0x02, \
     CDC_DATA_INTERFACE_CLASS, 0x00, 0x00, 0x00, \
     0x07, USB_DESCRIPTOR_TYPE_ENDPOINT, (out_ep), 0x02, WBVAL(wMaxPacketSize), 0x00, \
     0x07, USB_DESCRIPTOR_TYPE_ENDPOINT, (in_ep), 0x02, WBVAL(wMaxPacketSize), 0x00
+#else
+#define CDC_ACM_CHIBIOS_DESCRIPTOR_LEN CDC_ACM_DESCRIPTOR_LEN
+#define CDC_ACM_CHIBIOS_DESCRIPTOR_INIT(bFirstInterface, int_ep, out_ep, in_ep, wMaxPacketSize, iFunction) \
+    0x08, USB_DESCRIPTOR_TYPE_INTERFACE_ASSOCIATION, (bFirstInterface), 0x02, \
+    USB_DEVICE_CLASS_CDC, CDC_ABSTRACT_CONTROL_MODEL, 0x01, (iFunction), \
+    0x09, USB_DESCRIPTOR_TYPE_INTERFACE, (bFirstInterface), 0x00, 0x01, \
+    USB_DEVICE_CLASS_CDC, CDC_ABSTRACT_CONTROL_MODEL, 0x01, (iFunction), \
+    0x05, CDC_CS_INTERFACE, CDC_FUNC_DESC_HEADER, WBVAL(CDC_V1_10), \
+    0x05, CDC_CS_INTERFACE, CDC_FUNC_DESC_CALL_MANAGEMENT, 0x03, (uint8_t)((bFirstInterface) + 1U), \
+    0x04, CDC_CS_INTERFACE, CDC_FUNC_DESC_ABSTRACT_CONTROL_MANAGEMENT, 0x02, \
+    0x05, CDC_CS_INTERFACE, CDC_FUNC_DESC_UNION, (bFirstInterface), (uint8_t)((bFirstInterface) + 1U), \
+    0x07, USB_DESCRIPTOR_TYPE_ENDPOINT, (int_ep), 0x03, WBVAL(CDC_INT_MPS), 0x01, \
+    0x09, USB_DESCRIPTOR_TYPE_INTERFACE, (uint8_t)((bFirstInterface) + 1U), 0x00, 0x02, \
+    CDC_DATA_INTERFACE_CLASS, 0x00, 0x00, 0x00, \
+    0x07, USB_DESCRIPTOR_TYPE_ENDPOINT, (out_ep), 0x02, WBVAL(wMaxPacketSize), 0x00, \
+    0x07, USB_DESCRIPTOR_TYPE_ENDPOINT, (in_ep), 0x02, WBVAL(wMaxPacketSize), 0x00
+#endif
+
+#ifndef RTT_USB_MAVLINK_ONLY
+#define RTT_USB_MAVLINK_ONLY 0
+#endif
+#ifndef RTT_USB_CHIBIOS_DUALCDC_SHAPE
+#define RTT_USB_CHIBIOS_DUALCDC_SHAPE 1
+#endif
+#ifndef RTT_USB_TX_REQUIRES_HOST_OPEN_HINT
+#define RTT_USB_TX_REQUIRES_HOST_OPEN_HINT 0
+#endif
 
 #define USBD_VID           0x1209
+#if RTT_USB_MAVLINK_ONLY
 #define USBD_PID           0x5741
-#define USBD_MAX_POWER     50
+#define USBD_BCD_DEVICE    0x0200
+#else
+#define USBD_PID           0x5740
+#define USBD_BCD_DEVICE    0x0200
+#endif
+#define USBD_MAX_POWER     100
 #define USBD_LANGID_STRING 0x0409
+#define USBD_STR_MANUFACTURER 1
+#define USBD_STR_PRODUCT      2
+#define USBD_STR_SERIAL       3
+#if RTT_USB_MAVLINK_ONLY
+#define USBD_STR_MAVLINK_CDC  4
+#endif
+#ifndef UID_BASE
+#define UID_BASE              0x1FF0F420UL
+#endif
+#define STM32_UID_BASE        UID_BASE
+#define USB_SERIAL_STRING_LEN 24U
 
+#define USBD_STR_MAVLINK_CDC_IF 0
+#define USBD_STR_SLCAN_CDC_IF   0
+
+#if RTT_USB_MAVLINK_ONLY
+#define USB_CONFIG_SIZE (9 + CDC_ACM_CHIBIOS_DESCRIPTOR_LEN)
+#else
 #define USB_CONFIG_SIZE (9 + CDC_ACM_CHIBIOS_DESCRIPTOR_LEN * 2)
+#endif
 #define CDC_MAX_MPS     64
+#if RTT_USB_MAVLINK_ONLY
+#define CDC_INT_MPS     8
+#else
+#define CDC_INT_MPS     16
+#endif
 /*
- * [Cybernetics Ch.15] Extremum seeking: ChibiOS SerialUSB gives CUAV V5 a
- * four-buffer 256B-class output queue before endpoint service.  Keep 64B ring
- * packet granularity, but aggregate up to one ChibiOS-sized transaction before
- * arming DWC2 so MAVFTP/PARAM bursts need fewer XFRC/re-arm cycles.
+ * [Cybernetics Ch.4] Closed-loop: keep each submitted CDC IN transfer at one
+ * full-speed bulk packet.  ChibiOS queues several 64B SerialUSB buffers, but
+ * the DWC2/CherryUSB completion callback reports one submitted transfer, not a
+ * ChibiOS queue transaction.  Windows usbser/Mission Planner is less tolerant
+ * of composite CDC streams when packet boundaries and ZLP completion drift, so
+ * use a conservative 64B arm size and let the ring provide the queue depth.
  */
-#define CDC_TX_CHUNK_MAX  256
+#define CDC_TX_CHUNK_MAX  CDC_MAX_MPS
 #define CDC_RX_QUEUE_DEPTH 32
 #define CDC_TX_RING_DEPTH  32
 /* Match ChibiOS SerialUSB's CUAV V5/F7 scale: 4 logical 256B buffers. */
 #define CDC_TX_RING_SOFT_LIMIT 16
+/*
+ * Keep ChibiOS-like TX-on-configure, but stop retrying forever if Windows has
+ * configured the composite device without opening/consuming the MAVLink COM.
+ */
+#define CHERRY_RECOVERY_NO_DTR_PAUSE_THRESHOLD 3U
 
-static const uint8_t cherry_cdc_descriptor[] = {
-    USB_DEVICE_DESCRIPTOR_INIT(USB_2_0, 0xEF, 0x02, 0x01, USBD_VID, USBD_PID, 0x0200, 0x01),
-    USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, 0x04, 0x01, USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
-    CDC_ACM_CHIBIOS_DESCRIPTOR_INIT(0x00, CDC_INT_EP, CDC_OUT_EP, CDC_IN_EP, CDC_MAX_MPS),
-    CDC_ACM_CHIBIOS_DESCRIPTOR_INIT(0x02, CDC2_INT_EP, CDC2_OUT_EP, CDC2_IN_EP, CDC_MAX_MPS),
+static uint8_t cherry_cdc_descriptor[] = {
+#if RTT_USB_MAVLINK_ONLY
+    /*
+     * Diagnostic fallback: expose only the MAVLink CDC ACM function.  This is
+     * useful on Windows to separate composite/MI driver binding problems from
+     * the actual MAVLink CDC data path.
+     */
+    USB_DEVICE_DESCRIPTOR_INIT(USB_1_1, USB_DEVICE_CLASS_CDC, 0x00, 0x00, USBD_VID, USBD_PID, USBD_BCD_DEVICE, 0x01),
+    USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, 0x02, 0x01, USB_CONFIG_SELF_POWERED, USBD_MAX_POWER),
+    CDC_ACM_CHIBIOS_DESCRIPTOR_INIT(0x00, CDC_INT_EP, CDC_OUT_EP, CDC_IN_EP, CDC_MAX_MPS, USBD_STR_MAVLINK_CDC),
     USB_LANGID_INIT(USBD_LANGID_STRING),
-    0x08, USB_DESCRIPTOR_TYPE_STRING,
-    'A', 0x00, 'P', 0x00, 'M', 0x00,
-    0x1C, USB_DESCRIPTOR_TYPE_STRING,
+    0x14, USB_DESCRIPTOR_TYPE_STRING,
+    'A', 0x00, 'r', 0x00, 'd', 0x00, 'u', 0x00, 'P', 0x00,
+    'i', 0x00, 'l', 0x00, 'o', 0x00, 't', 0x00,
+    0x28, USB_DESCRIPTOR_TYPE_STRING,
     'C', 0x00, 'U', 0x00, 'A', 0x00, 'V', 0x00, ' ', 0x00,
-    'V', 0x00, '5', 0x00, ' ', 0x00, 'C', 0x00, 'D', 0x00, 'C', 0x00, ' ', 0x00, '1', 0x00,
-    0x0C, USB_DESCRIPTOR_TYPE_STRING,
-    '0', 0x00, '0', 0x00, '0', 0x00, '0', 0x00, '1', 0x00,
+    'V', 0x00, '5', 0x00, ' ', 0x00, 'M', 0x00, 'A', 0x00,
+    'V', 0x00, 'L', 0x00, 'i', 0x00, 'n', 0x00, 'k', 0x00,
+    ' ', 0x00, 'C', 0x00, 'D', 0x00, 'C', 0x00,
+    0x32, USB_DESCRIPTOR_TYPE_STRING,
+    '0', 0x00, '0', 0x00, '0', 0x00, '0', 0x00,
+    '0', 0x00, '0', 0x00, '0', 0x00, '0', 0x00,
+    '0', 0x00, '0', 0x00, '0', 0x00, '0', 0x00,
+    '0', 0x00, '0', 0x00, '0', 0x00, '0', 0x00,
+    '0', 0x00, '0', 0x00, '0', 0x00, '0', 0x00,
+    '0', 0x00, '0', 0x00, '0', 0x00, '0', 0x00,
+    0x18, USB_DESCRIPTOR_TYPE_STRING,
+    'M', 0x00, 'A', 0x00, 'V', 0x00, 'L', 0x00, 'i', 0x00, 'n', 0x00, 'k', 0x00,
+    ' ', 0x00, 'C', 0x00, 'D', 0x00, 'C', 0x00,
     0x00
+#else
+    USB_DEVICE_DESCRIPTOR_INIT(USB_2_0, 0xEF, 0x02, 0x01, USBD_VID, USBD_PID, USBD_BCD_DEVICE, 0x01),
+    USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, 0x04, 0x01, USB_CONFIG_SELF_POWERED, USBD_MAX_POWER),
+    CDC_ACM_CHIBIOS_DESCRIPTOR_INIT(0x00, CDC_INT_EP, CDC_OUT_EP, CDC_IN_EP, CDC_MAX_MPS, USBD_STR_MAVLINK_CDC_IF),
+    CDC_ACM_CHIBIOS_DESCRIPTOR_INIT(0x02, CDC2_INT_EP, CDC2_OUT_EP, CDC2_IN_EP, CDC_MAX_MPS, USBD_STR_SLCAN_CDC_IF),
+    USB_LANGID_INIT(USBD_LANGID_STRING),
+    0x14, USB_DESCRIPTOR_TYPE_STRING,
+    'A', 0x00, 'r', 0x00, 'd', 0x00, 'u', 0x00, 'P', 0x00,
+    'i', 0x00, 'l', 0x00, 'o', 0x00, 't', 0x00,
+    0x0E, USB_DESCRIPTOR_TYPE_STRING,
+    'C', 0x00, 'U', 0x00, 'A', 0x00, 'V', 0x00, 'v', 0x00, '5', 0x00,
+    0x32, USB_DESCRIPTOR_TYPE_STRING,
+    '0', 0x00, '0', 0x00, '0', 0x00, '0', 0x00,
+    '0', 0x00, '0', 0x00, '0', 0x00, '0', 0x00,
+    '0', 0x00, '0', 0x00, '0', 0x00, '0', 0x00,
+    '0', 0x00, '0', 0x00, '0', 0x00, '0', 0x00,
+    '0', 0x00, '0', 0x00, '0', 0x00, '0', 0x00,
+    '0', 0x00, '0', 0x00, '0', 0x00, '0', 0x00,
+    0x00
+#endif
 };
 
 USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX static uint8_t cdc_read_buf[CDC_MAX_MPS];
@@ -136,8 +254,12 @@ static volatile uint8_t cherry2_rx_tail;
 static volatile uint8_t cherry2_rx_count;
 
 static volatile bool cherry_configured;
+static volatile bool cherry_suspended;
 static volatile bool cherry_dtr;
+static volatile bool cherry_rts;
+static volatile bool cherry_host_open_hint;
 static volatile bool cherry2_dtr;
+static volatile bool cherry2_rts;
 static volatile uint8_t cherry_tx_busy;
 static volatile uint8_t cherry2_tx_busy;
 static volatile bool cherry2_tx_needs_zlp;
@@ -157,7 +279,12 @@ volatile uint32_t rtt_dbg_cherry_tx_start_ok RTT_DBG_DTCM_BSS       = 0;
 volatile uint32_t rtt_dbg_cherry_tx_start_fail RTT_DBG_DTCM_BSS     = 0;
 volatile uint32_t rtt_dbg_cherry_tx_busy_state RTT_DBG_DTCM_BSS     = 0;
 volatile uint32_t rtt_dbg_cherry_configured_state RTT_DBG_DTCM_BSS  = 0;
+volatile uint32_t rtt_dbg_cherry_suspended_state RTT_DBG_DTCM_BSS   = 0;
 volatile uint32_t rtt_dbg_cherry_last_event RTT_DBG_DTCM_BSS        = 0;
+volatile uint32_t rtt_dbg_cherry_suspend_count RTT_DBG_DTCM_BSS     = 0;
+volatile uint32_t rtt_dbg_cherry_resume_count RTT_DBG_DTCM_BSS      = 0;
+volatile uint32_t rtt_dbg_cherry_disconnect_count RTT_DBG_DTCM_BSS  = 0;
+volatile uint32_t rtt_dbg_cherry_connect_count RTT_DBG_DTCM_BSS     = 0;
 volatile uint32_t rtt_dbg_cherry_init_calls RTT_DBG_DTCM_BSS        = 0;
 volatile uint32_t rtt_dbg_cherry_init_skipped RTT_DBG_DTCM_BSS      = 0;
 volatile uint32_t rtt_dbg_cherry_bkp_witness RTT_DBG_DTCM_BSS       = 0;
@@ -194,6 +321,10 @@ volatile uint32_t rtt_dbg_cherry_tx_completion_assumed_slots RTT_DBG_DTCM_BSS = 
 volatile uint32_t rtt_dbg_cherry_tx_completion_replayed RTT_DBG_DTCM_BSS      = 0;
 volatile uint32_t rtt_dbg_cherry_tx_uncertain_drop_after_recovery RTT_DBG_DTCM_BSS = 0;
 volatile uint32_t rtt_dbg_cherry_dtr_state RTT_DBG_DTCM_BSS                   = 0;
+volatile uint32_t rtt_dbg_cherry_host_open_hint_state RTT_DBG_DTCM_BSS        = 0;
+volatile uint32_t rtt_dbg_cherry_host_open_hint_set_count RTT_DBG_DTCM_BSS    = 0;
+volatile uint32_t rtt_dbg_cherry_host_open_hint_clear_count RTT_DBG_DTCM_BSS  = 0;
+volatile uint32_t rtt_dbg_cherry_host_open_hint_clear_reason RTT_DBG_DTCM_BSS = 0;
 volatile uint32_t rtt_dbg_cherry_recovery_paused_dtr RTT_DBG_DTCM_BSS         = 0;
 volatile uint32_t rtt_dbg_cherry_dtr_open_kicks RTT_DBG_DTCM_BSS              = 0;
 volatile uint32_t rtt_dbg_cherry_dtr_closed_complete RTT_DBG_DTCM_BSS         = 0;
@@ -226,6 +357,26 @@ volatile uint32_t rtt_dbg_cherry_last_epena_guard_ms RTT_DBG_DTCM_BSS         = 
 volatile uint32_t rtt_dbg_cherry_last_send_fail_ms RTT_DBG_DTCM_BSS           = 0;
 volatile uint32_t rtt_dbg_cherry_last_send_ok_ms RTT_DBG_DTCM_BSS             = 0;
 volatile uint32_t rtt_dbg_cherry_last_send_attempt_ms RTT_DBG_DTCM_BSS        = 0;
+volatile uint32_t rtt_dbg_cherry_bulk_out_calls RTT_DBG_DTCM_BSS              = 0;
+volatile uint32_t rtt_dbg_cherry_bulk_out_bytes RTT_DBG_DTCM_BSS              = 0;
+volatile uint32_t rtt_dbg_cherry_last_out_ep RTT_DBG_DTCM_BSS                 = 0;
+volatile uint32_t rtt_dbg_cherry_last_out_len RTT_DBG_DTCM_BSS                = 0;
+volatile uint32_t rtt_dbg_cherry_last_out_w0 RTT_DBG_DTCM_BSS                 = 0;
+volatile uint32_t rtt_dbg_cherry_last_out_w1 RTT_DBG_DTCM_BSS                 = 0;
+volatile uint32_t rtt_dbg_cherry_get_line_coding_calls RTT_DBG_DTCM_BSS       = 0;
+volatile uint32_t rtt_dbg_cherry_set_line_coding_calls RTT_DBG_DTCM_BSS       = 0;
+volatile uint32_t rtt_dbg_cherry_last_line_intf RTT_DBG_DTCM_BSS              = 0;
+volatile uint32_t rtt_dbg_cherry_last_line_baud RTT_DBG_DTCM_BSS              = 0;
+volatile uint32_t rtt_dbg_cherry_last_line_format RTT_DBG_DTCM_BSS            = 0;
+volatile uint32_t rtt_dbg_cherry_set_dtr_calls RTT_DBG_DTCM_BSS               = 0;
+volatile uint32_t rtt_dbg_cherry_set_rts_calls RTT_DBG_DTCM_BSS               = 0;
+volatile uint32_t rtt_dbg_cherry_dtr_open_count RTT_DBG_DTCM_BSS              = 0;
+volatile uint32_t rtt_dbg_cherry_dtr_close_count RTT_DBG_DTCM_BSS             = 0;
+volatile uint32_t rtt_dbg_cherry_last_dtr_intf RTT_DBG_DTCM_BSS               = 0;
+volatile uint32_t rtt_dbg_cherry_last_rts_intf RTT_DBG_DTCM_BSS               = 0;
+volatile uint32_t rtt_dbg_cherry2_dtr_state RTT_DBG_DTCM_BSS                  = 0;
+volatile uint32_t rtt_dbg_cherry_rts_state RTT_DBG_DTCM_BSS                   = 0;
+volatile uint32_t rtt_dbg_cherry2_rts_state RTT_DBG_DTCM_BSS                  = 0;
 volatile uint32_t rtt_dbg_cherry_tx_arm_len_hist[6] RTT_DBG_DTCM_BSS          = {0};
 volatile uint32_t rtt_dbg_cherry_tx_complete_len_hist[6] RTT_DBG_DTCM_BSS     = {0};
 volatile uint32_t rtt_dbg_cherry_tx_arm_slots_hist[5] RTT_DBG_DTCM_BSS        = {0};
@@ -254,12 +405,24 @@ volatile uint32_t rtt_dbg_cherry_trace_w3[RTT_DBG_CHERRY_TRACE_DEPTH] RTT_DBG_DT
 static uint32_t cherry_tx_busy_since_ms;
 static uint32_t cherry_tx_bulk_in_arm_gen;
 static uint32_t cherry_epena_stuck_since_ms;
+static uint8_t cherry_recovery_no_dtr_streak;
+
+enum {
+    RTT_DBG_CHERRY_OPEN_CLEAR_NONE     = 0,
+    RTT_DBG_CHERRY_OPEN_CLEAR_RESET    = 1,
+    RTT_DBG_CHERRY_OPEN_CLEAR_DTR_DOWN = 2,
+    RTT_DBG_CHERRY_OPEN_CLEAR_RECOVERY = 3,
+};
 
 enum {
     RTT_DBG_CHERRY_EVT_NONE       = 0,
     RTT_DBG_CHERRY_EVT_CONFIGURED = 1,
     RTT_DBG_CHERRY_EVT_RESET      = 2,
     RTT_DBG_CHERRY_EVT_DEINIT     = 3,
+    RTT_DBG_CHERRY_EVT_SUSPEND    = 4,
+    RTT_DBG_CHERRY_EVT_RESUME     = 5,
+    RTT_DBG_CHERRY_EVT_DISCONNECT = 6,
+    RTT_DBG_CHERRY_EVT_CONNECT    = 7,
 };
 
 enum {
@@ -269,6 +432,30 @@ enum {
 };
 
 static bool cherry_usb_initialized;
+
+static void cherry_patch_serial_string(void)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    const uint8_t *uid = (const uint8_t *)STM32_UID_BASE;
+    uint8_t *p = cherry_cdc_descriptor;
+    uint8_t string_index = 0U;
+
+    while (p[0] != 0U) {
+        if (p[1] == USB_DESCRIPTOR_TYPE_STRING) {
+            if (string_index == USBD_STR_SERIAL && p[0] >= (2U + USB_SERIAL_STRING_LEN * 2U)) {
+                for (uint8_t i = 0; i < 12U; i++) {
+                    p[2U + i * 4U] = (uint8_t)hex[(uid[i] >> 4U) & 0x0FU];
+                    p[3U + i * 4U] = 0U;
+                    p[4U + i * 4U] = (uint8_t)hex[uid[i] & 0x0FU];
+                    p[5U + i * 4U] = 0U;
+                }
+                return;
+            }
+            string_index++;
+        }
+        p += p[0];
+    }
+}
 
 static inline void cherry_dbg_sync_tx_busy(void)
 {
@@ -280,9 +467,64 @@ static inline void cherry_dbg_sync_configured(void)
     rtt_dbg_cherry_configured_state = cherry_configured ? 1U : 0U;
 }
 
+static inline void cherry_dbg_sync_suspended(void)
+{
+    rtt_dbg_cherry_suspended_state = cherry_suspended ? 1U : 0U;
+}
+
 static inline uint32_t cherry_now_ms(void)
 {
     return (uint32_t)((rt_tick_get() * 1000U) / RT_TICK_PER_SECOND);
+}
+
+static inline bool cherry_tx_host_may_receive(void)
+{
+#if RTT_USB_TX_REQUIRES_HOST_OPEN_HINT
+    /*
+     * [Cybernetics Ch.4] Closed-loop: Windows can configure a composite CDC
+     * device long before Mission Planner opens the MAVLink COM pipe.  Do not
+     * drain ArduPilot TX into an unconsumed endpoint at pure enumeration time;
+     * wait for a CDC class request or OUT packet that proves a serial client is
+     * attached.  This keeps the endpoint clean for the actual COM-open path.
+     */
+    return cherry_configured && !cherry_suspended && cherry_host_open_hint;
+#else
+    /*
+     * [Cybernetics Ch.4] Closed-loop: match ChibiOS SerialUSB's externally
+     * visible contract.  Mission Planner may wait for HEARTBEAT immediately
+     * after opening a Windows usbser COM port, and not every Windows open path
+     * produces a DTR/line-coding transition that reaches this class driver.
+     * Treat configured CDC as writable by default, but once endpoint feedback
+     * has proved that no host is consuming the stream, pause until the next
+     * class request, DTR transition, or OUT packet re-opens the pipe.  This
+     * keeps Windows usbser/Mission Planner from inheriting a dirty IN endpoint
+     * after the composite device was enumerated but the COM port was not open.
+     */
+    return cherry_configured && !cherry_suspended &&
+        (cherry_host_open_hint ||
+         cherry_recovery_no_dtr_streak < CHERRY_RECOVERY_NO_DTR_PAUSE_THRESHOLD);
+#endif
+}
+
+static void cherry_set_host_open_hint(bool open, uint32_t reason)
+{
+    if (cherry_host_open_hint == open) {
+        return;
+    }
+    cherry_host_open_hint = open;
+    rtt_dbg_cherry_host_open_hint_state = open ? 1U : 0U;
+    if (open) {
+        rtt_dbg_cherry_host_open_hint_set_count++;
+    } else {
+        rtt_dbg_cherry_host_open_hint_clear_count++;
+        rtt_dbg_cherry_host_open_hint_clear_reason = reason;
+    }
+}
+
+static void cherry_note_host_activity(void)
+{
+    cherry_recovery_no_dtr_streak = 0U;
+    cherry_set_host_open_hint(true, RTT_DBG_CHERRY_OPEN_CLEAR_NONE);
 }
 
 static uint32_t cherry_dbg_pack4(const uint8_t *buf, uint32_t len, uint32_t ofs)
@@ -324,6 +566,7 @@ static inline void cherry_tx_track_busy_max(uint32_t now_ms)
 }
 
 static void cherry_tx_epdis_recovery(uint32_t reason, uint32_t elapsed_ms);
+static void cherry_tx_stop_locked(void);
 
 static usb_rx_callback_t cherry_rx_cb;
 static void *cherry_rx_arg;
@@ -332,13 +575,13 @@ static void *cherry2_rx_arg;
 
 static struct cdc_line_coding cherry_line_coding[2] = {
     {
-        .dwDTERate = 921600,
+        .dwDTERate = 38400,
         .bCharFormat = 0,
         .bParityType = 0,
         .bDataBits = 8,
     },
     {
-        .dwDTERate = 115200,
+        .dwDTERate = 38400,
         .bCharFormat = 0,
         .bParityType = 0,
         .bDataBits = 8,
@@ -495,8 +738,8 @@ static void cherry_tx_kick(void)
 {
     rtt_dbg_cherry_tx_kick_calls++;
 
-    /* Match ChibiOS SerialUSB: DTR is advisory; configured USB may carry MAVLink. */
-    if (!cherry_configured) {
+    /* ChibiOS-compatible policy: configured CDC is enough to drain MAVLink TX. */
+    if (!cherry_tx_host_may_receive()) {
         return;
     }
 
@@ -694,7 +937,8 @@ static bool cherry_tx_start_zlp(void)
 
 static bool cherry2_tx_start_write(const uint8_t *data, uint32_t len)
 {
-    if (!cherry_configured || data == NULL || len == 0U || len > CDC_MAX_MPS ||
+    if (!cherry_configured || cherry_suspended ||
+        data == NULL || len == 0U || len > CDC_MAX_MPS ||
         cherry2_tx_busy ||
         (CHERRY_DIEPCTL(CHERRY_CDC2_IN_EP_IDX) & CHERRY_DIEPCTL_EPENA)) {
         return false;
@@ -710,6 +954,84 @@ static bool cherry2_tx_start_write(const uint8_t *data, uint32_t len)
         return false;
     }
     return true;
+}
+
+static void cherry_tx_stop_locked(void)
+{
+    if (cherry_tx_inflight_slots > 0U || cherry_tx_ring_count > 0U) {
+        rtt_dbg_cherry_dtr_closed_complete++;
+        rtt_dbg_cherry_dtr_closed_complete_slots +=
+            (uint32_t)cherry_tx_inflight_slots + (uint32_t)cherry_tx_ring_count;
+    }
+
+    if ((CHERRY_DIEPCTL(CHERRY_CDC_IN_EP_IDX) & CHERRY_DIEPCTL_EPENA) != 0U) {
+        rtt_dbg_cherry_dtr_closed_orphan_epena++;
+        rtt_dbg_cherry_dtr_closed_last_diepctl = CHERRY_DIEPCTL(CHERRY_CDC_IN_EP_IDX);
+        rtt_dbg_cherry_dtr_closed_last_diepint = CHERRY_DIEPINT(CHERRY_CDC_IN_EP_IDX);
+        rtt_dbg_cherry_dtr_closed_last_dieptsiz = CHERRY_DIEPTSIZ(CHERRY_CDC_IN_EP_IDX);
+        rtt_dbg_cherry_dtr_closed_last_dtxfsts = CHERRY_DTXFSTS(CHERRY_CDC_IN_EP_IDX);
+
+        CHERRY_DIEPEMPMSK &= ~(1UL << CHERRY_CDC_IN_EP_IDX);
+        CHERRY_DIEPCTL(CHERRY_CDC_IN_EP_IDX) |= (CHERRY_DIEPCTL_SNAK | CHERRY_DIEPCTL_EPDIS);
+
+        uint32_t timeout = 50000U;
+        while ((CHERRY_DIEPINT(CHERRY_CDC_IN_EP_IDX) & CHERRY_DIEPINT_EPDISD) == 0U) {
+            if (--timeout == 0U) {
+                break;
+            }
+        }
+
+        CHERRY_DIEPINT(CHERRY_CDC_IN_EP_IDX) = (CHERRY_DIEPINT_EPDISD | CHERRY_DIEPINT_XFRC);
+        CHERRY_GRSTCTL = CHERRY_GRSTCTL_TXFFLSH | CHERRY_GRSTCTL_TXFNUM(CHERRY_CDC_IN_EP_IDX);
+        timeout = 50000U;
+        while ((CHERRY_GRSTCTL & CHERRY_GRSTCTL_TXFFLSH) != 0U) {
+            if (--timeout == 0U) {
+                break;
+            }
+        }
+    }
+
+    cherry_tx_ring_reset();
+    cherry_tx_busy = 0U;
+    cherry_dbg_sync_tx_busy();
+    cherry_tx_busy_since_ms = 0U;
+    cherry_epena_stuck_since_ms = 0U;
+}
+
+static void cherry_suspend_locked(uint32_t event_code)
+{
+    rtt_dbg_cherry_last_event = event_code;
+    cherry_suspended = true;
+    cherry_dbg_sync_suspended();
+    cherry_set_host_open_hint(false, RTT_DBG_CHERRY_OPEN_CLEAR_RESET);
+    cherry_dtr = false;
+    cherry2_dtr = false;
+    rtt_dbg_cherry_dtr_state = 0U;
+    rtt_dbg_cherry2_dtr_state = 0U;
+    cherry_recovery_no_dtr_streak = 0U;
+    cherry_rx_queue_reset();
+    /*
+     * Match ChibiOS SerialUSB suspend semantics at the HAL boundary: make the
+     * channel non-writable and drop queued software buffers.  Do not wait for
+     * endpoint-disable/FIFO-flush completion from this USB event callback.
+     */
+    cherry_tx_ring_reset();
+    cherry_tx_busy = 0U;
+    cherry_dbg_sync_tx_busy();
+    cherry_tx_busy_since_ms = 0U;
+    cherry_epena_stuck_since_ms = 0U;
+    cherry2_tx_busy = 0U;
+    cherry2_tx_needs_zlp = false;
+}
+
+static void cherry_resume_locked(uint32_t event_code)
+{
+    rtt_dbg_cherry_last_event = event_code;
+    cherry_suspended = false;
+    cherry_dbg_sync_suspended();
+    cherry_tx_busy_since_ms = 0U;
+    cherry_epena_stuck_since_ms = 0U;
+    cherry_recovery_no_dtr_streak = 0U;
 }
 
 static void cherry2_tx_complete(uint32_t nbytes)
@@ -729,6 +1051,17 @@ static void cherry2_tx_complete(uint32_t nbytes)
 
 static void cherry_tx_epdis_recovery(uint32_t reason, uint32_t elapsed_ms)
 {
+    if (cherry_dtr) {
+        cherry_note_host_activity();
+    } else {
+        if (cherry_recovery_no_dtr_streak < 255U) {
+            cherry_recovery_no_dtr_streak++;
+        }
+        if (cherry_recovery_no_dtr_streak >= CHERRY_RECOVERY_NO_DTR_PAUSE_THRESHOLD) {
+            rtt_dbg_cherry_recovery_paused_dtr++;
+            cherry_set_host_open_hint(false, RTT_DBG_CHERRY_OPEN_CLEAR_RECOVERY);
+        }
+    }
     rtt_dbg_cherry_recovery_last_reason = reason;
     rtt_dbg_cherry_recovery_last_elapsed_ms = elapsed_ms;
     rtt_dbg_cherry_recovery_last_diepctl = CHERRY_DIEPCTL(CHERRY_CDC_IN_EP_IDX);
@@ -783,8 +1116,8 @@ static void cherry_tx_epdis_recovery(uint32_t reason, uint32_t elapsed_ms)
         /*
          * [Cybernetics Ch.4] Closed-loop: ChibiOS never replays a SerialUSB
          * output buffer after it has been handed to the USB peripheral.  Once
-         * EP1 was armed, host-visible state is uncertain after a forced disable
-         * and FIFO flush: replay can duplicate a MAVLink header if the host had
+         * a CDC IN endpoint was armed, host-visible state is uncertain after a
+         * forced disable and FIFO flush: replay can duplicate a MAVLink header if the host had
          * already received the packet but XFRC was lost/delayed.  Drop the
          * uncertain in-flight slots instead; MAVLink/FTP can retry missing
          * frames, but it cannot repair duplicated bytes inside one frame.
@@ -813,7 +1146,10 @@ static void cherry_usbd_event_handler(uint8_t busid, uint8_t event)
         rtt_dbg_usb_enumdne++;
         rtt_dbg_cherry_last_event = RTT_DBG_CHERRY_EVT_CONFIGURED;
         cherry_configured = true;
+        cherry_suspended = false;
+        cherry_set_host_open_hint(false, RTT_DBG_CHERRY_OPEN_CLEAR_RESET);
         cherry_dbg_sync_configured();
+        cherry_dbg_sync_suspended();
         rtt_dbg_cherry_dtr_state = cherry_dtr ? 1U : 0U;
         cherry_rx_queue_reset();
         cherry_tx_ring_reset();
@@ -823,18 +1159,25 @@ static void cherry_usbd_event_handler(uint8_t busid, uint8_t event)
         cherry_dbg_sync_tx_busy();
         cherry_tx_busy_since_ms = 0U;
         cherry_epena_stuck_since_ms = 0U;
+        cherry_recovery_no_dtr_streak = 0U;
         usbd_ep_start_read(busid, CDC_OUT_EP, cdc_read_buf, sizeof(cdc_read_buf));
+#if !RTT_USB_MAVLINK_ONLY
         usbd_ep_start_read(busid, CDC2_OUT_EP, cdc2_read_buf, sizeof(cdc2_read_buf));
+#endif
         break;
     case USBD_EVENT_RESET:
         rtt_dbg_usb_usbrst++;
         rtt_dbg_cherry_usb_reset++;
         rtt_dbg_cherry_last_event = RTT_DBG_CHERRY_EVT_RESET;
         cherry_configured = false;
+        cherry_suspended = false;
         cherry_dbg_sync_configured();
+        cherry_dbg_sync_suspended();
         cherry_dtr = false;
+        cherry_set_host_open_hint(false, RTT_DBG_CHERRY_OPEN_CLEAR_RESET);
         cherry2_dtr = false;
         rtt_dbg_cherry_dtr_state = 0U;
+        cherry_recovery_no_dtr_streak = 0U;
         cherry_rx_queue_reset();
         cherry_tx_ring_reset();
         cherry_tx_busy = 0;
@@ -847,10 +1190,14 @@ static void cherry_usbd_event_handler(uint8_t busid, uint8_t event)
     case USBD_EVENT_DEINIT:
         rtt_dbg_cherry_last_event = RTT_DBG_CHERRY_EVT_DEINIT;
         cherry_configured = false;
+        cherry_suspended = false;
         cherry_dbg_sync_configured();
+        cherry_dbg_sync_suspended();
         cherry_dtr = false;
+        cherry_set_host_open_hint(false, RTT_DBG_CHERRY_OPEN_CLEAR_RESET);
         cherry2_dtr = false;
         rtt_dbg_cherry_dtr_state = 0U;
+        cherry_recovery_no_dtr_streak = 0U;
         cherry_rx_queue_reset();
         cherry_tx_ring_reset();
         cherry_tx_busy = 0;
@@ -859,6 +1206,30 @@ static void cherry_usbd_event_handler(uint8_t busid, uint8_t event)
         cherry_dbg_sync_tx_busy();
         cherry_tx_busy_since_ms = 0U;
         cherry_epena_stuck_since_ms = 0U;
+        break;
+    case USBD_EVENT_SUSPEND:
+        rtt_dbg_cherry_suspend_count++;
+        cherry_suspend_locked(RTT_DBG_CHERRY_EVT_SUSPEND);
+        break;
+    case USBD_EVENT_DISCONNECTED:
+        rtt_dbg_cherry_disconnect_count++;
+        cherry_configured = false;
+        cherry_dbg_sync_configured();
+        cherry_suspend_locked(RTT_DBG_CHERRY_EVT_DISCONNECT);
+        break;
+    case USBD_EVENT_RESUME:
+        rtt_dbg_cherry_resume_count++;
+        cherry_resume_locked(RTT_DBG_CHERRY_EVT_RESUME);
+        if (cherry_configured) {
+            usbd_ep_start_read(busid, CDC_OUT_EP, cdc_read_buf, sizeof(cdc_read_buf));
+#if !RTT_USB_MAVLINK_ONLY
+            usbd_ep_start_read(busid, CDC2_OUT_EP, cdc2_read_buf, sizeof(cdc2_read_buf));
+#endif
+        }
+        break;
+    case USBD_EVENT_CONNECTED:
+        rtt_dbg_cherry_connect_count++;
+        rtt_dbg_cherry_last_event = RTT_DBG_CHERRY_EVT_CONNECT;
         break;
     default:
         break;
@@ -869,10 +1240,19 @@ void usbd_cdc_acm_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
 {
     /* Defer MAVLink parsing to usb_lld_poll_rtt() (main loop, IRQ masked there). */
     rtt_dbg_cherry_last_out_ms = cherry_now_ms();
+    rtt_dbg_cherry_bulk_out_calls++;
+    rtt_dbg_cherry_bulk_out_bytes += nbytes;
+    rtt_dbg_cherry_last_out_ep = ep;
+    rtt_dbg_cherry_last_out_len = nbytes;
     if (ep == CDC_OUT_EP) {
+        cherry_note_host_activity();
+        rtt_dbg_cherry_last_out_w0 = cherry_dbg_pack4(cdc_read_buf, nbytes, 0U);
+        rtt_dbg_cherry_last_out_w1 = cherry_dbg_pack4(cdc_read_buf, nbytes, 4U);
         cherry_rx_enqueue_from_isr(cdc_read_buf, nbytes);
         usbd_ep_start_read(busid, CDC_OUT_EP, cdc_read_buf, sizeof(cdc_read_buf));
     } else if (ep == CDC2_OUT_EP) {
+        rtt_dbg_cherry_last_out_w0 = cherry_dbg_pack4(cdc2_read_buf, nbytes, 0U);
+        rtt_dbg_cherry_last_out_w1 = cherry_dbg_pack4(cdc2_read_buf, nbytes, 4U);
         cherry2_rx_enqueue_from_isr(cdc2_read_buf, nbytes);
         usbd_ep_start_read(busid, CDC2_OUT_EP, cdc2_read_buf, sizeof(cdc2_read_buf));
     }
@@ -886,6 +1266,7 @@ void usbd_cdc_acm_bulk_in(uint8_t busid, uint8_t ep, uint32_t nbytes)
         return;
     }
     rtt_dbg_cherry_bulk_in_calls++;
+    cherry_recovery_no_dtr_streak = 0U;
     rtt_dbg_cherry_last_bulk_in_ms = cherry_now_ms();
     rtt_dbg_cherry_tx_last_complete_len = nbytes;
     rtt_dbg_cherry_tx_complete_bytes += nbytes;
@@ -932,6 +1313,11 @@ static struct usbd_endpoint cherry_ep_in = {
     .ep_cb = usbd_cdc_acm_bulk_in,
 };
 
+static struct usbd_endpoint cherry_ep_int = {
+    .ep_addr = CDC_INT_EP,
+    .ep_cb = NULL,
+};
+
 static struct usbd_endpoint cherry2_ep_out = {
     .ep_addr = CDC2_OUT_EP,
     .ep_cb = usbd_cdc_acm_bulk_out,
@@ -942,12 +1328,36 @@ static struct usbd_endpoint cherry2_ep_in = {
     .ep_cb = usbd_cdc_acm_bulk_in,
 };
 
+static struct usbd_endpoint cherry2_ep_int = {
+    .ep_addr = CDC2_INT_EP,
+    .ep_cb = NULL,
+};
+
 void usbd_cdc_acm_set_line_coding(uint8_t busid, uint8_t intf, struct cdc_line_coding *line_coding)
 {
     (void)busid;
     rtt_dbg_usb_setup_stup++;
+    rtt_dbg_cherry_set_line_coding_calls++;
+    rtt_dbg_cherry_last_line_intf = intf;
     if (line_coding != NULL) {
         cherry_line_coding[(intf >= 2U) ? 1U : 0U] = *line_coding;
+        rtt_dbg_cherry_last_line_baud = line_coding->dwDTERate;
+        rtt_dbg_cherry_last_line_format =
+            ((uint32_t)line_coding->bCharFormat << 16) |
+            ((uint32_t)line_coding->bParityType << 8) |
+            (uint32_t)line_coding->bDataBits;
+    }
+    if (intf < 2U && line_coding != NULL) {
+        rt_base_t level = rt_hw_interrupt_disable();
+        /*
+         * [Cybernetics Ch.4] Closed-loop: ChibiOS does not wait for a specific
+         * baud threshold before treating the CDC function as active.  Mission
+         * Planner and Windows usbser often probe line coding during bind, so a
+         * genuine class request on the MAVLink interface is enough to prime TX.
+         */
+        cherry_note_host_activity();
+        cherry_tx_kick();
+        rt_hw_interrupt_enable(level);
     }
 }
 
@@ -955,32 +1365,65 @@ void usbd_cdc_acm_get_line_coding(uint8_t busid, uint8_t intf, struct cdc_line_c
 {
     (void)busid;
     rtt_dbg_usb_setup_stup++;
+    rtt_dbg_cherry_get_line_coding_calls++;
+    rtt_dbg_cherry_last_line_intf = intf;
     if (line_coding != NULL) {
         *line_coding = cherry_line_coding[(intf >= 2U) ? 1U : 0U];
+        rtt_dbg_cherry_last_line_baud = line_coding->dwDTERate;
+        rtt_dbg_cherry_last_line_format =
+            ((uint32_t)line_coding->bCharFormat << 16) |
+            ((uint32_t)line_coding->bParityType << 8) |
+            (uint32_t)line_coding->bDataBits;
+    }
+    if (intf < 2U) {
+        rt_base_t level = rt_hw_interrupt_disable();
+        /*
+         * [Cybernetics Ch.4] Closed-loop: Windows/Mission Planner can open a
+         * CDC COM port by querying the current line coding before it asserts
+         * DTR or writes any MAVLink bytes.  Treat that class request as a
+         * fresh host-open hint so a previously paused composite CDC endpoint
+         * resumes heartbeat TX immediately.
+         */
+        cherry_note_host_activity();
+        cherry_tx_kick();
+        rt_hw_interrupt_enable(level);
     }
 }
 
 void usbd_cdc_acm_set_dtr(uint8_t busid, uint8_t intf, bool dtr)
 {
     (void)busid;
-    (void)intf;
     rtt_dbg_usb_setup_stup++;
+    rtt_dbg_cherry_set_dtr_calls++;
+    rtt_dbg_cherry_last_dtr_intf = intf;
     const uint8_t idx = (intf >= 2U) ? 1U : 0U;
     if (idx == 1U) {
         cherry2_dtr = dtr;
+        rtt_dbg_cherry2_dtr_state = dtr ? 1U : 0U;
+        if (dtr) {
+            rtt_dbg_cherry_dtr_open_count++;
+        } else {
+            rtt_dbg_cherry_dtr_close_count++;
+        }
         return;
     }
     const bool was_dtr = cherry_dtr;
+    if (dtr) {
+        cherry_note_host_activity();
+    }
     cherry_dtr = dtr;
     rtt_dbg_cherry_dtr_state = dtr ? 1U : 0U;
     if (dtr) {
         rtt_dbg_cherry_last_dtr_open_ms = cherry_now_ms();
+        rtt_dbg_cherry_dtr_open_count++;
     } else {
         rtt_dbg_cherry_last_dtr_close_ms = cherry_now_ms();
+        rtt_dbg_cherry_dtr_close_count++;
     }
 
     if (!was_dtr && dtr) {
         rt_base_t level = rt_hw_interrupt_disable();
+        cherry_note_host_activity();
         const uint32_t now_ms = cherry_now_ms();
         if (cherry_tx_busy && cherry_tx_busy_since_ms != 0U) {
             cherry_tx_busy_since_ms = now_ms;
@@ -989,20 +1432,66 @@ void usbd_cdc_acm_set_dtr(uint8_t busid, uint8_t intf, bool dtr)
         rtt_dbg_cherry_dtr_open_kicks++;
         cherry_tx_kick();
         rt_hw_interrupt_enable(level);
+    } else if (was_dtr && !dtr) {
+        /*
+         * [Cybernetics Ch.4] Closed-loop: match ChibiOS SerialUSB more
+         * closely.  Windows usbser/Mission Planner may briefly toggle DTR
+         * during COM open; treating that falling edge as a hard close made the
+         * app go silent on Windows even though the CDC pipe was still usable.
+         * Keep the configured/open hint and let endpoint feedback recovery
+         * prove a real non-consuming host before pausing TX.
+         */
+        rt_base_t level = rt_hw_interrupt_disable();
+        const uint32_t now_ms = cherry_now_ms();
+        if (cherry_tx_busy && cherry_tx_busy_since_ms != 0U) {
+            cherry_tx_busy_since_ms = now_ms;
+        }
+        cherry_epena_stuck_since_ms = 0U;
+        cherry_tx_kick();
+        rt_hw_interrupt_enable(level);
     }
+}
+
+void usbd_cdc_acm_set_rts(uint8_t busid, uint8_t intf, bool rts)
+{
+    (void)busid;
+    rtt_dbg_usb_setup_stup++;
+    rtt_dbg_cherry_set_rts_calls++;
+    rtt_dbg_cherry_last_rts_intf = intf;
+    const uint8_t idx = (intf >= 2U) ? 1U : 0U;
+    if (idx == 1U) {
+        cherry2_rts = rts;
+        rtt_dbg_cherry2_rts_state = rts ? 1U : 0U;
+        return;
+    }
+    cherry_rts = rts;
+    rtt_dbg_cherry_rts_state = rts ? 1U : 0U;
 }
 
 static void cherry_cdc_stack_init(void)
 {
+    /*
+     * [Cybernetics Ch.4] Closed-loop: match ChibiOS USB identity semantics.
+     * ChibiOS expands %SERIAL% from the 96-bit STM32 UID, so Windows creates
+     * a per-board composite CDC instance instead of reusing a stale fixed
+     * RTT5740* binding from earlier diagnostic firmware.
+     */
+    cherry_patch_serial_string();
     usbd_desc_register(0, cherry_cdc_descriptor);
     usbd_add_interface(0, usbd_cdc_acm_init_intf(0, &cherry_intf0));
     usbd_add_interface(0, usbd_cdc_acm_init_intf(0, &cherry_intf1));
+#if !RTT_USB_MAVLINK_ONLY
     usbd_add_interface(0, usbd_cdc_acm_init_intf(0, &cherry_intf2));
     usbd_add_interface(0, usbd_cdc_acm_init_intf(0, &cherry_intf3));
+#endif
     usbd_add_endpoint(0, &cherry_ep_out);
     usbd_add_endpoint(0, &cherry_ep_in);
+    usbd_add_endpoint(0, &cherry_ep_int);
+#if !RTT_USB_MAVLINK_ONLY
     usbd_add_endpoint(0, &cherry2_ep_out);
     usbd_add_endpoint(0, &cherry2_ep_in);
+    usbd_add_endpoint(0, &cherry2_ep_int);
+#endif
     usbd_initialize(0, CHERRY_USB_OTG_FS_BASE, cherry_usbd_event_handler);
 }
 
@@ -1102,19 +1591,26 @@ void usb_lld_poll_rtt(void)
 
 bool usb_lld_send_rtt(uint8_t ep, const uint8_t *data, uint32_t len)
 {
-    if (!cherry_configured || data == NULL || len == 0) {
+    if (!cherry_configured || cherry_suspended || data == NULL || len == 0) {
         return false;
     }
     if (len > CDC_MAX_MPS) {
         len = CDC_MAX_MPS;
     }
     if (ep == CHERRY_CDC2_LOGICAL_IN_EP) {
+#if RTT_USB_MAVLINK_ONLY
+        return false;
+#else
         rt_base_t level = rt_hw_interrupt_disable();
         const bool ok = cherry2_tx_start_write(data, len);
         rt_hw_interrupt_enable(level);
         return ok;
+#endif
     }
     if (ep != CHERRY_CDC_LOGICAL_IN_EP) {
+        return false;
+    }
+    if (!cherry_tx_host_may_receive()) {
         return false;
     }
 
@@ -1134,13 +1630,20 @@ bool usb_lld_send_rtt(uint8_t ep, const uint8_t *data, uint32_t len)
 
 uint32_t usb_lld_txspace_rtt(uint8_t ep)
 {
-    if (!cherry_configured) {
+    if (!cherry_configured || cherry_suspended) {
         return 0;
     }
     if (ep == CHERRY_CDC2_LOGICAL_IN_EP) {
+#if RTT_USB_MAVLINK_ONLY
+        return 0U;
+#else
         return cherry2_tx_busy ? 0U : CDC_MAX_MPS;
+#endif
     }
     if (ep != CHERRY_CDC_LOGICAL_IN_EP) {
+        return 0;
+    }
+    if (!cherry_tx_host_may_receive()) {
         return 0;
     }
 
@@ -1173,44 +1676,58 @@ void usb_lld_set_rx_callback_idx(uint8_t idx, usb_rx_callback_t cb, void *arg)
 
 void usb_lld_rearm_cdc_out(void)
 {
-    if (cherry_configured) {
+    if (cherry_configured && !cherry_suspended) {
         usbd_ep_start_read(0, CDC_OUT_EP, cdc_read_buf, sizeof(cdc_read_buf));
     }
 }
 
 void usb_lld_rearm_cdc_out_idx(uint8_t idx)
 {
-    if (!cherry_configured) {
+    if (!cherry_configured || cherry_suspended) {
         return;
     }
     if (idx == 0U) {
         usbd_ep_start_read(0, CDC_OUT_EP, cdc_read_buf, sizeof(cdc_read_buf));
     } else if (idx == 1U) {
+#if !RTT_USB_MAVLINK_ONLY
         usbd_ep_start_read(0, CDC2_OUT_EP, cdc2_read_buf, sizeof(cdc2_read_buf));
+#endif
     }
 }
 
 bool usb_lld_is_configured_rtt(void)
 {
-    return cherry_configured;
+    return cherry_configured && !cherry_suspended;
 }
 
 bool usb_lld_is_configured_idx_rtt(uint8_t idx)
 {
+#if RTT_USB_MAVLINK_ONLY
+    if (idx != 0U) {
+        return false;
+    }
+#else
     (void)idx;
-    return cherry_configured;
+#endif
+    return cherry_configured && !cherry_suspended;
 }
 
 bool usb_lld_get_connected_rtt(void)
 {
     /* Match native stack: enumerated/configured, not gated on DTR (DTR tracked for class requests). */
-    return cherry_configured;
+    return cherry_configured && !cherry_suspended;
 }
 
 bool usb_lld_get_connected_idx_rtt(uint8_t idx)
 {
+#if RTT_USB_MAVLINK_ONLY
+    if (idx != 0U) {
+        return false;
+    }
+#else
     (void)idx;
-    return cherry_configured;
+#endif
+    return cherry_configured && !cherry_suspended;
 }
 
 void usb_lld_set_address_rtt(uint8_t addr)

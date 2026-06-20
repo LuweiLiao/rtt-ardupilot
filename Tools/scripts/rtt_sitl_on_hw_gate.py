@@ -22,8 +22,9 @@ from typing import Any
 
 from pymavlink import mavutil
 
+from rtt_usb_port_select import MAVLINK_PORT, resolve_mavlink_port
 
-DEFAULT_PORT = "/dev/serial/by-id/usb-APM_CUAV_V5_CDC_1_00001-if00"
+DEFAULT_PORT = MAVLINK_PORT
 
 EXPECTED_PARAMS: dict[str, float] = {
     "AHRS_EKF_TYPE": 10.0,
@@ -99,37 +100,13 @@ def auto_port_is_excluded(path: str, excluded_realpaths: set[str]) -> bool:
 
 
 def resolve_port(port_arg: str) -> str:
-    if port_arg != "auto":
-        if not os.path.exists(port_arg):
-            raise GateError("port_not_found", {"port": port_arg})
-        return port_arg
-
-    excluded_realpaths = excluded_port_realpaths()
-
-    if os.path.exists(DEFAULT_PORT) and not auto_port_is_excluded(DEFAULT_PORT, excluded_realpaths):
-        return DEFAULT_PORT
-
-    patterns = (
-        "/dev/serial/by-id/usb-APM_CUAV_V5_CDC*",
-        "/dev/serial/by-id/*CUAV*CDC*",
-        "/dev/serial/by-id/*ArduPilot*",
-    )
-    for pattern in patterns:
-        matches = [
-            path for path in sorted(glob.glob(pattern))
-            if not auto_port_is_excluded(path, excluded_realpaths)
-        ]
-        if matches:
-            return matches[0]
-
-    acms = [
-        dev for dev in sorted(glob.glob("/dev/ttyACM*"))
-        if realpath_or_self(dev) not in excluded_realpaths
-    ]
-    if acms:
-        return acms[0]
-
-    raise GateError("no_cdc_port")
+    try:
+        port = resolve_mavlink_port(port_arg)
+    except RuntimeError as exc:
+        raise GateError(str(exc), {"by_id": by_id_snapshot(), "ttyACM": tty_acm_snapshot()}) from exc
+    if port_arg != "auto" and not os.path.exists(port):
+        raise GateError("port_not_found", {"port": port})
+    return port
 
 
 def wait_cdc_resolve(port_arg: str, timeout_s: float) -> dict[str, Any]:

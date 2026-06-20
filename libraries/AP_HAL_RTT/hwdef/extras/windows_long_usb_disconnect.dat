@@ -1,0 +1,11 @@
+# Legacy long USB reconnect timing diagnostic for Windows/Mission Planner.
+#
+# Build with:
+#   python3 -m SCons --v=ArduCopter --target=cuav_v5 \
+#     --extra-hwdef=libraries/AP_HAL_RTT/hwdef/extras/windows_long_usb_disconnect.dat
+#
+# The default RTT app now uses a ChibiOS-like 1500 us preinit soft-disconnect
+# window.  This fragment keeps the same 1209:5740 dual-CDC identity but restores
+# the older 750 ms window as a controlled A/B image if Windows behavior needs to
+# be compared against the previous long-disconnect baseline.
+define RTT_USB_PREINIT_DISCONNECT_MS 750

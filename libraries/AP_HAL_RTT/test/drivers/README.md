@@ -12,7 +12,7 @@ HAL abstract and external-module tests live here. **STM32 register bring-up** st
 | `D_storage` | `D_storage/` | **HAL smoke** (`hal.storage` init + tail-8B RW + restore) | **已构建** | Scratch at `HAL_STORAGE_SIZE-8`; **RAM stub** on cuav_v5; not SD/FRAM |
 | `D_scheduler` | `D_scheduler/` | **HAL smoke** (`scheduler` init + timer proc + delay) | **已构建 / 已上板通过** | UART7 callback count>0; CFSR/HFSR=0 |
 | `D_analogin` | `D_analogin/` | **HAL smoke** (`analogin` init/ch6 + `_timer_tick`; raw/mV diagnostics) | **已构建 / 已上板通过** | ch6 SCALED_V3V3; `raw_counts=2064`, `voltage_latest=3326 mV`; **not** full ADC calibration |
-| `D_usb_serial` | `D_usb_serial/` | **HAL smoke** (CherryUSB shim + `hal.serial(0)` TX; 3s beacon + optional echo loop) | **已构建 / 上板 CDC TX PASS** | `test_stubs_no_usb.c` + `rtt_test_hal_usb_serial_link.py`；ACM `1209:5741` @ 921600 可见 `CDC beacon`；CFSR/HFSR=0；L7 未改 |
+| `D_usb_serial` | `D_usb_serial/` | **HAL smoke** (CherryUSB shim + `hal.serial(0)` TX; 3s beacon + optional echo loop) | **已构建 / 上板 CDC TX PASS** | `test_stubs_no_usb.c` + `rtt_test_hal_usb_serial_link.py`；ACM `1209:5740` @ 921600 可见 `CDC beacon`；CFSR/HFSR=0；L7 未改 |
 | `D_rcoutput` | `D_rcoutput/` | **HAL smoke** (`rcout` init/enable_ch/set_freq/write/read/read_last_sent/cork/push) | **已构建** | CH0 only 1000–1200 µs; **no scope/ESC/props** |
 | `D_rcinput` | `D_rcinput/` | **HAL smoke** (`rcin` init/new_input/num_channels/read; 3s poll) | **已构建** | **SBUS/PPM required**; no signal→**TEST_FAIL**; `AP_RCPROTOCOL=0` in image |
 | `E_sdcard` | `E_sdcard/` | **SD/FS smoke** (mount `/APM`, POSIX RW on `.rtt_e_sdcard_smoke`) | **已构建** | **microSD required**; no card → **TEST_FAIL** |
