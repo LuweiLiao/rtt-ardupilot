@@ -16,6 +16,7 @@ Usage: python3 rtt_bsp_deploy.py <AP_ROOT> <TARGET>
 """
 
 import argparse
+import contextlib
 import os
 import pickle
 import shutil
@@ -82,6 +83,38 @@ def normalize_target(target):
     return ''
 
 
+@contextlib.contextmanager
+def _target_deploy_lock(ap_root, target):
+    """
+    Serialize deploy-directory updates for one target.
+
+    Root SCons holds this same lock across deploy + BSP SCons + packaging, so
+    the deploy helper must detect that parent-held state to avoid self-locking.
+    """
+    if os.environ.get('RTT_TARGET_LOCK_HELD') == target:
+        yield
+        return
+
+    lock_dir = os.path.join(ap_root, 'build', 'rtt_deploy')
+    os.makedirs(lock_dir, exist_ok=True)
+    lock_path = os.path.join(lock_dir, '%s.lock' % target)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        import fcntl
+        print('RTT deploy lock: waiting for %s' % lock_path, file=sys.stderr)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.ftruncate(fd, 0)
+        os.write(fd, ('pid=%s target=%s\n' % (os.getpid(), target)).encode('ascii'))
+        print('RTT deploy lock: acquired %s' % lock_path, file=sys.stderr)
+        yield
+    finally:
+        try:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
 def deploy(ap_root, target):
     """
     Deploy BSP for target to build/rtt_deploy/<canonical_target>.
@@ -92,6 +125,11 @@ def deploy(ap_root, target):
     if canonical not in RTT_TARGETS:
         return None, "Unknown target: %s (supported: %s)" % (target, ', '.join(sorted(RTT_TARGETS.keys())))
 
+    with _target_deploy_lock(ap_root, canonical):
+        return _deploy_locked(ap_root, canonical)
+
+
+def _deploy_locked(ap_root, canonical):
     tinfo = RTT_TARGETS[canonical]
     deploy_dir = os.path.join(ap_root, 'build', 'rtt_deploy', canonical)
     rtt_root = os.path.join(ap_root, 'modules', 'rt-thread')

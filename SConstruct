@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import shutil
+import atexit
 
 from SCons.Script import AddOption, GetOption, ARGUMENTS
 
@@ -241,6 +242,34 @@ def _verify_bin_integrity(ap_root, bsp_deploy_abspath):
         Exit(ret)
 
 
+def _hold_rtt_target_lock(ap_root, target):
+    """Serialize root SCons invocations that share one RTT deploy directory."""
+    lock_dir = os.path.join(ap_root, 'build', 'rtt_deploy')
+    os.makedirs(lock_dir, exist_ok=True)
+    lock_path = os.path.join(lock_dir, '%s.lock' % target)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        import fcntl
+        print('RTT target lock: waiting for %s' % lock_path)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.ftruncate(fd, 0)
+        os.write(fd, ('pid=%s target=%s\n' % (os.getpid(), target)).encode('ascii'))
+        print('RTT target lock: acquired %s' % lock_path)
+    except Exception:
+        os.close(fd)
+        raise
+
+    def _release():
+        try:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+    atexit.register(_release)
+    return lock_path
+
+
 # --- When valid --target: deploy then scons in BSP (or scons -c for clean) ---
 target = GetOption('target')
 canonical_target = _normalize_target(target)
@@ -272,10 +301,12 @@ if canonical_target:
         i += 1
     bsp_deploy_abspath = os.path.join(ap_root, 'build', 'rtt_deploy', canonical_target)
     is_clean = '-c' in scons_args or '--clean' in scons_args
+    _hold_rtt_target_lock(ap_root, canonical_target)
     # 1) Deploy BSP only for build; clean should not recreate staging area.
     if not is_clean:
         deploy_env = os.environ.copy()
         _apply_hwdef_option_env(ap_root, deploy_env)
+        deploy_env['RTT_TARGET_LOCK_HELD'] = canonical_target
         try:
             bsp_deploy_abspath = subprocess.check_output(
                 [sys.executable, deploy_script, ap_root, canonical_target],
