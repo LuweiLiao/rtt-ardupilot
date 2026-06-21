@@ -15,14 +15,14 @@
  * STM32F767 uses standard ADCv2 peripheral.
  * Reference manual: RM0410 §19 (ADC)
  *
- * NOTE: The RT-Thread CMSIS header defines ADC_SR bit 0 as AWD (from older
- * STM32F4 ADC_TypeDef layout), but on STM32F7 this bit is ADRDY (RM0410 §19.6.1).
- * Similarly ADC_CR2 bit 31 (ADCAL) is missing from the header.
- * Define them locally here — verified against ChibiOS ADCv2 LLD and RM0410.
+ * NOTE: The STM32F7 CMSIS headers already provide the standard ADCv2 bit
+ * definitions such as ADC_SR_EOC.  Only define the compatibility names that
+ * are missing from the shipped headers, after including CMSIS, to avoid
+ * diverging from the vendor register truth source.
  */
-#ifndef ADC_SR_EOC
-#define ADC_SR_EOC     (0x1UL << 1U)   /* bit 1: End of Conversion (RM0410) */
-#endif
+#include <stm32f7xx.h>
+#include "hal_adc_lld_rtt.h"
+
 #ifndef ADC_SR_ADRDY
 #define ADC_SR_ADRDY    (0x1UL << 0U)   /* bit 0: ADC ready (RM0410) */
 #endif
@@ -33,9 +33,6 @@
  * It is an STM32H7/G4-only bit.  On F7 this bit is reserved.
  * ChibiOS ADCv2 LLD never sets it (hal_adc_lld.c:302 just sets ADON).
  */
-
-#include "hal_adc_lld_rtt.h"
-#include <stm32f7xx.h>
 
 /* Diagnostic counters for GDB — visible in .bss, writeable via debugger */
 volatile uint32_t rtt_adc_lld_init_status = 0;  /* 0=init_OK, 2=ADRDY_timeout */

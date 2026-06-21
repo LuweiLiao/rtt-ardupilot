@@ -157,7 +157,7 @@ board: CUAV V5 / STM32F767
 | RTT-GAP-130 | Build | FIXED | `AP_Math.cpp` 的 clang-only diagnostic pragma 已用 `#if defined(__clang__)` 保护，GCC RTT 构建不再解析 clang pragma | `rtt_gap130_build_20260621T194317Z` | 保持 `is_equal()` 浮点逻辑不变 |
 | RTT-GAP-131 | Build | FIXED | `BufferPrinter` 与 `AP_HAL_Empty::GPIO` 显式恢复基类 `read/write/pinMode` 重载集可见性，消除隐藏重载风险 | `rtt_gap124_131_build_20260621T201158Z` | 保持 HAL interface warning gate |
 | RTT-GAP-132 | Scripting | FIXED | RTT SCons 生成的 ArduPilot define 集合已补齐 `ARDUPILOT_BUILD=1`，Lua runtime 重新进入 ArduPilot 嵌入式沙箱裁剪路径，`loadlib/lbaselib/lstrlib/liolib` unused static warning 消失 | `rtt_gap132_fix_build_20260621T202516Z` | 保持 RTT SCons 与 waf 的核心构建宏一致 |
-| RTT-GAP-133 | ADC | OPEN | `hal_adc_lld_rtt.c` 在包含 STM32F7 CMSIS 头前手写 `ADC_SR_EOC`，与 `stm32f767xx.h` 宏重定义 | `rtt_gap132_fix_build_20260621T202516Z` | 改为使用 CMSIS 寄存器宏或加兼容保护 |
+| RTT-GAP-133 | ADC | FIXED | `hal_adc_lld_rtt.c` 改为先包含 STM32F7 CMSIS 头并使用其 `ADC_SR_EOC` 定义，本地只补缺失兼容宏，消除 ADC LLD 与 `stm32f767xx.h` 宏重定义 | `rtt_gap133_build_20260621T203110Z` | 保持 CMSIS 为寄存器位真相源 |
 
 ## 本轮已处理
 
@@ -181,4 +181,5 @@ board: CUAV V5 / STM32F767
 - `RTT-GAP-124` / `RTT-GAP-131`：修复 overloaded virtual 隐藏重载风险。`BufferPrinter` 使用 `using AP_HAL::BetterStream::read/write` 恢复 `BetterStream` 的完整重载集，`AP_HAL_Empty::GPIO` 使用 `using AP_HAL::GPIO::pinMode` 恢复三参数 alt pinMode，OSD MAX7456/MSP/MSP DisplayPort/SITL 后端使用 `using AP_OSD_Backend::write` 恢复格式化写接口。验证：`python3 -m SCons --target=cuav-v5 -j16` 通过，`results/execution/rtt_gap124_131_build_20260621T201158Z/build.log` 中 `warning:` / `overloaded-virtual` / `was hidden` / `AP_OSD_Backend.h:38` / `BetterStream` / `GPIO.h:54` 目标检索为空，源码树 artifact audit 仍为 0。
 - `RTT-GAP-132`：修复 RTT SCons 与 waf 构建宏不一致。`Tools/scripts/scons_ardupilot_sources.py` 现在为 F7/H7 RTT ArduPilot 对象统一加入 `ARDUPILOT_BUILD=1`，让 Lua `ARDUPILOT_BUILD` 条件编译重新生效；这不只是消除 warning，也让 `loadlib/luaconf/linit/loslib` 等 Lua runtime 回到 ArduPilot 嵌入式沙箱行为。验证：先强制删除 35 个当前 CUAV V5 RTT Lua 对象并构建，`results/execution/rtt_gap132_rebuild_20260621T201914Z/build.log` 复现 `createclibstable/luaB_xpcall/str_dump/io_tmpfile` 等 unused warning；修复后再次强制删除 Lua 对象并构建，`results/execution/rtt_gap132_fix_build_20260621T202516Z/build.log` 中上述 Lua warning/`unused-function` 检索为空，生成的 `scons_ardupilot_config.py` 含 `ARDUPILOT_BUILD=1`，源码树 artifact audit 仍为 0。
 - 新发现 `RTT-GAP-133`：修复 `RTT-GAP-132` 后，完整构建日志仍有 `hal_adc_lld_rtt.c` 手写 `ADC_SR_EOC` 与 STM32F7 CMSIS `stm32f767xx.h` 重定义 warning，已登记为下一轮 ADC LLD/CMSIS 对齐项。
+- `RTT-GAP-133`：修复 ADC LLD 与 CMSIS 寄存器宏边界。`hal_adc_lld_rtt.c` 现在先包含 `<stm32f7xx.h>` 和本地头，再只为 CMSIS 缺失的 `ADC_SR_ADRDY/ADC_CR2_ADCAL` 提供兼容定义；标准 `ADC_SR_EOC` 改用 STM32F7 CMSIS 头里的定义，ADC 初始化/转换流程不变。验证：强制删除 `hal_adc_lld_rtt.o` 后执行 `python3 -m SCons --target=cuav-v5 -j16` 通过，`results/execution/rtt_gap133_build_20260621T203110Z/build.log` 中 `warning:` / `ADC_SR_EOC` / `redefined` 检索为空，二进制完整性检查通过，源码树 artifact audit 仍为 0。
 - 新增本台账，首批记录 120 项差距，后续每轮按 ID 修复、验证、关闭。
