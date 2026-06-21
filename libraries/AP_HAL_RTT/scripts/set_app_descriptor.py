@@ -39,7 +39,7 @@ def to_unsigned(i):
 
 
 def git_short_hash(source_root):
-    """Return the short git hash, retrying with a scoped safe.directory.
+    """Return the short git hash, retrying after marking the repo safe.
 
     GitHub container jobs can run the build with a HOME/global git config that
     differs from actions/checkout's temporary setup, which makes git reject the
@@ -58,13 +58,16 @@ def git_short_hash(source_root):
     if 'dubious ownership' not in result.stderr:
         return None, result.stderr
 
-    env = os.environ.copy()
-    env['GIT_CONFIG_COUNT'] = '1'
-    env['GIT_CONFIG_KEY_0'] = 'safe.directory'
-    env['GIT_CONFIG_VALUE_0'] = source_root
+    config = subprocess.run(
+        ['git', 'config', '--global', '--add', 'safe.directory', source_root],
+        capture_output=True, text=True, timeout=5
+    )
+    if config.returncode != 0:
+        return None, config.stderr
+
     retry = subprocess.run(
         cmd,
-        capture_output=True, text=True, timeout=5, env=env
+        capture_output=True, text=True, timeout=5
     )
     if retry.returncode == 0:
         return retry.stdout.strip(), None
