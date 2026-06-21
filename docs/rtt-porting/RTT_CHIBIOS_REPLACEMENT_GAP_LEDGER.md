@@ -146,7 +146,7 @@ board: CUAV V5 / STM32F767
 | RTT-GAP-119 | Release | OPEN | 无“可替代 ChibiOS”总验收证书模板 | docs | release checklist |
 | RTT-GAP-120 | Release | OPEN | 仍缺飞行前完整校准、RC、安全开关、无桨电机输出整体验收 | bench boundary | staged flight-readiness plan |
 | RTT-GAP-121 | Build | FIXED | RTT POSIX 路径改由 RT-Thread `dirent.h` 提供 `DT_DIR/DT_REG/DT_LNK`，不再由 `AP_Filesystem.h` 重复定义 | `rtt_gap121_build_20260621T191704Z` | 保持 POSIX `dirent` 为真相源 |
-| RTT-GAP-122 | Build | OPEN | `GCS_Common.cpp` 出现未知 pragma `GCSS diagnostic` warning | `rtt_gap091_build_20260621T191220Z` | 查是否拼写或条件编译问题 |
+| RTT-GAP-122 | Build | FIXED | `GCS_Common.cpp` 中误写为 `#pragma GCSS diagnostic pop` 的拼写错误已改回 `#pragma GCC diagnostic pop` | `rtt_gap122_build_20260621T193900Z` | 保持 failure-creation diagnostic push/pop 配对 |
 | RTT-GAP-123 | SDCard | OPEN | `sdcard.cpp` 存在未使用变量和未使用 static helper warning | `rtt_gap091_build_20260621T191220Z` | 清理死代码或接入缺失检测路径 |
 | RTT-GAP-124 | Build | OPEN | `AP_OSD_Backend::write()` overloaded virtual warning 在 RTT 构建中仍出现 | `rtt_gap091_build_20260621T191220Z` | 判断上游共性或 RTT include 差异 |
 | RTT-GAP-125 | Filesystem | FIXED | `posix_compat.h` 先 `#undef clearerr/ferror/feof` 再重定向到 APFS，且 `feof` 修正为 `apfs_feof` | `rtt_gap125_build_20260621T192155Z` | 保持 Lua stdio EOF/error 语义 |
@@ -172,4 +172,5 @@ board: CUAV V5 / STM32F767
 - `RTT-GAP-126`：`unpack_thread_name()` 改为接收显式 `out_len`，调用处传入 `sizeof(rtt_last_fault_thr)`，用 `snprintf()` 写入默认 `?`，避免数组形参退化为指针后的错误 `sizeof(out)`。验证：`python3 -m SCons --target=cuav-v5 -j16` 通过，`results/execution/rtt_gap126_build_20260621T192558Z/build.log` 中 `sizeof-array-argument` / `sizeof-pointer-memaccess` 检索为空，源码树 artifact audit 仍为 0。
 - `RTT-GAP-127`：删除 CherryUSB 中未使用的 `cherry_tx_stop_locked()` 和只服务于该死路径的 DTR-closed endpoint 调试计数，并同步 `Tools/scripts/rtt_usb_debug_snapshot.py` 的符号列表。该 helper 会在 DTR 下降时执行 endpoint disable/FIFO flush，与当前为 Windows usbser/Mission Planner 保留 configured/open hint 的策略冲突，因此不接回运行路径。验证：`python3 -m SCons --target=cuav-v5 -j16` 通过后，`build.log` 中 `cherry_tx_stop_locked` / `unused-function` 检索应为空，源码树 artifact audit 仍为 0。
 - 新发现 `RTT-GAP-128` 到 `RTT-GAP-132`：`rtt_gap127_build_20260621T193347Z/build.log` 继续暴露 RT-Thread MMCSD 未初始化风险、STM32 BSP clock hook 隐式声明、GCC 下 clang pragma 噪声、HAL overloaded virtual warning、Lua 裁剪后 unused static warning，已登记为后续构建质量和脚本裁剪收敛项。
+- `RTT-GAP-122`：修正 `GCS_Common.cpp` failure-creation 分支里 `#pragma GCSS diagnostic pop` 拼写错误，恢复为 `#pragma GCC diagnostic pop`，与同块 `#pragma GCC diagnostic push` 正确配对。验证：`python3 -m SCons --target=cuav-v5 -j16` 通过后，`build.log` 中 `GCSS diagnostic` / `unknown-pragmas` 的 GCS 条目应为空。
 - 新增本台账，首批记录 120 项差距，后续每轮按 ID 修复、验证、关闭。
