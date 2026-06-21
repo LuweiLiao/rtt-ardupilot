@@ -88,15 +88,22 @@ static uint32_t pack_thread_name(void)
          | ((uint32_t)(uint8_t)n[3]);
 }
 
-static void unpack_thread_name(uint32_t packed, char out[5])
+static void unpack_thread_name(uint32_t packed, char *out, size_t out_len)
 {
+    if (out == NULL || out_len == 0U) {
+        return;
+    }
+    if (out_len < 5U) {
+        snprintf(out, out_len, "?");
+        return;
+    }
     out[0] = (char)((packed >> 24) & 0xFFU);
     out[1] = (char)((packed >> 16) & 0xFFU);
     out[2] = (char)((packed >> 8) & 0xFFU);
     out[3] = (char)(packed & 0xFFU);
     out[4] = '\0';
     if (out[0] == '\0') {
-        strncpy(out, "?", sizeof(out));
+        snprintf(out, out_len, "?");
     }
 }
 
@@ -177,7 +184,9 @@ void rtt_dbg_bkp_restore_prev_fault(void)
     rtt_last_fault_bfar = bkp_read_slot(RTT_DBG_BKP_SLOT_BFAR);
     rtt_last_fault_mmfar = bkp_read_slot(RTT_DBG_BKP_SLOT_MMFAR);
     rtt_last_fault_xpsr = bkp_read_slot(RTT_DBG_BKP_SLOT_XPSR);
-    unpack_thread_name(bkp_read_slot(RTT_DBG_BKP_SLOT_THR), rtt_last_fault_thr);
+    unpack_thread_name(bkp_read_slot(RTT_DBG_BKP_SLOT_THR),
+                       rtt_last_fault_thr,
+                       sizeof(rtt_last_fault_thr));
 #else
     rtt_last_fault_type = 0U;
 #endif

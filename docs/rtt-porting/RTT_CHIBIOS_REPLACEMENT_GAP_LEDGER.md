@@ -150,7 +150,7 @@ board: CUAV V5 / STM32F767
 | RTT-GAP-123 | SDCard | OPEN | `sdcard.cpp` 存在未使用变量和未使用 static helper warning | `rtt_gap091_build_20260621T191220Z` | 清理死代码或接入缺失检测路径 |
 | RTT-GAP-124 | Build | OPEN | `AP_OSD_Backend::write()` overloaded virtual warning 在 RTT 构建中仍出现 | `rtt_gap091_build_20260621T191220Z` | 判断上游共性或 RTT include 差异 |
 | RTT-GAP-125 | Filesystem | FIXED | `posix_compat.h` 先 `#undef clearerr/ferror/feof` 再重定向到 APFS，且 `feof` 修正为 `apfs_feof` | `rtt_gap125_build_20260621T192155Z` | 保持 Lua stdio EOF/error 语义 |
-| RTT-GAP-126 | Fault | OPEN | `rtt_dbg_bkp.c` 对数组形参使用 `sizeof(out)`，可能截断/误写故障线程名 | `rtt_gap125_build_20260621T192155Z` | 传入显式 buffer 长度 |
+| RTT-GAP-126 | Fault | FIXED | `rtt_dbg_bkp.c` 解包故障线程名改为显式 buffer 长度，不再对形参使用 `sizeof(out)` | `rtt_gap126_build_20260621T192558Z` | 保持 BKP fault gate |
 | RTT-GAP-127 | USB | OPEN | `hal_usb_cherryusb_shim.c` 中 `cherry_tx_stop_locked` 未使用 | `rtt_gap125_build_20260621T192155Z` | 删除死代码或接入 stop 路径 |
 
 ## 本轮已处理
@@ -164,4 +164,5 @@ board: CUAV V5 / STM32F767
 - 新发现 `RTT-GAP-125`：修复 `DT_*` 后，构建日志继续暴露 `posix_compat.h` 的 `clearerr/ferror/feof` 重定义 warning，已登记为下一轮 filesystem 兼容清理项。
 - `RTT-GAP-125`：在 `posix_compat.h` 中先 `#undef clearerr/ferror/feof` 再映射到 APFS，消除 newlib `stdio.h` 宏重定义 warning；同时修正 `feof(stream)` 原来错误指向 `apfs_ferror(stream)` 的行为，改为 `apfs_feof(stream)`。验证：`python3 -m SCons --target=cuav-v5 -j16` 通过，`results/execution/rtt_gap125_build_20260621T192155Z/build.log` 中 `clearerr/ferror/feof redefined` 检索为空，源码树 artifact audit 仍为 0。
 - 新发现 `RTT-GAP-126` 到 `RTT-GAP-127`：本轮构建继续暴露 `rtt_dbg_bkp.c` 数组形参 `sizeof` 误用和 CherryUSB 未使用 stop helper，已登记为故障诊断/USB 后续清理项。
+- `RTT-GAP-126`：`unpack_thread_name()` 改为接收显式 `out_len`，调用处传入 `sizeof(rtt_last_fault_thr)`，用 `snprintf()` 写入默认 `?`，避免数组形参退化为指针后的错误 `sizeof(out)`。验证：`python3 -m SCons --target=cuav-v5 -j16` 通过，`results/execution/rtt_gap126_build_20260621T192558Z/build.log` 中 `sizeof-array-argument` / `sizeof-pointer-memaccess` 检索为空，源码树 artifact audit 仍为 0。
 - 新增本台账，首批记录 120 项差距，后续每轮按 ID 修复、验证、关闭。
