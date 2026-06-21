@@ -1030,6 +1030,9 @@ private:
 #if AP_AHRS_DCM_ENABLED
     AP_AHRS_DCM dcm{_kp_yaw, _kp, gps_gain, beta, _gps_use, _gps_minsats};
     struct AP_AHRS_Backend::Estimates dcm_estimates;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    uint32_t _rtt_dcm_last_update_ms = 0;
+#endif
 #endif
 #if AP_AHRS_SIM_ENABLED
 #if HAL_NAVEKF3_AVAILABLE

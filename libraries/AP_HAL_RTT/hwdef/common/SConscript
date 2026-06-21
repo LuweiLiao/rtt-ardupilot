@@ -27,6 +27,10 @@ if os.path.isdir(_cmsis_dsp_include):
     env.Append(CPPPATH=[_cmsis_dsp_include])
 env.Append(CPPDEFINES = ['STM32F767xx', 'USE_HAL_DRIVER', 'USE_FULL_LL_DRIVER', 'ARM_MATH_CM7'])
 
+_loop_diag = os.environ.get('HAL_RTT_LOOP_DIAG', '').strip()
+if _loop_diag:
+    env.Append(CPPDEFINES = ['HAL_RTT_LOOP_DIAG=%s' % _loop_diag])
+
 # Ensure hwdef.h is available at build/rtt_cuav_v5/ for both BSP code and ap_config.h
 _ap_root = os.environ.get('AP_ROOT', os.path.abspath(os.path.join(cwd, '..', '..', '..', '..', '..')))
 _hwdef_dir = os.path.join(_ap_root, 'build', 'rtt_cuav_v5')

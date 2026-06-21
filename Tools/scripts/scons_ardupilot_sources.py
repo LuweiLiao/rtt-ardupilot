@@ -353,8 +353,13 @@ def _collect_defines_f7(sim_enabled=False):
 
 def _collect_defines(board="rtt_pixhawk6c_mini", sim_enabled=False):
     if board == 'rtt_cuav_v5':
-        return _collect_defines_f7(sim_enabled=sim_enabled)
-    return _collect_defines_h7(sim_enabled=sim_enabled)
+        defines = _collect_defines_f7(sim_enabled=sim_enabled)
+    else:
+        defines = _collect_defines_h7(sim_enabled=sim_enabled)
+    loop_diag = os.environ.get('HAL_RTT_LOOP_DIAG', '').strip()
+    if loop_diag:
+        defines.append('HAL_RTT_LOOP_DIAG=%s' % loop_diag)
+    return defines
 
 
 def main():

@@ -263,8 +263,18 @@ void AP_InertialSensor_Invensensev2::start()
 // get a startup banner to output to the GCS
 bool AP_InertialSensor_Invensensev2::get_output_banner(char* banner, uint8_t banner_len) {
     if (_fast_sampling && _gyro_backend_rate_hz != 0 && _gyro_fifo_downsample_rate != 0) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        // [Cybernetics Ch.4] Closed-loop: avoid libc %f formatting drift in RTT startup status text.
+        const uint32_t raw_tenths_khz = (_gyro_backend_rate_hz * _gyro_fifo_downsample_rate + 50U) / 100U;
+        const uint32_t backend_tenths_khz = (_gyro_backend_rate_hz + 50U) / 100U;
+        snprintf(banner, banner_len, "IMU%u: fast sampling enabled %lu.%lukHz/%lu.%lukHz",
+            gyro_instance,
+            (unsigned long)(raw_tenths_khz / 10U), (unsigned long)(raw_tenths_khz % 10U),
+            (unsigned long)(backend_tenths_khz / 10U), (unsigned long)(backend_tenths_khz % 10U));
+#else
         snprintf(banner, banner_len, "IMU%u: fast sampling enabled %.1fkHz/%.1fkHz",
             gyro_instance, _gyro_backend_rate_hz * _gyro_fifo_downsample_rate * 0.001, _gyro_backend_rate_hz * 0.001);
+#endif
         return true;
     }
     return false;

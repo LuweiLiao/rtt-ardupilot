@@ -396,6 +396,20 @@ void AP_InertialSensor_Invensensev3::start()
 
 // get a startup banner to output to the GCS
 bool AP_InertialSensor_Invensensev3::get_output_banner(char* banner, uint8_t banner_len) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    // [Cybernetics Ch.4] Closed-loop: avoid libc %f formatting drift in RTT startup status text.
+    const uint32_t backend_tenths_khz = (backend_rate_hz + 50U) / 100U;
+    const uint32_t sampling_tenths_khz = (sampling_rate_hz + 50U) / 100U;
+    snprintf(banner, banner_len, "IMU%u:%s%s sampling %lu.%lukHz/%lu.%lukHz",
+        gyro_instance,
+        fast_sampling ? " fast" : " normal",
+#if HAL_INS_HIGHRES_SAMPLE
+        highres_sampling ? " hi-res" :
+#endif
+        "",
+        (unsigned long)(backend_tenths_khz / 10U), (unsigned long)(backend_tenths_khz % 10U),
+        (unsigned long)(sampling_tenths_khz / 10U), (unsigned long)(sampling_tenths_khz % 10U));
+#else
     snprintf(banner, banner_len, "IMU%u:%s%s sampling %.1fkHz/%.1fkHz",
         gyro_instance,
         fast_sampling ? " fast" : " normal",
@@ -404,6 +418,7 @@ bool AP_InertialSensor_Invensensev3::get_output_banner(char* banner, uint8_t ban
 #endif
         "", backend_rate_hz * 0.001,
         sampling_rate_hz * 0.001);
+#endif
     return true;
 }
 

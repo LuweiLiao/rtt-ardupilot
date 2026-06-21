@@ -10,6 +10,7 @@ src += Glob('CubeMX_Config/Src/stm32f7xx_hal_msp.c')
 # STM32F7 Low-Level SPI DMA driver: eliminates HAL busy-wait from DMA ISR
 src += Glob('drv_spi_lld.c')
 src += Glob('rtt_libc_compat.c')
+src += Glob('rtt_clock_time_stm32f7.c')
 src += Glob('startup_rtt_override.S')
 
 

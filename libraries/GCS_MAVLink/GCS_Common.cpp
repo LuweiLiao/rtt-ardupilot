@@ -1742,7 +1742,7 @@ void GCS_MAVLINK::update_send()
     GCS_MAVLINK_InProgress::check_tasks();
 #if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
     const uint32_t rtt_check_tasks_us = AP_HAL::micros() - rtt_check_tasks_start_us;
-    rtt_dbg_gcs_update_send_check_tasks_us = rtt_check_tasks_us;
+    rtt_dbg_gcs_update_send_check_tasks_us += rtt_check_tasks_us;
     if (rtt_check_tasks_us > rtt_dbg_gcs_update_send_check_tasks_max_us) {
         rtt_dbg_gcs_update_send_check_tasks_max_us = rtt_check_tasks_us;
     }
@@ -1758,7 +1758,7 @@ void GCS_MAVLINK::update_send()
 #if CONFIG_HAL_BOARD == HAL_BOARD_RTT
     uint8_t rtt_overtime_grace_used = 0;
     auto rtt_budget_exhausted = [&]() {
-        const bool rtt_param_active = _queued_parameter != nullptr;
+        const bool rtt_param_active = _queued_parameter != nullptr || !param_replies.is_empty();
         const bool rtt_ftp_active =
 #if AP_MAVLINK_FTP_ENABLED
             AP_HAL::millis() - ftp.last_send_ms < 1000
@@ -1795,7 +1795,7 @@ void GCS_MAVLINK::update_send()
              * even when the MAVLink TX buffer has room.  Allow bounded
              * USB-main-channel sends per update_send() call, then yield.
              */
-            const bool rtt_param_active = _queued_parameter != nullptr;
+            const bool rtt_param_active = _queued_parameter != nullptr || !param_replies.is_empty();
             const bool rtt_ftp_active =
 #if AP_MAVLINK_FTP_ENABLED
                 AP_HAL::millis() - ftp.last_send_ms < 1000
@@ -1960,7 +1960,7 @@ void GCS_MAVLINK::update_send()
         if (fs != -1) {
             ap_message next = (ap_message)fs;
 #if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-            if (chan == MAVLINK_COMM_0 && _queued_parameter != nullptr) {
+            if (chan == MAVLINK_COMM_0 && (_queued_parameter != nullptr || !param_replies.is_empty())) {
                 /*
                  * [Cybernetics Ch.4] Closed-loop: status text and other pushed
                  * messages can arrive in clusters during bring-up/prearm checks.
@@ -2000,7 +2000,7 @@ void GCS_MAVLINK::update_send()
         }
 
 #if CONFIG_HAL_BOARD == HAL_BOARD_RTT
-        if (chan == MAVLINK_COMM_0 && _queued_parameter != nullptr) {
+        if (chan == MAVLINK_COMM_0 && (_queued_parameter != nullptr || !param_replies.is_empty())) {
             rtt_dbg_gcs_update_send_param_break_active_tail++;
             break;
         }
@@ -2051,12 +2051,12 @@ void GCS_MAVLINK::update_send()
     }
 #if HAL_RTT_LOOP_DIAG
     const uint32_t rtt_loop_us = AP_HAL::micros() - rtt_start_us;
-    rtt_dbg_gcs_update_send_loop_us = rtt_loop_us;
+    rtt_dbg_gcs_update_send_loop_us += rtt_loop_us;
     if (rtt_loop_us > rtt_dbg_gcs_update_send_loop_max_us) {
         rtt_dbg_gcs_update_send_loop_max_us = rtt_loop_us;
     }
     const uint32_t rtt_total_us = AP_HAL::micros() - rtt_update_send_total_start_us;
-    rtt_dbg_gcs_update_send_total_us = rtt_total_us;
+    rtt_dbg_gcs_update_send_total_us += rtt_total_us;
     if (rtt_total_us > rtt_dbg_gcs_update_send_total_max_us) {
         rtt_dbg_gcs_update_send_total_max_us = rtt_total_us;
     }
@@ -3229,7 +3229,7 @@ void GCS::update_send()
     }
 #if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
     const uint32_t rtt_global_update_send_total_us = AP_HAL::micros() - rtt_global_update_send_start_us;
-    rtt_dbg_gcs_global_update_send_total_us = rtt_global_update_send_total_us;
+    rtt_dbg_gcs_global_update_send_total_us += rtt_global_update_send_total_us;
     if (rtt_global_update_send_total_us > rtt_dbg_gcs_global_update_send_total_max_us) {
         rtt_dbg_gcs_global_update_send_total_max_us = rtt_global_update_send_total_us;
     }

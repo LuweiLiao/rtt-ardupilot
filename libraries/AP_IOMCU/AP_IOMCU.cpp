@@ -140,8 +140,14 @@ void AP_IOMCU::init(void)
 #if AP_IOMCU_PROFILED_SUPPORT_ENABLED
     use_safety_as_led = boardconfig->use_safety_as_led();
 #endif
+    /*
+     * [Cybernetics Ch.5] Coupling: on RT-Thread a boosted IOMCU thread can
+     * preempt the 400Hz main-loop boosted sample wait often enough to lower
+     * the effective loop rate. Keep IOMCU as a low-priority IO worker, matching
+     * the HAL thread model where sensor/timer producers outrank IO traffic.
+     */
     if (!hal.scheduler->thread_create(FUNCTOR_BIND_MEMBER(&AP_IOMCU::thread_main, void), "IOMCU",
-                                      1024, AP_HAL::Scheduler::PRIORITY_BOOST, 1)) {
+                                      1024, AP_HAL::Scheduler::PRIORITY_IO, 0)) {
         AP_HAL::panic("Unable to allocate IOMCU thread");
     }
     initialised = true;

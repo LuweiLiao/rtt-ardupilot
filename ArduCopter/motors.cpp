@@ -6,7 +6,7 @@
 
 static uint32_t auto_disarm_begin;
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
 #define RTT_DBG_DTCM_BSS __attribute__((section(".dtcm_bss.rtt_dbg"), used))
 volatile uint32_t rtt_dbg_copter_motors_total_us RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_copter_motors_total_accum_us RTT_DBG_DTCM_BSS;
@@ -97,7 +97,7 @@ void Copter::auto_disarm_check()
 // full_push is true when slower rate updates (e.g. servo output) need to be performed at the main loop rate.
 void Copter::motors_output(bool full_push)
 {
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
     const uint32_t rtt_dbg_start_us = AP_HAL::micros();
     uint32_t rtt_dbg_stage_us = rtt_dbg_start_us;
 #endif
@@ -122,7 +122,7 @@ void Copter::motors_output(bool full_push)
 
     // output any servo channels
     SRV_Channels::calc_pwm();
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
     uint32_t rtt_dbg_now_us = AP_HAL::micros();
     rtt_dbg_copter_motors_calc_pwm_us = rtt_dbg_now_us - rtt_dbg_stage_us;
     rtt_dbg_copter_motors_calc_pwm_accum_us += rtt_dbg_copter_motors_calc_pwm_us;
@@ -137,7 +137,7 @@ void Copter::motors_output(bool full_push)
 
     // cork now, so that all channel outputs happen at once
     srv.cork();
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
     rtt_dbg_now_us = AP_HAL::micros();
     rtt_dbg_copter_motors_cork_us = rtt_dbg_now_us - rtt_dbg_stage_us;
     rtt_dbg_copter_motors_cork_accum_us += rtt_dbg_copter_motors_cork_us;
@@ -147,7 +147,7 @@ void Copter::motors_output(bool full_push)
 
     // update output on any aux channels, for manual passthru
     SRV_Channels::output_ch_all();
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
     rtt_dbg_now_us = AP_HAL::micros();
     rtt_dbg_copter_motors_output_ch_us = rtt_dbg_now_us - rtt_dbg_stage_us;
     rtt_dbg_copter_motors_output_ch_accum_us += rtt_dbg_copter_motors_output_ch_us;
@@ -167,7 +167,7 @@ void Copter::motors_output(bool full_push)
         motors->set_interlock(false);
         LOGGER_WRITE_EVENT(LogEvent::MOTORS_INTERLOCK_DISABLED);
     }
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
     rtt_dbg_now_us = AP_HAL::micros();
     rtt_dbg_copter_motors_interlock_us = rtt_dbg_now_us - rtt_dbg_stage_us;
     rtt_dbg_copter_motors_interlock_accum_us += rtt_dbg_copter_motors_interlock_us;
@@ -182,7 +182,7 @@ void Copter::motors_output(bool full_push)
         // send output signals to motors
         flightmode->output_to_motors();
     }
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
     rtt_dbg_now_us = AP_HAL::micros();
     rtt_dbg_copter_motors_flightmode_us = rtt_dbg_now_us - rtt_dbg_stage_us;
     rtt_dbg_copter_motors_flightmode_accum_us += rtt_dbg_copter_motors_flightmode_us;
@@ -201,7 +201,7 @@ void Copter::motors_output(bool full_push)
         // motor output only at main loop rate or faster
         hal.rcout->push();
     }
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
     rtt_dbg_now_us = AP_HAL::micros();
     rtt_dbg_copter_motors_push_us = rtt_dbg_now_us - rtt_dbg_stage_us;
     rtt_dbg_copter_motors_push_accum_us += rtt_dbg_copter_motors_push_us;
@@ -221,7 +221,7 @@ void Copter::motors_output(bool full_push)
 // motors_output from main thread at main loop rate
 void Copter::motors_output_main()
 {
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
     rtt_dbg_copter_motors_main_calls++;
 #endif
     if (!using_rate_thread) {

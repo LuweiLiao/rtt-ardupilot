@@ -31,6 +31,9 @@
 #include <AP_Filesystem/AP_Filesystem.h>
 #include <AP_Logger/AP_Logger.h>
 #include <rtthread.h>
+#if defined(RT_USING_CLOCK_TIME)
+#include <drivers/clock_time.h>
+#endif
 #include <cstring>
 /* STM32F7 HAL/CMSIS registers for RCC/PWR/RTC backup domain access */
 #include <stm32f7xx.h>
@@ -46,6 +49,7 @@ volatile uint32_t rtt_dbg_monitor_stuck_semline = 0;
 
 extern volatile uint32_t rtt_dbg_boost_calls_per_loop;
 extern volatile uint32_t rtt_dbg_boost_total_us_per_loop;
+extern volatile uint32_t rtt_dbg_main_loop_iterations;
 volatile uint32_t rtt_dbg_boost_calls_total = 0;
 volatile uint32_t rtt_dbg_boost_requested_us_total = 0;
 volatile uint32_t rtt_dbg_boost_elapsed_us_total = 0;
@@ -55,6 +59,9 @@ volatile uint32_t rtt_dbg_boost_last_elapsed_us = 0;
 volatile uint32_t rtt_dbg_boost_last_yield_elapsed_us = 0;
 volatile uint32_t rtt_dbg_boost_lowprio_sleep_count = 0;
 volatile uint32_t rtt_dbg_boost_lowprio_sleep_last_ms = 0;
+volatile uint32_t rtt_dbg_boost_hrtimer_count = 0;
+volatile uint32_t rtt_dbg_boost_hrtimer_fail_count = 0;
+volatile uint32_t rtt_dbg_boost_hrtimer_last_elapsed_us = 0;
 
 static bool rtt_stack_range_valid(const void *stack_addr, uint32_t stack_size)
 {
@@ -103,6 +110,24 @@ Scheduler::Scheduler()
 extern "C" uint32_t SystemCoreClock;
 
 static void _poll_usb_if_active(void);
+
+#if defined(RT_USING_CLOCK_TIME)
+static bool rtt_hrtimer_delay_us(uint16_t us)
+{
+    if (us == 0) {
+        return true;
+    }
+
+    static bool inited;
+    static struct rt_clock_hrtimer timer;
+    if (!inited) {
+        rt_clock_hrtimer_delay_init(&timer);
+        inited = true;
+    }
+
+    return rt_clock_hrtimer_udelay(&timer, us) == RT_EOK;
+}
+#endif
 
 void Scheduler::_delay_microseconds_dwt(uint16_t us)
 {
@@ -601,31 +626,44 @@ void Scheduler::delay_microseconds_boost(uint16_t us)
         _priority_boosted = true;
         _called_boost = true;
     }
-    /*
-     * [Cybernetics Ch.15] Extremum seeking: ChibiOS' boosted wait suspends the
-     * main thread on a microsecond timer.  RTT cannot represent the common
-     * 100 us wait as a sleep at a 1 kHz OS tick, so a full rt_thread_delay(1)
-     * costs 1 ms and pulls the 400 Hz loop down.  Drop main back to its normal
-     * priority, yield to same-priority persistence workers and ready producers,
-     * then restore boost and busy-wait only the remaining requested time.
-     */
     if (in_main_thread() && _priority_boosted) {
+        const uint32_t wait_start_us = AP_HAL::micros();
+#if defined(RT_USING_CLOCK_TIME)
+        if (rtt_hrtimer_delay_us(us)) {
+            const uint32_t wait_elapsed_us = AP_HAL::micros() - wait_start_us;
+            rtt_dbg_boost_last_yield_elapsed_us = wait_elapsed_us;
+            rtt_dbg_boost_hrtimer_last_elapsed_us = wait_elapsed_us;
+            rtt_dbg_boost_hrtimer_count++;
+            _called_boost = true;
+            const uint32_t elapsed_us = AP_HAL::micros() - rtt_dbg_start_us;
+            rtt_dbg_boost_last_elapsed_us = elapsed_us;
+            rtt_dbg_boost_total_us_per_loop += elapsed_us;
+            rtt_dbg_boost_elapsed_us_total += elapsed_us;
+            return;
+        }
+        rtt_dbg_boost_hrtimer_fail_count++;
+#endif
+        static uint32_t last_yield_loop = 0;
         rt_thread_t self = rt_thread_self();
-        const uint32_t yield_start_us = AP_HAL::micros();
         if (self) {
             rt_uint8_t normal_prio = (rt_uint8_t)APM_RTT_MAIN_PRIORITY;
             rt_thread_control(self, RT_THREAD_CTRL_CHANGE_PRIORITY, &normal_prio);
         }
-        rt_thread_yield();
+        const bool do_fair_yield = last_yield_loop != rtt_dbg_main_loop_iterations &&
+                                   rtt_dbg_boost_calls_per_loop > 1U;
+        if (do_fair_yield) {
+            rt_thread_yield();
+            last_yield_loop = rtt_dbg_main_loop_iterations;
+            rtt_dbg_boost_yield_count_total++;
+        }
+        const uint32_t wait_elapsed_us = AP_HAL::micros() - wait_start_us;
+        if (wait_elapsed_us < us) {
+            _delay_microseconds_dwt(us - wait_elapsed_us);
+        }
+        rtt_dbg_boost_last_yield_elapsed_us = AP_HAL::micros() - wait_start_us;
         if (self) {
             rt_uint8_t boost_prio = (rt_uint8_t)APM_RTT_MAIN_BOOST;
             rt_thread_control(self, RT_THREAD_CTRL_CHANGE_PRIORITY, &boost_prio);
-        }
-        const uint32_t yield_elapsed_us = AP_HAL::micros() - yield_start_us;
-        rtt_dbg_boost_last_yield_elapsed_us = yield_elapsed_us;
-        rtt_dbg_boost_yield_count_total++;
-        if (yield_elapsed_us < us) {
-            _delay_microseconds_dwt(us - yield_elapsed_us);
         }
         _called_boost = true;
         const uint32_t elapsed_us = AP_HAL::micros() - rtt_dbg_start_us;

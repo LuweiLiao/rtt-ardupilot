@@ -215,6 +215,8 @@ volatile uint32_t rtt_dbg_loop_time_max_us = 0;
 volatile uint32_t rtt_dbg_loop_time_min_us = 0xFFFFFFFF;
 volatile uint32_t rtt_dbg_work_time_us = 0;
 volatile uint32_t rtt_dbg_work_time_max_us = 0;
+volatile uint32_t rtt_dbg_loop_time_accum_us = 0;
+volatile uint32_t rtt_dbg_work_time_accum_us = 0;
 volatile uint32_t rtt_dbg_overrun_count = 0;
 volatile uint32_t rtt_dbg_main_loop_service_yield_count = 0;
 volatile uint32_t rtt_dbg_fast_loop_count = 0;
@@ -239,12 +241,16 @@ volatile uint32_t rtt_dbg_ins_gyro_wait_mask = 0;
 volatile uint32_t rtt_dbg_ins_accel_wait_mask = 0;
 volatile uint32_t rtt_dbg_ins_new_gyro_mask = 0;
 volatile uint32_t rtt_dbg_ins_new_accel_mask = 0;
+volatile uint32_t rtt_dbg_ins_schedule_wait_accum_us = 0;
+volatile uint32_t rtt_dbg_ins_data_wait_accum_us = 0;
+volatile uint32_t rtt_dbg_ins_data_wait_loops = 0;
+volatile uint32_t rtt_dbg_ins_wait_limit_breaks = 0;
 volatile uint32_t rtt_dbg_ins_cal_j = 0;
 volatile uint32_t rtt_dbg_ins_cal_i = 0;
 volatile uint32_t rtt_dbg_ins_cal_converged = 0;
 extern "C" volatile uint32_t rtt_cpu_idle_pct;
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
 #define RTT_DBG_THREAD_SLOTS 32
 volatile uint32_t rtt_dbg_thread_switch_counts[RTT_DBG_THREAD_SLOTS] __attribute__((section(".dtcm_bss.rtt_dbg"), used));
 volatile uint32_t rtt_dbg_thread_run_total_us_by_idx[RTT_DBG_THREAD_SLOTS] __attribute__((section(".dtcm_bss.rtt_dbg"), used));
@@ -422,6 +428,7 @@ static void _main_loop_entry(void* arg)
         uint32_t post_loop_us = AP_HAL::micros();
         uint32_t work = post_loop_us - pre_loop_us;
         rtt_dbg_work_time_us = work;
+        rtt_dbg_work_time_accum_us += work;
         if (work > rtt_dbg_work_time_max_us) rtt_dbg_work_time_max_us = work;
         if (work > 2500) rtt_dbg_overrun_count++;
         /*
@@ -437,6 +444,7 @@ static void _main_loop_entry(void* arg)
         uint32_t dt = now_us - last_loop_us;
         last_loop_us = now_us;
         rtt_dbg_loop_time_us = dt;
+        rtt_dbg_loop_time_accum_us += dt;
         if (dt > rtt_dbg_loop_time_max_us) rtt_dbg_loop_time_max_us = dt;
         if (dt < rtt_dbg_loop_time_min_us && dt > 0) rtt_dbg_loop_time_min_us = dt;
         if (dt < 1500) rtt_dbg_fast_loop_count++;
@@ -496,7 +504,7 @@ void HAL_RTT::run(int argc, char * const argv[], Callbacks* callbacks) const
     ((RTT::Scheduler*)scheduler)->set_callbacks(callbacks);
 
     scheduler->init();
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && defined(RT_USING_HOOK) && 0
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG && defined(RT_USING_HOOK)
     rt_scheduler_sethook(rtt_dbg_scheduler_hook);
     rtt_dbg_thread_current = rt_thread_self();
     rtt_dbg_thread_current_start_us = AP_HAL::micros();

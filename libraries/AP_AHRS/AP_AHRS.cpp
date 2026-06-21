@@ -212,6 +212,9 @@ volatile uint32_t rtt_dbg_ahrs_update_total_accum_us RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_ahrs_update_total_max_us RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_ahrs_orientation_accum_us RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_ahrs_dcm_accum_us RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ahrs_dcm_skip_count RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ahrs_dcm_update_count RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_ahrs_dcm_condition_count RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_ahrs_ekf2_accum_us RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_ahrs_ekf3_accum_us RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_ahrs_view_accum_us RTT_DBG_DTCM_BSS;
@@ -618,6 +621,18 @@ void AP_AHRS::copy_estimates_from_backend_estimates(const AP_AHRS_Backend::Estim
 #if AP_AHRS_DCM_ENABLED
 void AP_AHRS::update_DCM()
 {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_NAVEKF3_AVAILABLE
+    if (always_use_EKF() && _ekf3_started && _ekf_type == EKFType::THREE) {
+        rtt_dbg_ahrs_dcm_condition_count++;
+        const uint32_t now_ms = AP_HAL::millis();
+        if (now_ms - _rtt_dcm_last_update_ms < 20U) {
+            rtt_dbg_ahrs_dcm_skip_count++;
+            return;
+        }
+        _rtt_dcm_last_update_ms = now_ms;
+    }
+#endif
+    rtt_dbg_ahrs_dcm_update_count++;
     dcm.update();
     dcm.get_results(dcm_estimates);
 

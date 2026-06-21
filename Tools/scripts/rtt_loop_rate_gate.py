@@ -52,9 +52,11 @@ PARAMS = (
 RTT_SYMBOLS = (
     "rtt_dbg_main_loop_iterations",
     "rtt_dbg_loop_time_us",
+    "rtt_dbg_loop_time_accum_us",
     "rtt_dbg_loop_time_max_us",
     "rtt_dbg_loop_time_min_us",
     "rtt_dbg_work_time_us",
+    "rtt_dbg_work_time_accum_us",
     "rtt_dbg_work_time_max_us",
     "rtt_dbg_overrun_count",
     "rtt_dbg_wait_sample_us",
@@ -75,6 +77,13 @@ RTT_SYMBOLS = (
     "rtt_dbg_boost_last_requested_us",
     "rtt_dbg_boost_last_elapsed_us",
     "rtt_dbg_boost_last_yield_elapsed_us",
+    "rtt_dbg_boost_hrtimer_count",
+    "rtt_dbg_boost_hrtimer_fail_count",
+    "rtt_dbg_boost_hrtimer_last_elapsed_us",
+    "rtt_dbg_clock_time_init_count",
+    "rtt_dbg_clock_time_last_delta_us",
+    "rtt_dbg_clock_time_irq_count",
+    "rtt_dbg_clock_time_timeout_count",
     "rtt_dbg_ins_stage",
     "rtt_dbg_ins_loop_rate",
     "rtt_dbg_ins_backend_count",
@@ -89,12 +98,18 @@ RTT_SYMBOLS = (
     "rtt_dbg_ins_accel_wait_mask",
     "rtt_dbg_ins_new_gyro_mask",
     "rtt_dbg_ins_new_accel_mask",
+    "rtt_dbg_ins_schedule_wait_accum_us",
+    "rtt_dbg_ins_data_wait_accum_us",
+    "rtt_dbg_ins_data_wait_loops",
+    "rtt_dbg_ins_wait_limit_breaks",
     "rtt_dbg_scheduler_wait_sample_last_us",
+    "rtt_dbg_scheduler_wait_sample_accum_us",
     "rtt_dbg_scheduler_wait_sample_max_us",
     "rtt_dbg_scheduler_wait_sample_large_count",
     "rtt_dbg_scheduler_run_time_available_last_us",
     "rtt_dbg_scheduler_run_time_available_min_us",
     "rtt_dbg_scheduler_run_total_us",
+    "rtt_dbg_scheduler_run_accum_us",
     "rtt_dbg_scheduler_run_max_us",
     "rtt_dbg_scheduler_task_last_idx",
     "rtt_dbg_scheduler_task_last_us",
@@ -166,6 +181,9 @@ RTT_SYMBOLS = (
     "rtt_dbg_ahrs_update_total_max_us",
     "rtt_dbg_ahrs_orientation_accum_us",
     "rtt_dbg_ahrs_dcm_accum_us",
+    "rtt_dbg_ahrs_dcm_skip_count",
+    "rtt_dbg_ahrs_dcm_update_count",
+    "rtt_dbg_ahrs_dcm_condition_count",
     "rtt_dbg_ahrs_ekf2_accum_us",
     "rtt_dbg_ahrs_ekf3_accum_us",
     "rtt_dbg_ahrs_view_accum_us",
@@ -292,11 +310,35 @@ RTT_THREAD_ARRAY_SYMBOLS = (
 )
 
 RTT_SCALAR_DELTA_SYMBOLS = (
+    "rtt_dbg_main_loop_iterations",
+    "rtt_dbg_loop_time_accum_us",
+    "rtt_dbg_work_time_accum_us",
+    "rtt_dbg_overrun_count",
+    "rtt_dbg_loop_time_max_us",
+    "rtt_dbg_work_time_max_us",
+    "rtt_dbg_fast_loop_count",
+    "rtt_dbg_ins_wait_calls",
+    "rtt_dbg_ins_wait_counter",
+    "rtt_dbg_ins_schedule_wait_accum_us",
+    "rtt_dbg_ins_data_wait_accum_us",
+    "rtt_dbg_ins_data_wait_loops",
+    "rtt_dbg_ins_wait_limit_breaks",
+    "rtt_dbg_scheduler_wait_sample_large_count",
+    "rtt_dbg_scheduler_wait_sample_accum_us",
+    "rtt_dbg_scheduler_run_total_us",
+    "rtt_dbg_scheduler_run_accum_us",
+    "rtt_dbg_scheduler_run_max_us",
+    "rtt_dbg_scheduler_task_overrun_count",
+    "rtt_dbg_scheduler_task_not_achieved_count",
+    "rtt_dbg_scheduler_extra_loop_us",
     "rtt_dbg_ahrs_update_calls",
     "rtt_dbg_ahrs_update_total_accum_us",
     "rtt_dbg_ahrs_update_total_max_us",
     "rtt_dbg_ahrs_orientation_accum_us",
     "rtt_dbg_ahrs_dcm_accum_us",
+    "rtt_dbg_ahrs_dcm_skip_count",
+    "rtt_dbg_ahrs_dcm_update_count",
+    "rtt_dbg_ahrs_dcm_condition_count",
     "rtt_dbg_ahrs_ekf2_accum_us",
     "rtt_dbg_ahrs_ekf3_accum_us",
     "rtt_dbg_ahrs_view_accum_us",
@@ -345,6 +387,25 @@ RTT_SCALAR_DELTA_SYMBOLS = (
     "rtt_dbg_boost_requested_us_total",
     "rtt_dbg_boost_elapsed_us_total",
     "rtt_dbg_boost_yield_count_total",
+    "rtt_dbg_gcs_global_update_send_total_us",
+    "rtt_dbg_gcs_global_update_send_total_max_us",
+    "rtt_dbg_gcs_update_send_total_us",
+    "rtt_dbg_gcs_update_send_total_max_us",
+    "rtt_dbg_gcs_update_send_log_us",
+    "rtt_dbg_gcs_update_send_log_max_us",
+    "rtt_dbg_gcs_update_send_check_tasks_us",
+    "rtt_dbg_gcs_update_send_check_tasks_max_us",
+    "rtt_dbg_gcs_update_send_loop_us",
+    "rtt_dbg_gcs_update_send_loop_max_us",
+    "rtt_dbg_gcs_update_send_loop_iters",
+    "rtt_dbg_gcs_update_send_loop_iters_max",
+    "rtt_dbg_gcs_service_statustext_us",
+    "rtt_dbg_gcs_service_statustext_max_us",
+    "rtt_dbg_gcs_service_statustext_sent",
+    "rtt_dbg_gcs_service_statustext_sent_max",
+    "rtt_dbg_gcs_service_statustext_budget_breaks",
+    "rtt_dbg_gcs_update_send_break_out_of_time",
+    "rtt_dbg_gcs_update_send_break_try_send",
 )
 
 FAULT_REGS = {
@@ -812,7 +873,37 @@ def scalar_deltas(before: dict[str, Any], after: dict[str, Any]) -> dict[str, in
     return out
 
 
+def average_loop_rate(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    before_values = before.get("values", {}) if isinstance(before, dict) else {}
+    after_values = after.get("values", {}) if isinstance(after, dict) else {}
+    if not isinstance(before_values, dict) or not isinstance(after_values, dict):
+        return {"verdict": "UNKNOWN", "reason": "missing_values"}
+    before_iter = before_values.get("rtt_dbg_main_loop_iterations")
+    after_iter = after_values.get("rtt_dbg_main_loop_iterations")
+    before_t = before.get("finished_monotonic_s")
+    after_t = after.get("started_monotonic_s")
+    if before_iter is None or after_iter is None or before_t is None or after_t is None:
+        return {"verdict": "UNKNOWN", "reason": "missing_iteration_or_time"}
+    delta_s = float(after_t) - float(before_t)
+    delta_iterations = int(after_iter) - int(before_iter)
+    if delta_s <= 0 or delta_iterations < 0:
+        return {
+            "verdict": "UNKNOWN",
+            "reason": "invalid_delta",
+            "delta_s": round(delta_s, 6),
+            "delta_iterations": delta_iterations,
+        }
+    return {
+        "verdict": "GREEN",
+        "reason": "average_loop_rate_measured",
+        "delta_s": round(delta_s, 6),
+        "delta_iterations": delta_iterations,
+        "avg_loop_hz": delta_iterations / delta_s,
+    }
+
+
 def openocd_snapshot(args: argparse.Namespace) -> dict[str, Any]:
+    started_monotonic_s = time.monotonic()
     elf = Path(args.elf)
     if not elf.exists():
         return {"verdict": "RED", "reason": "elf_not_found", "elf": str(elf)}
@@ -862,10 +953,13 @@ def openocd_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         cleanup_openocd()
 
     values, faults, registers, arrays = parse_openocd(proc.stdout, addrs)
+    finished_monotonic_s = time.monotonic()
     return {
         "verdict": "GREEN" if proc.returncode == 0 else "RED",
         "reason": "snapshot_ok" if proc.returncode == 0 else "openocd_failed",
         "rc": proc.returncode,
+        "started_monotonic_s": started_monotonic_s,
+        "finished_monotonic_s": finished_monotonic_s,
         "argv": argv,
         "missing_symbols": missing,
         "addresses": {name: f"0x{addr:08x}" for name, addr in sorted(addrs.items())},
@@ -879,6 +973,38 @@ def openocd_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def wait_for_openocd_steady(args: argparse.Namespace) -> dict[str, Any]:
+    deadline = time.monotonic() + args.openocd_steady_timeout_s
+    previous: dict[str, Any] | None = None
+    attempts: list[dict[str, Any]] = []
+    while time.monotonic() < deadline:
+        snap = openocd_snapshot(args)
+        values = snap.get("values", {}) if isinstance(snap, dict) else {}
+        current_iter = int(values.get("rtt_dbg_main_loop_iterations") or 0)
+        ins_loop_rate = int(values.get("rtt_dbg_ins_loop_rate") or 0)
+        attempts.append({
+            "verdict": snap.get("verdict"),
+            "reason": snap.get("reason"),
+            "main_loop_iterations": current_iter,
+            "ins_loop_rate": ins_loop_rate,
+        })
+        if previous is not None:
+            previous_values = previous.get("values", {}) if isinstance(previous, dict) else {}
+            previous_iter = int(previous_values.get("rtt_dbg_main_loop_iterations") or 0)
+            if (snap.get("verdict") == "GREEN" and previous.get("verdict") == "GREEN" and
+                    current_iter > previous_iter and ins_loop_rate == args.target_loop_rate):
+                snap["steady_wait_attempts"] = attempts[-8:]
+                snap["steady_wait_reason"] = "main_loop_counter_incremented"
+                return snap
+        previous = snap
+        time.sleep(args.openocd_steady_poll_s)
+
+    fallback = previous if previous is not None else {"verdict": "RED", "reason": "steady_wait_no_snapshot"}
+    fallback["steady_wait_attempts"] = attempts[-8:]
+    fallback["steady_wait_reason"] = "timeout"
+    return fallback
+
+
 def classify(payload: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
     mav = payload.get("mavlink", {})
     snap = payload.get("openocd_snapshot", {})
@@ -889,6 +1015,16 @@ def classify(payload: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
 
     loop_us = int(values.get("rtt_dbg_loop_time_us") or 0)
     loop_hz = (1_000_000.0 / loop_us) if loop_us > 0 else None
+    avg_loop_hz = None
+    avg_loop_delta_iterations = None
+    avg_loop_delta_s = None
+    average = payload.get("openocd_average_loop_rate", {})
+    if isinstance(average, dict):
+        avg_value = average.get("avg_loop_hz")
+        if avg_value is not None:
+            avg_loop_hz = float(avg_value)
+        avg_loop_delta_iterations = average.get("delta_iterations")
+        avg_loop_delta_s = average.get("delta_s")
     wait_last = int(values.get("rtt_dbg_scheduler_wait_sample_last_us") or values.get("rtt_dbg_wait_sample_us") or 0)
     wait_max = int(values.get("rtt_dbg_scheduler_wait_sample_max_us") or 0)
     work_us = int(values.get("rtt_dbg_work_time_us") or 0)
@@ -935,7 +1071,9 @@ def classify(payload: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
     }
 
     symptoms: list[str] = []
-    if loop_hz is not None and loop_hz < args.min_loop_rate:
+    if avg_loop_hz is not None and avg_loop_hz < args.min_loop_rate:
+        symptoms.append("average_loop_rate_below_threshold")
+    elif loop_hz is not None and loop_hz < args.min_loop_rate:
         symptoms.append("debug_loop_rate_below_threshold")
     if main_loop_slow_text:
         symptoms.append("statustext_main_loop_slow")
@@ -955,6 +1093,8 @@ def classify(payload: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
         diagnosis = "INS_SAMPLE_WAIT_LIMITED"
     elif task_max_us > task_max_allowed_us and task_max_allowed_us > 0:
         diagnosis = "SCHEDULER_TASK_OVERRUN"
+    elif avg_loop_hz is not None and avg_loop_hz < args.min_loop_rate:
+        diagnosis = "AVERAGE_LOOP_RATE_LOW"
     elif loop_hz is not None and loop_hz < args.min_loop_rate and work_us >= thresholds["loop_period_us"]:
         diagnosis = "MAIN_THREAD_WORK_OVER_BUDGET"
     elif loop_hz is not None and loop_hz < args.min_loop_rate:
@@ -964,7 +1104,10 @@ def classify(payload: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
     else:
         diagnosis = "LOOP_RATE_OK_OR_NOT_REPRODUCED"
 
-    final_rate_ok = loop_hz is not None and loop_hz >= args.min_loop_rate
+    if avg_loop_hz is not None:
+        final_rate_ok = avg_loop_hz >= args.min_loop_rate
+    else:
+        final_rate_ok = loop_hz is not None and loop_hz >= args.min_loop_rate
     statustext_ok = not main_loop_slow_text
     imu_banner_ok = not any("0.0kHz/0.0kHz" in text for text in imu_banner_text)
     verdict = "GREEN" if final_rate_ok and statustext_ok and imu_banner_ok else "RED"
@@ -978,6 +1121,9 @@ def classify(payload: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
             "min_loop_rate_hz": args.min_loop_rate,
             "debug_loop_us": loop_us,
             "debug_loop_hz": None if loop_hz is None else round(loop_hz, 1),
+            "avg_loop_hz": None if avg_loop_hz is None else round(avg_loop_hz, 2),
+            "avg_loop_delta_iterations": avg_loop_delta_iterations,
+            "avg_loop_delta_s": avg_loop_delta_s,
             "wait_sample_last_us": wait_last,
             "wait_sample_max_us": wait_max,
             "work_time_us": work_us,
@@ -1084,7 +1230,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "verdict": "RED",
     }
     if args.openocd_before_sample and not args.no_openocd:
-        payload["openocd_snapshot_before"] = openocd_snapshot(args)
+        if args.openocd_wait_steady:
+            payload["openocd_snapshot_before"] = wait_for_openocd_steady(args)
+        else:
+            payload["openocd_snapshot_before"] = openocd_snapshot(args)
     payload["mavlink"] = sample_mavlink(args)
     if args.no_openocd:
         payload["openocd_snapshot"] = {"verdict": "SKIPPED", "reason": "no_openocd"}
@@ -1099,6 +1248,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             payload["openocd_task_delta_tops"] = task_counter_deltas(before_arrays, after_arrays)
             payload["openocd_thread_delta_tops"] = thread_counter_deltas(before_arrays, after_arrays)
             payload["openocd_scalar_deltas"] = scalar_deltas(before, after)
+            payload["openocd_average_loop_rate"] = average_loop_rate(before, after)
     payload["classification"] = classify(payload, args)
     payload["verdict"] = payload["classification"]["verdict"]
     payload["reason"] = payload["classification"]["reason"]
@@ -1134,6 +1284,10 @@ def main() -> int:
     parser.add_argument("--no-openocd", action="store_true")
     parser.add_argument("--openocd-before-sample", action="store_true",
                         help="capture a baseline OpenOCD snapshot before MAVLink sampling and report task counter deltas")
+    parser.add_argument("--openocd-wait-steady", action=argparse.BooleanOptionalAction, default=True,
+                        help="wait for the main loop counter to advance before the baseline OpenOCD snapshot")
+    parser.add_argument("--openocd-steady-timeout-s", type=float, default=45.0)
+    parser.add_argument("--openocd-steady-poll-s", type=float, default=1.0)
     args = parser.parse_args()
 
     payload = run(args)

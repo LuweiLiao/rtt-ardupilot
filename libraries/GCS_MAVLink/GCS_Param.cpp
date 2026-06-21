@@ -77,6 +77,17 @@ volatile uint32_t rtt_dbg_gcs_param_active_until_ms RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_gcs_param_active_window_opened RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_gcs_param_active_window_closed RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_gcs_param_delay_pump_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_request_read_count RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_request_push_ok RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_request_push_fail RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_io_timer_calls RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_io_no_reply_space RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_io_pop_ok RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_io_pop_empty RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_io_find_ok RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_io_find_fail RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_reply_push_ok RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_gcs_param_reply_push_fail RTT_DBG_DTCM_BSS;
 #endif
 
 // queue of pending parameter requests and replies
@@ -460,8 +471,14 @@ void GCS_MAVLINK::handle_param_request_list(const mavlink_message_t &msg)
 
 void GCS_MAVLINK::handle_param_request_read(const mavlink_message_t &msg)
 {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_gcs_param_request_read_count++;
+#endif
     if (param_requests.space() == 0) {
         // we can't process this right now, drop it
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_gcs_param_request_push_fail++;
+#endif
         return;
     }
     
@@ -486,16 +503,49 @@ void GCS_MAVLINK::handle_param_request_read(const mavlink_message_t &msg)
     memcpy(req.param_name, packet.param_id, MIN(sizeof(packet.param_id), sizeof(req.param_name)));
     req.param_name[AP_MAX_NAME_SIZE] = 0;
 
-    // queue it for processing by io timer
-    param_requests.push(req);
+    struct pending_param_reply reply {};
+    AP_Param *vp = nullptr;
+    if (req.param_index != -1) {
+        AP_Param::ParamToken token {};
+        vp = AP_Param::find_by_index(req.param_index, &reply.p_type, &token);
+        if (vp != nullptr) {
+            vp->copy_name_token(token, reply.param_name, AP_MAX_NAME_SIZE, true);
+        }
+    } else {
+        strncpy(reply.param_name, req.param_name, AP_MAX_NAME_SIZE+1);
+        vp = AP_Param::find(req.param_name, &reply.p_type);
+    }
 
-    // ensure the deferred message loop will drain async replies:
-    send_message(MSG_NEXT_PARAM);
+    if (vp == nullptr) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_gcs_param_io_find_fail++;
+#endif
+        return;
+    }
 
-    // speaking of which, we'd best make sure it is running:
-    if (!param_timer_registered) {
-        param_timer_registered = true;
-        hal.scheduler->register_io_process(FUNCTOR_BIND_MEMBER(&GCS_MAVLINK::param_io_timer, void));
+    reply.chan = req.chan;
+    reply.param_name[AP_MAX_NAME_SIZE] = 0;
+    reply.value = vp->cast_to_float(reply.p_type);
+    reply.param_index = req.param_index;
+    reply.count = AP_Param::count_parameters();
+
+    /*
+     * [Cybernetics Ch.4] Closed-loop: RTT's low-priority IO thread can be
+     * starved while the 400Hz main loop is already close to saturation.  A
+     * single PARAM_REQUEST_READ lookup is small and must answer promptly for
+     * GCS compatibility, so enqueue the reply synchronously and let the normal
+     * deferred MAVLink sender transmit it.
+     */
+    if (param_replies.push(reply)) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_gcs_param_io_find_ok++;
+        rtt_dbg_gcs_param_reply_push_ok++;
+#endif
+        send_message(MSG_NEXT_PARAM);
+    } else {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_gcs_param_reply_push_fail++;
+#endif
     }
 }
 
@@ -660,6 +710,9 @@ void GCS::send_parameter_value(const char *param_name, ap_var_type param_type, f
 void GCS_MAVLINK::param_io_timer(void)
 {
     struct pending_param_request req;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_gcs_param_io_timer_calls++;
+#endif
 
     // this is mostly a no-op, but doing this here means we won't
     // block the main thread counting parameters (~30ms on PH)
@@ -667,13 +720,22 @@ void GCS_MAVLINK::param_io_timer(void)
 
     if (param_replies.space() == 0) {
         // no room
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_gcs_param_io_no_reply_space++;
+#endif
         return;
     }
     
     if (!param_requests.pop(req)) {
         // nothing to do
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_gcs_param_io_pop_empty++;
+#endif
         return;
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_gcs_param_io_pop_ok++;
+#endif
 
     struct pending_param_reply reply;
     AP_Param *vp;
@@ -682,6 +744,9 @@ void GCS_MAVLINK::param_io_timer(void)
         AP_Param::ParamToken token {};
         vp = AP_Param::find_by_index(req.param_index, &reply.p_type, &token);
         if (vp == nullptr) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_dbg_gcs_param_io_find_fail++;
+#endif
             return;
         }
         vp->copy_name_token(token, reply.param_name, AP_MAX_NAME_SIZE, true);
@@ -689,9 +754,15 @@ void GCS_MAVLINK::param_io_timer(void)
         strncpy(reply.param_name, req.param_name, AP_MAX_NAME_SIZE+1);
         vp = AP_Param::find(req.param_name, &reply.p_type);
         if (vp == nullptr) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_dbg_gcs_param_io_find_fail++;
+#endif
             return;
         }
     }
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+    rtt_dbg_gcs_param_io_find_ok++;
+#endif
 
     reply.chan = req.chan;
     reply.param_name[AP_MAX_NAME_SIZE] = 0;
@@ -700,7 +771,22 @@ void GCS_MAVLINK::param_io_timer(void)
     reply.count = AP_Param::count_parameters();
 
     // queue for transmission
-    param_replies.push(reply);
+    if (param_replies.push(reply)) {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_gcs_param_reply_push_ok++;
+#endif
+        /*
+         * [Cybernetics Ch.4] Closed-loop: on RTT the deferred MSG_NEXT_PARAM
+         * can run before this IO callback has produced the reply.  Re-arm it
+         * after enqueueing so single PARAM_REQUEST_READ behaves like the
+         * continuously scheduled PARAM_REQUEST_LIST stream.
+         */
+        send_message(MSG_NEXT_PARAM);
+    } else {
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_gcs_param_reply_push_fail++;
+#endif
+    }
 }
 
 /*

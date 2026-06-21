@@ -72,6 +72,10 @@ extern volatile uint32_t rtt_dbg_ins_gyro_wait_mask;
 extern volatile uint32_t rtt_dbg_ins_accel_wait_mask;
 extern volatile uint32_t rtt_dbg_ins_new_gyro_mask;
 extern volatile uint32_t rtt_dbg_ins_new_accel_mask;
+extern volatile uint32_t rtt_dbg_ins_schedule_wait_accum_us;
+extern volatile uint32_t rtt_dbg_ins_data_wait_accum_us;
+extern volatile uint32_t rtt_dbg_ins_data_wait_loops;
+extern volatile uint32_t rtt_dbg_ins_wait_limit_breaks;
 extern volatile uint32_t rtt_dbg_ins_cal_j;
 extern volatile uint32_t rtt_dbg_ins_cal_i;
 extern volatile uint32_t rtt_dbg_ins_cal_converged;
@@ -2118,7 +2122,13 @@ void AP_InertialSensor::wait_for_sample(void)
     if (_next_sample_usec - now <=_sample_period_usec) {
         // we're ahead on time, schedule next sample at expected period
         uint32_t wait_usec = _next_sample_usec - now;
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        const uint32_t rtt_schedule_wait_start_us = AP_HAL::micros();
+#endif
         hal.scheduler->delay_microseconds_boost(wait_usec);
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+        rtt_dbg_ins_schedule_wait_accum_us += AP_HAL::micros() - rtt_schedule_wait_start_us;
+#endif
         uint32_t now2 = AP_HAL::micros();
         if (now2+100 < _next_sample_usec) {
             timing_printf("shortsleep %u\n", (unsigned)(_next_sample_usec-now2));
@@ -2231,7 +2241,17 @@ check_sample:
                 }
             }
 
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            const uint32_t rtt_data_wait_start_us = AP_HAL::micros();
+#endif
             hal.scheduler->delay_microseconds_boost(wait_per_loop);
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT
+            rtt_dbg_ins_data_wait_accum_us += AP_HAL::micros() - rtt_data_wait_start_us;
+            rtt_dbg_ins_data_wait_loops++;
+            if (wait_counter + 1U >= wait_counter_limit) {
+                rtt_dbg_ins_wait_limit_breaks++;
+            }
+#endif
             wait_counter++;
         }
 

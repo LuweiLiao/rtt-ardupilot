@@ -114,6 +114,58 @@ def _apply_hwdef_option_env(ap_root, env):
     default_param = GetOption('default_param') or ''
     if default_param:
         env['RTT_DEFAULT_PARAM'] = _abspath_from_root(ap_root, default_param)
+    loop_diag = os.environ.get('HAL_RTT_LOOP_DIAG')
+    if loop_diag:
+        env['HAL_RTT_LOOP_DIAG'] = loop_diag
+
+
+def _git_short_hash(ap_root):
+    try:
+        return subprocess.check_output(
+            ['git', 'rev-parse', '--short=8', 'HEAD'],
+            cwd=ap_root,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return 'unknown'
+
+
+def _write_rtt_version_header(ap_root, board):
+    """Generate the ap_version.h normally produced by waf for ArduPilot builds."""
+    out_dir = os.path.join(ap_root, 'build', board)
+    os.makedirs(out_dir, exist_ok=True)
+
+    git_hash = os.environ.get('GIT_VERSION') or _git_short_hash(ap_root)
+    try:
+        git_int = int(os.environ.get('GIT_VERSION_INT') or git_hash, 16)
+    except ValueError:
+        git_int = 0
+
+    lines = [
+        '// auto-generated header, do not edit',
+        '',
+        '#pragma once',
+        '',
+        '#ifndef FORCE_VERSION_H_INCLUDE',
+        '#error ap_version.h should never be included directly. You probably want to include AP_Common/AP_FWVersion.h',
+        '#endif',
+        '',
+        '#define GIT_VERSION "%s"' % git_hash,
+        '#define GIT_VERSION_INT %u' % git_int,
+        '#define AP_BUILD_ROOT "%s"' % ap_root,
+    ]
+
+    path = os.path.join(out_dir, 'ap_version.h')
+    data = '\n'.join(lines) + '\n'
+    old = None
+    if os.path.isfile(path):
+        with open(path, 'r') as f:
+            old = f.read()
+    if old != data:
+        with open(path, 'w') as f:
+            f.write(data)
+        print('Generated %s with GIT_VERSION %s' % (path, git_hash))
 
 
 def _run_rtt_build(ap_root, target, bsp_deploy_abspath, scons_args, test_name=''):
@@ -220,6 +272,7 @@ if canonical_target:
     # 2.5) Generate mavlink headers for scons (waf does this for waf build)
     if not is_clean:
         board = RTT_TARGETS[canonical_target]['board']
+        _write_rtt_version_header(ap_root, board)
         dronecangen_script = os.path.join(ap_root, 'Tools', 'scripts', 'rtt_dronecangen.py')
         if os.path.isfile(dronecangen_script):
             ret_dronecan = subprocess.call([sys.executable, dronecangen_script, ap_root, board], cwd=ap_root)
