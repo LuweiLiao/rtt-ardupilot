@@ -28,6 +28,13 @@ def find_tool(tool):
     if path_tool:
         candidates.append(path_tool)
 
+    if tool == 'arm-none-eabi-gdb':
+        # Ubuntu CI images may provide the ARM-capable debugger as
+        # gdb-multiarch instead of arm-none-eabi-gdb.
+        multiarch_gdb = shutil.which('gdb-multiarch')
+        if multiarch_gdb:
+            candidates.append(multiarch_gdb)
+
     candidates.extend(sorted(glob.glob(f'/opt/gcc-arm-none-eabi*/bin/{tool}')))
 
     seen = set()

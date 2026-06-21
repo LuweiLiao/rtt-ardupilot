@@ -51,8 +51,9 @@ jobs:
       - name: Install RTT build tools
         run: |
           apt-get update
-          apt-get install -y scons python3 gcc-arm-none-eabi binutils-arm-none-eabi
+          apt-get install -y scons python3 gcc-arm-none-eabi binutils-arm-none-eabi gdb-multiarch
           arm-none-eabi-gcc --version
+          gdb-multiarch --version | head -1
 
       - name: Build ${{ matrix.name }}
         shell: bash
