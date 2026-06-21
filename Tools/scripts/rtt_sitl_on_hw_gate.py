@@ -20,6 +20,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+from rtt_openocd_guard import cleanup_openocd_quiet
+
 from pymavlink import mavutil
 
 from rtt_usb_port_select import MAVLINK_PORT, resolve_mavlink_port
@@ -223,14 +225,7 @@ def wait_cdc(port: str, timeout_s: float) -> None:
 
 
 def cleanup_openocd() -> None:
-    for name in ("openocd", "openoccd"):
-        subprocess.run(
-            ["pkill", "-9", "-x", name],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-
+    cleanup_openocd_quiet()
 
 def openocd_reset(log_path: str, config: str, timeout_s: int) -> int:
     with open(log_path, "w", encoding="utf-8") as log:

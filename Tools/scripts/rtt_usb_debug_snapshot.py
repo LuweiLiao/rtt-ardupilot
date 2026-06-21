@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from rtt_openocd_guard import cleanup_openocd_quiet
+
 
 DEFAULT_ELF = "build/rtt_deploy/cuav_v5/rt-thread.elf"
 DEFAULT_CFG = ("interface/stlink.cfg", "target/stm32f7x.cfg")
@@ -205,11 +207,7 @@ def iso_now() -> str:
 
 
 def cleanup_openocd() -> None:
-    subprocess.run(["pkill", "-9", "-x", "openocd"], check=False,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.run(["pkill", "-9", "-f", "[o]penoccd"], check=False,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
+    cleanup_openocd_quiet()
 
 def symbol_addresses(elf: Path, nm: str) -> dict[str, int]:
     proc = subprocess.run([nm, "-g", str(elf)], check=True, text=True,

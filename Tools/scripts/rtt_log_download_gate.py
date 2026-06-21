@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from rtt_openocd_guard import cleanup_openocd_quiet
+
 from pymavlink import mavutil
 
 from rtt_usb_port_select import MAVLINK_PORT, resolve_mavlink_port
@@ -225,9 +227,7 @@ def wait_for_nonzero_log(conn: Any, timeout_s: float, poll_gap_s: float) -> dict
 
 
 def cleanup_openocd() -> None:
-    subprocess.run(["pkill", "-9", "-x", "openocd"], check=False)
-    subprocess.run(["pkill", "-9", "-f", "openoccd"], check=False)
-
+    cleanup_openocd_quiet()
 
 def openocd_reset(log_path: Path, timeout_s: int = 60) -> int:
     with log_path.open("w", encoding="utf-8") as log:

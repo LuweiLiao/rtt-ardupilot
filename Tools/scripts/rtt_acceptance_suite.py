@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from rtt_openocd_guard import cleanup_openocd_quiet
+
 from rtt_usb_port_select import MAVLINK_PORT
 
 DEFAULT_PORT = MAVLINK_PORT
@@ -31,9 +33,7 @@ def script_path(name: str) -> str:
 
 
 def cleanup_openocd() -> None:
-    subprocess.run(["pkill", "-9", "-x", "openocd"], check=False)
-    subprocess.run(["pkill", "-9", "-f", "[o]penoccd"], check=False)
-
+    cleanup_openocd_quiet()
 
 def run_step(name: str, cmd: list[str], outdir: Path, timeout_s: int) -> dict[str, Any]:
     step_dir = outdir / name
