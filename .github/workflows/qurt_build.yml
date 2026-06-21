@@ -2,6 +2,8 @@ name: QURT Build
 
 on:
   push:
+    branches-ignore:
+      - 'issue/rtt-*'
     paths-ignore:
       # remove other vehicles
       - 'AntennaTracker/**'

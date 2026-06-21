@@ -2,6 +2,8 @@ name: test scripting
 
 on:
   push:
+    branches-ignore:
+      - 'issue/rtt-*'
     paths: # only run for scripting changes
       - 'libraries/AP_Scripting/tests/docs_check.py'
       - 'libraries/AP_Scripting/generator/**'

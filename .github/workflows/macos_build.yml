@@ -2,6 +2,8 @@ name: Macos Build
 
 on:
   push:
+    branches-ignore:
+      - 'issue/rtt-*'
     paths-ignore:
       # remove other env install scripts
       - 'Tools/environment_install/APM_install.sh'

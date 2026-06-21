@@ -2,6 +2,8 @@ name: test dds
 
 on:
   push:
+    branches-ignore:
+      - 'issue/rtt-*'
     paths-ignore:
       # remove not tests vehicles
       - 'AntennaTracker/**'
