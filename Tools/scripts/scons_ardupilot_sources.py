@@ -324,12 +324,12 @@ def _collect_defines_h7(sim_enabled=False):
 
 def _collect_defines_f7(sim_enabled=False):
     # STM32F765/CUAV V5 RTT BSP (STM32F767xx HAL used by BSP)
+    # Storage size comes from hwdef.dat via generated hwdef.h.
     defines = [
         'CONFIG_HAL_BOARD=HAL_BOARD_RTT',
         'USE_HAL_DRIVER=1',
         'STM32F767xx=1',
         'ARM_MATH_CM7=1',
-        'HAL_STORAGE_SIZE=16384',
         'LUA_32BITS=1',
         '__AP_LINE__=__LINE__',
         'APM_BUILD_DIRECTORY=APM_BUILD_ArduCopter',
