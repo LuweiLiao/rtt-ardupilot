@@ -5,6 +5,7 @@
 class Empty::GPIO : public AP_HAL::GPIO {
 public:
     GPIO();
+    using AP_HAL::GPIO::pinMode;
     void    init() override;
     void    pinMode(uint8_t pin, uint8_t output) override;
     uint8_t read(uint8_t pin) override;

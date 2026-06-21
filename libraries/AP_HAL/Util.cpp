@@ -18,6 +18,9 @@ public:
     BufferPrinter(char* str, size_t size)  :
         _offs(0), _str(str), _size(size)  {}
 
+    using AP_HAL::BetterStream::read;
+    using AP_HAL::BetterStream::write;
+
     size_t write(uint8_t c) override {
         if (_offs < _size) {
             _str[_offs] = c;

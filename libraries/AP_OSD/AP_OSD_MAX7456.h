@@ -23,6 +23,7 @@ class AP_OSD_MAX7456 : public AP_OSD_Backend
 {
 
 public:
+    using AP_OSD_Backend::write;
 
     static AP_OSD_Backend *probe(AP_OSD &osd, AP_HAL::OwnPtr<AP_HAL::Device> dev);
 

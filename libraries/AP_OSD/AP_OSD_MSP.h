@@ -5,6 +5,8 @@ class AP_OSD_MSP : public AP_OSD_Backend
 {
     using AP_OSD_Backend::AP_OSD_Backend;
 public:
+    using AP_OSD_Backend::write;
+
     static AP_OSD_Backend *probe(AP_OSD &osd);
 
     //initilize display port and underlying hardware

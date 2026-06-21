@@ -29,6 +29,8 @@ class AP_OSD_SITL : public AP_OSD_Backend
 {
 
 public:
+    using AP_OSD_Backend::write;
+
     static AP_OSD_Backend *probe(AP_OSD &osd);
 
     //draw given text to framebuffer
