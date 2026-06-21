@@ -154,7 +154,7 @@ board: CUAV V5 / STM32F767
 | RTT-GAP-127 | USB | FIXED | `hal_usb_cherryusb_shim.c` 中未使用且会硬停 IN endpoint 的 `cherry_tx_stop_locked` 已删除，避免误接回 Windows/Mission Planner DTR 关闭热路径 | `rtt_gap127_build_20260621T193347Z` | 保持 DTR close 软恢复策略 |
 | RTT-GAP-128 | Build | OPEN | RT-Thread `dev_mmcsd_core.h` 在 CUAV V5 构建中出现 `status` 可能未初始化 warning | `rtt_gap127_build_20260621T193347Z` | 审计 MMCSD 错误路径并上游/本地修复 |
 | RTT-GAP-129 | Build | OPEN | RT-Thread STM32 `drv_common.c` 隐式声明 `SystemClock_Config`，说明 BSP clock hook 原型不完整 | `rtt_gap127_build_20260621T193347Z` | 补齐声明或调整 BSP include |
-| RTT-GAP-130 | Build | OPEN | `AP_Math.cpp` clang diagnostic pragma 在 GCC RTT 构建中产生 unknown pragma warning | `rtt_gap127_build_20260621T193347Z` | 用编译器条件保护 clang pragma |
+| RTT-GAP-130 | Build | FIXED | `AP_Math.cpp` 的 clang-only diagnostic pragma 已用 `#if defined(__clang__)` 保护，GCC RTT 构建不再解析 clang pragma | `rtt_gap130_build_20260621T194317Z` | 保持 `is_equal()` 浮点逻辑不变 |
 | RTT-GAP-131 | Build | OPEN | `AP_HAL::BetterStream` / `GPIO` overloaded virtual warnings 在 RTT 构建中未归类，可能掩盖派生类重载语义差异 | `rtt_gap127_build_20260621T193347Z` | 判断上游共性或 RTT CXXFLAGS 差异 |
 | RTT-GAP-132 | Scripting | OPEN | Lua 库在 RTT 构建中有多处 unused static warning，脚本裁剪策略缺清晰边界 | `rtt_gap127_build_20260621T193347Z` | 区分有意裁剪与死代码噪声 |
 
@@ -173,4 +173,5 @@ board: CUAV V5 / STM32F767
 - `RTT-GAP-127`：删除 CherryUSB 中未使用的 `cherry_tx_stop_locked()` 和只服务于该死路径的 DTR-closed endpoint 调试计数，并同步 `Tools/scripts/rtt_usb_debug_snapshot.py` 的符号列表。该 helper 会在 DTR 下降时执行 endpoint disable/FIFO flush，与当前为 Windows usbser/Mission Planner 保留 configured/open hint 的策略冲突，因此不接回运行路径。验证：`python3 -m SCons --target=cuav-v5 -j16` 通过后，`build.log` 中 `cherry_tx_stop_locked` / `unused-function` 检索应为空，源码树 artifact audit 仍为 0。
 - 新发现 `RTT-GAP-128` 到 `RTT-GAP-132`：`rtt_gap127_build_20260621T193347Z/build.log` 继续暴露 RT-Thread MMCSD 未初始化风险、STM32 BSP clock hook 隐式声明、GCC 下 clang pragma 噪声、HAL overloaded virtual warning、Lua 裁剪后 unused static warning，已登记为后续构建质量和脚本裁剪收敛项。
 - `RTT-GAP-122`：修正 `GCS_Common.cpp` failure-creation 分支里 `#pragma GCSS diagnostic pop` 拼写错误，恢复为 `#pragma GCC diagnostic pop`，与同块 `#pragma GCC diagnostic push` 正确配对。验证：`python3 -m SCons --target=cuav-v5 -j16` 通过后，`build.log` 中 `GCSS diagnostic` / `unknown-pragmas` 的 GCS 条目应为空。
+- `RTT-GAP-130`：将 `AP_Math.cpp` 中只给 clang 使用的 `#pragma clang diagnostic push/ignored/pop` 包在 `#if defined(__clang__)` 内，避免 arm-none-eabi-g++ 把 clang pragma 当作 unknown pragma。验证：`python3 -m SCons --target=cuav-v5 -j16` 通过后，`build.log` 中 `AP_Math.cpp` / `unknown-pragmas` 检索应为空。
 - 新增本台账，首批记录 120 项差距，后续每轮按 ID 修复、验证、关闭。
