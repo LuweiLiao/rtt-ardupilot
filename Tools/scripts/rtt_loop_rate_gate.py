@@ -13,6 +13,11 @@ It combines three signals:
 
 The script is read-only for vehicle parameters.  It does not lower
 SCHED_LOOP_RATE and does not mask arming checks.
+
+Loop-rate verdicts prefer the OpenOCD average derived from
+rtt_dbg_main_loop_iterations.  The single-period rtt_dbg_loop_time_us sample and
+rtt_dbg_ins_loop_rate are debug aids only; they are reported with explicit names
+so they are not confused with SCHED_LOOP_RATE or the measured loop average.
 """
 
 from __future__ import annotations
@@ -1041,18 +1046,18 @@ def wait_for_openocd_steady(args: argparse.Namespace) -> dict[str, Any]:
         snap = openocd_snapshot(args)
         values = snap.get("values", {}) if isinstance(snap, dict) else {}
         current_iter = int(values.get("rtt_dbg_main_loop_iterations") or 0)
-        ins_loop_rate = int(values.get("rtt_dbg_ins_loop_rate") or 0)
+        ins_debug_loop_rate = int(values.get("rtt_dbg_ins_loop_rate") or 0)
         attempts.append({
             "verdict": snap.get("verdict"),
             "reason": snap.get("reason"),
             "main_loop_iterations": current_iter,
-            "ins_loop_rate": ins_loop_rate,
+            "ins_debug_loop_rate_hz": ins_debug_loop_rate,
         })
         if previous is not None:
             previous_values = previous.get("values", {}) if isinstance(previous, dict) else {}
             previous_iter = int(previous_values.get("rtt_dbg_main_loop_iterations") or 0)
             if (snap.get("verdict") == "GREEN" and previous.get("verdict") == "GREEN" and
-                    current_iter > previous_iter and ins_loop_rate == args.target_loop_rate):
+                    current_iter > previous_iter):
                 snap["steady_wait_attempts"] = attempts[-8:]
                 snap["steady_wait_reason"] = "main_loop_counter_incremented"
                 return snap
@@ -1072,9 +1077,10 @@ def classify(payload: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
     params = mav.get("params", {}) if isinstance(mav, dict) else {}
     sched_param = params.get("SCHED_LOOP_RATE", {}) if isinstance(params, dict) else {}
     target_hz = int(round(float(sched_param.get("value", args.target_loop_rate))))
+    sched_loop_rate_param_hz = target_hz
 
     loop_us = int(values.get("rtt_dbg_loop_time_us") or 0)
-    loop_hz = (1_000_000.0 / loop_us) if loop_us > 0 else None
+    last_loop_period_sample_hz = (1_000_000.0 / loop_us) if loop_us > 0 else None
     avg_loop_hz = None
     avg_loop_delta_iterations = None
     avg_loop_delta_s = None
@@ -1091,7 +1097,7 @@ def classify(payload: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
     work_max = int(values.get("rtt_dbg_work_time_max_us") or 0)
     time_avail_last = int(values.get("rtt_dbg_scheduler_run_time_available_last_us") or 0)
     overrun_count = int(values.get("rtt_dbg_overrun_count") or 0)
-    ins_loop_rate = int(values.get("rtt_dbg_ins_loop_rate") or 0)
+    ins_debug_loop_rate = int(values.get("rtt_dbg_ins_loop_rate") or 0)
     scheduler_run_us = int(values.get("rtt_dbg_scheduler_run_total_us") or values.get("rtt_dbg_run_tasks_us") or 0)
     scheduler_run_max_us = int(values.get("rtt_dbg_scheduler_run_max_us") or 0)
     task_max_idx = int(values.get("rtt_dbg_scheduler_task_max_idx") or 0)
@@ -1133,8 +1139,8 @@ def classify(payload: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
     symptoms: list[str] = []
     if avg_loop_hz is not None and avg_loop_hz < args.min_loop_rate:
         symptoms.append("average_loop_rate_below_threshold")
-    elif loop_hz is not None and loop_hz < args.min_loop_rate:
-        symptoms.append("debug_loop_rate_below_threshold")
+    elif last_loop_period_sample_hz is not None and last_loop_period_sample_hz < args.min_loop_rate:
+        symptoms.append("last_loop_period_sample_below_threshold")
     if main_loop_slow_text:
         symptoms.append("statustext_main_loop_slow")
     if any("0.0kHz/0.0kHz" in text for text in imu_banner_text):
@@ -1149,15 +1155,17 @@ def classify(payload: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
         symptoms.append("scheduler_extra_loop_budget_active")
 
     diagnosis = "UNKNOWN"
-    if "wait_for_sample_suspicious" in symptoms and work_us < thresholds["loop_period_us"]:
+    if avg_loop_hz is not None and avg_loop_hz >= args.min_loop_rate:
+        diagnosis = "AVERAGE_LOOP_RATE_OK"
+    elif "wait_for_sample_suspicious" in symptoms and work_us < thresholds["loop_period_us"]:
         diagnosis = "INS_SAMPLE_WAIT_LIMITED"
     elif task_max_us > task_max_allowed_us and task_max_allowed_us > 0:
         diagnosis = "SCHEDULER_TASK_OVERRUN"
     elif avg_loop_hz is not None and avg_loop_hz < args.min_loop_rate:
         diagnosis = "AVERAGE_LOOP_RATE_LOW"
-    elif loop_hz is not None and loop_hz < args.min_loop_rate and work_us >= thresholds["loop_period_us"]:
+    elif last_loop_period_sample_hz is not None and last_loop_period_sample_hz < args.min_loop_rate and work_us >= thresholds["loop_period_us"]:
         diagnosis = "MAIN_THREAD_WORK_OVER_BUDGET"
-    elif loop_hz is not None and loop_hz < args.min_loop_rate:
+    elif last_loop_period_sample_hz is not None and last_loop_period_sample_hz < args.min_loop_rate:
         diagnosis = "LOOP_RATE_LOW_NEEDS_MORE_COUNTERS"
     elif any("imu_fast_sampling_banner_zero_rate" == item for item in symptoms):
         diagnosis = "IMU_RATE_REPORTING_ANOMALY"
@@ -1166,8 +1174,10 @@ def classify(payload: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
 
     if avg_loop_hz is not None:
         final_rate_ok = avg_loop_hz >= args.min_loop_rate
+        rate_evidence_source = "openocd_average_loop_rate"
     else:
-        final_rate_ok = loop_hz is not None and loop_hz >= args.min_loop_rate
+        final_rate_ok = last_loop_period_sample_hz is not None and last_loop_period_sample_hz >= args.min_loop_rate
+        rate_evidence_source = "last_loop_period_sample"
     statustext_ok = not main_loop_slow_text
     imu_banner_ok = not any("0.0kHz/0.0kHz" in text for text in imu_banner_text)
     verdict = "GREEN" if final_rate_ok and statustext_ok and imu_banner_ok else "RED"
@@ -1177,10 +1187,12 @@ def classify(payload: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
         "diagnosis": diagnosis,
         "symptoms": symptoms,
         "metrics": {
+            "sched_loop_rate_param_hz": sched_loop_rate_param_hz,
             "target_loop_rate_hz": target_hz,
             "min_loop_rate_hz": args.min_loop_rate,
-            "debug_loop_us": loop_us,
-            "debug_loop_hz": None if loop_hz is None else round(loop_hz, 1),
+            "rate_evidence_source": rate_evidence_source,
+            "last_loop_period_sample_us": loop_us,
+            "last_loop_period_sample_hz": None if last_loop_period_sample_hz is None else round(last_loop_period_sample_hz, 1),
             "avg_loop_hz": None if avg_loop_hz is None else round(avg_loop_hz, 2),
             "avg_loop_delta_iterations": avg_loop_delta_iterations,
             "avg_loop_delta_s": avg_loop_delta_s,
@@ -1274,7 +1286,7 @@ def classify(payload: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
             "copter_read_ahrs_max_us": int(values.get("rtt_dbg_copter_read_ahrs_max_us") or 0),
             "copter_read_ahrs_slow_count": int(values.get("rtt_dbg_copter_read_ahrs_slow_count") or 0),
             "copter_read_ahrs_calls": int(values.get("rtt_dbg_copter_read_ahrs_calls") or 0),
-            "ins_loop_rate": ins_loop_rate,
+            "ins_debug_loop_rate_hz": ins_debug_loop_rate,
             "cpu_idle_pct": cpu_idle,
             "cpu_load_pct": cpu_load,
             "sys_status_load_latest": sys_load_latest,

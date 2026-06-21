@@ -69,7 +69,7 @@ results/execution/rtt_hrtimer_diag_gate_20260621T181359Z/loop_rate_gate.json
 verdict=GREEN
 reason=loop_rate_ok
 avg_loop_hz=403.66
-ins_loop_rate=400
+ins_debug_loop_rate_hz=400
 main_loop_slow_text=[]
 imu_banner_text=[]
 rtt_dbg_boost_hrtimer_count=5434
@@ -88,7 +88,7 @@ results/execution/rtt_hrtimer_release_gate_20260621T181809Z/loop_rate_gate.json
 verdict=GREEN
 reason=loop_rate_ok
 avg_loop_hz=406.45
-ins_loop_rate=400
+ins_debug_loop_rate_hz=400
 main_loop_slow_text=[]
 imu_banner_text=[]
 rtt_dbg_boost_hrtimer_count=5209
@@ -107,7 +107,7 @@ results/execution/rtt_post_can_loop_rate_20260621T183328Z/loop_rate_gate.json
 verdict=GREEN
 reason=loop_rate_ok
 SCHED_LOOP_RATE=400
-ins_loop_rate=400
+ins_debug_loop_rate_hz=400
 main_loop_slow_text=[]
 imu_banner_text=[]
 rtt_dbg_boost_hrtimer_count=224545
