@@ -90,15 +90,18 @@ int apfs_rename(const char *oldpath, const char *newpath);
 #define fwrite(ptr, size, nmemb, stream) apfs_fwrite(ptr, size, nmemb, stream)
 #define fputs(s, stream) apfs_fputs(s, stream)
 #define fgets(s, size, stream) apfs_fgets(s, size, stream)
+#undef clearerr
 #define clearerr(stream) apfs_clearerr(stream)
 #define fseek(stream, offset, whence) apfs_fseek(stream, offset, whence)
+#undef ferror
 #define ferror(stream) apfs_ferror(stream)
 #define fclose(stream) apfs_fclose(stream)
 #define tmpfile() apfs_tmpfile()
 #undef getc
 #define getc(stream) apfs_getc(stream)
 #define ungetc(c, stream) apfs_ungetc(c, stream)
-#define feof(stream) apfs_ferror(stream)
+#undef feof
+#define feof(stream) apfs_feof(stream)
 #define ftell(stream) apfs_ftell(stream)
 #define freopen(pathname, mode, stream) apfs_freopen(pathname, mode, stream)
 #define rename(oldpath, newpath) apfs_rename(oldpath, newpath)
