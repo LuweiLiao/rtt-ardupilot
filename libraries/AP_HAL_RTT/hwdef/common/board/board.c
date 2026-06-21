@@ -12,4 +12,12 @@
 #include "board.h"
 #include <rtthread.h>
 
-/* SystemClock_Config is now in board/drivers_ll/stm32f7_clock_ll.c (LL API) */
+/*
+ * RT-Thread's STM32 HAL_Drivers weak board init still calls the legacy CubeMX
+ * hook.  Keep that ABI available while routing the real clock setup through
+ * the ArduPilot RTT LL implementation.
+ */
+void SystemClock_Config(void)
+{
+    rtt_clock_init();
+}

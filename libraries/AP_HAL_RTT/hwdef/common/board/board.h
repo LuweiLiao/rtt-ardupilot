@@ -48,6 +48,7 @@ extern int _end;  /* after .data/.bss in SRAM1_APP */
 
 void rtt_clock_init(void);
 void rtt_enable_peripheral_clocks(void);
+void SystemClock_Config(void);
 
 /*
  * Force SPI1 to alternate DMA2 streams so SPI4 can use its
