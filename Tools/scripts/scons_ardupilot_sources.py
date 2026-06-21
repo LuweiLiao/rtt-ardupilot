@@ -103,6 +103,16 @@ def _env_truthy(env, name):
     return str(env.get(name, '0')).strip().lower() in ('1', 'true', 'yes', 'on')
 
 
+def _common_defines(sim_enabled=False):
+    # Keep RTT SCons aligned with Tools/ardupilotwaf/boards.py.  Lua and
+    # other ArduPilot sources use ARDUPILOT_BUILD to select the embedded
+    # autopilot sandbox instead of host/interpreter behaviour.
+    return [
+        'ARDUPILOT_BUILD=1',
+        'AP_SIM_ENABLED=%d' % (1 if sim_enabled else 0),
+    ]
+
+
 def _glob_subdir_sources(ap_root, rel_dir):
     abs_dir = os.path.join(ap_root, rel_dir)
     if not os.path.isdir(abs_dir):
@@ -318,8 +328,7 @@ def _collect_defines_h7(sim_enabled=False):
         'FRAME_CONFIG=MULTICOPTER_FRAME',
         'AP_DDS_ENABLED=0',
     ]
-    defines.append('AP_SIM_ENABLED=%d' % (1 if sim_enabled else 0))
-    return defines
+    return _common_defines(sim_enabled=sim_enabled) + defines
 
 
 def _collect_defines_f7(sim_enabled=False):
@@ -347,8 +356,7 @@ def _collect_defines_f7(sim_enabled=False):
         'HAL_ENABLE_DRONECAN_DRIVERS=1',
         'AP_CAN_SLCAN_ENABLED=2',
     ]
-    defines.append('AP_SIM_ENABLED=%d' % (1 if sim_enabled else 0))
-    return defines
+    return _common_defines(sim_enabled=sim_enabled) + defines
 
 
 def _collect_defines(board="rtt_pixhawk6c_mini", sim_enabled=False):
