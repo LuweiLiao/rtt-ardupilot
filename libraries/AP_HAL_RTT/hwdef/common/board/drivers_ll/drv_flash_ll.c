@@ -5,9 +5,14 @@
 
 #include "drv_flash_ll.h"
 #include "stm32f7xx.h"
+#include <string.h>
 
+#ifndef FLASH_KEY1
 #define FLASH_KEY1   0x45670123U
+#endif
+#ifndef FLASH_KEY2
 #define FLASH_KEY2   0xCDEF89ABU
+#endif
 #define FLASH_BASE_ADDR  0x08000000U
 
 /* F767 single-bank sector sizes (12 sectors, total 2MB) */

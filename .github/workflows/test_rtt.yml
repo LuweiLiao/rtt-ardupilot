@@ -32,13 +32,11 @@ jobs:
       matrix:
         include:
           - name: cuav-v5-copter
-            vehicle: ArduCopter
             target: cuav-v5
             extra_args: ''
             artifact_bin: build/rtt_cuav_v5/rtthread.bin
             artifact_elf: build/rtt_deploy/cuav_v5/rt-thread.elf
           - name: cuav-v5-l0-boot
-            vehicle: ArduCopter
             target: cuav-v5
             extra_args: '--test=l0_boot'
             artifact_bin: build/rtt_cuav_v5/rtthread.bin
@@ -59,7 +57,7 @@ jobs:
         shell: bash
         run: |
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
-          python3 -m SCons --v=${{ matrix.vehicle }} --target=${{ matrix.target }} ${{ matrix.extra_args }} -j"$(nproc)"
+          python3 -m SCons --target=${{ matrix.target }} ${{ matrix.extra_args }} -j"$(nproc)"
 
       - name: Check RTT artifacts
         shell: bash

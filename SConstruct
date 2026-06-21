@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Root SConstruct for pogo-apm: RTT BSP staging + scons full build by --target.
-# Usage: scons --v=ArduCopter --target=pixhawk6c-mini | scons --v=ArduCopter --target=cuav-v5 [scons options]
+# Usage: scons --vehicle=ArduCopter --target=pixhawk6c-mini | scons --target=cuav-v5 [scons options]
 #        aliases like pixhawk6c_mini, cuav_v5, and quoted forms like "cuav v5" are accepted.
 #        scons -c --target=cuav-v5  => clean staged BSP build.
 # Product: build/rtt_deploy/<target>/rtthread.bin, rt-thread.elf; copied to build/rtt_<target>/rtthread.bin
@@ -19,6 +19,11 @@ AddOption('--target',
           default='',
           help='RTT BSP target alias: pixhawk6c-mini/pixhawk6c_mini, cuav-v5/cuav_v5')
 AddOption('--v',
+          dest='vehicle',
+          type='string',
+          default='ArduCopter',
+          help='Vehicle (e.g. ArduCopter), for future use; kept for legacy local commands')
+AddOption('--vehicle',
           dest='vehicle',
           type='string',
           default='ArduCopter',
@@ -241,12 +246,12 @@ if canonical_target:
     i = 1
     while i < len(sys.argv):
         a = sys.argv[i]
-        if a in ('--target', '--upload', '--port', '--v', '--test', '--extra-hwdef', '--default-param'):
+        if a in ('--target', '--upload', '--port', '--v', '--vehicle', '--test', '--extra-hwdef', '--default-param'):
             i += 1
             if i < len(sys.argv) and not sys.argv[i].startswith('-'):
                 i += 1
             continue
-        if a.startswith('--target=') or a.startswith('--upload=') or a.startswith('--port=') or a.startswith('--v=') or a.startswith('--test=') or a.startswith('--extra-hwdef=') or a.startswith('--default-param='):
+        if a.startswith('--target=') or a.startswith('--upload=') or a.startswith('--port=') or a.startswith('--v=') or a.startswith('--vehicle=') or a.startswith('--test=') or a.startswith('--extra-hwdef=') or a.startswith('--default-param='):
             i += 1
             continue
         scons_args.append(a)

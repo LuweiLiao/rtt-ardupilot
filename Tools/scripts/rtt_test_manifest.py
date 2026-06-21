@@ -91,7 +91,8 @@ def hal_test_root(ap_root):
 def resolve_test_paths(ap_root, test_name, bsp_cwd=None):
     """
     Return (test_dir, common_dir, layout_key) for TEST_NAME.
-    Falls back to hwdef/common/tests/test_<name> when canonical tree missing.
+    Prefer the deployed BSP tests/ copy so SCons writes objects under build/.
+    Falls back to the canonical source tree, then hwdef/common/tests/test_<name>.
     """
     ap_root = os.path.abspath(ap_root)
     bsp_cwd = bsp_cwd or os.getcwd()
@@ -100,6 +101,12 @@ def resolve_test_paths(ap_root, test_name, bsp_cwd=None):
     common = os.path.join(root, '_common')
 
     if key in TEST_LAYOUT:
+        legacy_name = LEGACY_DIR_NAMES.get(key, 'test_' + key)
+        staged_test = os.path.join(bsp_cwd, 'tests', legacy_name)
+        staged_common = os.path.join(bsp_cwd, 'tests', 'common')
+        if os.path.isfile(os.path.join(staged_test, 'SConscript')):
+            return staged_test, staged_common, key
+
         test_dir = os.path.join(root, *TEST_LAYOUT[key])
         if os.path.isfile(os.path.join(test_dir, 'SConscript')):
             return test_dir, common, key

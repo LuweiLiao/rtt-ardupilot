@@ -71,7 +71,6 @@ print('RTT USB backend: %s (TEST_NAME=%r ARDUPILOT_FULL=%s)' % (
 TEST_NAME = os.environ.get('TEST_NAME', '')
 
 if TEST_NAME:
-    env.Append(CPPDEFINES = ['FLASH_ORIGIN=0x08008000U'])
     old_lflags = env.get('LINKFLAGS', '')
     if isinstance(old_lflags, list):
         old_lflags = ' '.join(str(v) for v in old_lflags)
@@ -168,6 +167,14 @@ if TEST_NAME:
     import rtt_test_manifest as _rtt_test_manifest
     _test_dir, _test_common_dir, _test_key = _rtt_test_manifest.resolve_test_paths(
         _ap_root, TEST_NAME, cwd)
+    _compat_common_dir = os.path.join(cwd, '_common')
+    if _test_common_dir.startswith(cwd + os.sep) and os.path.isdir(_test_common_dir):
+        if not os.path.exists(_compat_common_dir):
+            try:
+                os.symlink(os.path.relpath(_test_common_dir, cwd), _compat_common_dir)
+            except OSError:
+                import shutil as _shutil
+                _shutil.copytree(_test_common_dir, _compat_common_dir, dirs_exist_ok=True)
     test_app_desc = os.path.join(_test_common_dir, 'test_app_descriptor.c')
     if os.path.isfile(test_app_desc):
         objs = objs + DefineGroup('test_app_descriptor',
