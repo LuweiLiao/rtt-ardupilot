@@ -28,7 +28,7 @@ board: CUAV V5 / STM32F767
 | RTT-GAP-001 | 主循环 | FIXED | RTT 1kHz tick delay 无法稳定支撑 400Hz 主循环 | `rtt_hrtimer_*_gate` | 保持 hrtimer 回归门禁 |
 | RTT-GAP-002 | 主循环 | FIXED | DWT busy-wait 会饿死 IMU producer | 失败实验已归档 | 禁止恢复纯 busy-wait |
 | RTT-GAP-003 | 主循环 | FIXED | loop-rate gate 默认启用 OpenOCD 前后双快照，常规/post-CAN 回归会生成 `openocd_average_loop_rate.avg_loop_hz`；需要时可用 `--no-openocd-before-sample` 关闭 | `rtt_gap003_default_baseline_20260621T205323Z` | 保持平均主循环频率作为硬件验收主证据 |
-| RTT-GAP-004 | 主循环 | OPEN | scheduler task overrun 计数仍会累积 | `rtt_loop_rate_gate.py` metrics | 逐 task 定位真实超预算项 |
+| RTT-GAP-004 | 主循环 | PARTIAL | scheduler task overrun 计数仍会累积；loop-rate gate 现已在默认 release 证据中把 `scheduler_task_max` / `scheduler_task_last` 映射为任务名、来源、频率、优先级、预算和超预算差值 | `rtt_gap004_task_identity_20260621T210011Z` | 下一轮用硬件 gate 捕获真实超预算任务并修复根因 |
 | RTT-GAP-005 | 主循环 | FIXED | loop-rate gate 已把真实判定证据、单次周期样本、INS debug loop rate、SCHED_LOOP_RATE 参数显式拆开命名，steady wait 不再要求 `rtt_dbg_ins_loop_rate == target` | `rtt_gap005_loop_gate_fields_20260621T204807Z` | 保持平均主循环计数优先，INS debug 字段只作辅助 |
 | RTT-GAP-006 | 主循环 | FIXED | 默认 release 构建已常驻导出 scheduler task 名称/优先级/频率/预算/来源元数据，loop-rate gate 将重型逐任务计数、线程 hook、电机分段计时归为 optional，不再把关闭的诊断符号当硬缺失 | `rtt_gap006_task_meta_20260621T203856Z` | 保持 release-safe task metadata；需要逐任务运行计数时再启用 `HAL_RTT_LOOP_DIAG` |
 | RTT-GAP-007 | 主循环 | OPEN | hrtimer 只实现 STM32F7 后端 | `rtt_clock_time_stm32f7.c` | 抽象到 F7/H7/其他 MCU |

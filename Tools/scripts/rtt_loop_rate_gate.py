@@ -772,6 +772,19 @@ def task_meta(arrays: dict[str, list[int]], idx: int) -> dict[str, Any]:
     }
 
 
+def task_runtime_entry(arrays: dict[str, list[int]], idx: int, time_us: int, allowed_us: int) -> dict[str, Any]:
+    over_budget_us = None
+    if allowed_us > 0:
+        over_budget_us = int(time_us) - int(allowed_us)
+    return {
+        "idx": int(idx),
+        "time_us": int(time_us),
+        "allowed_us": int(allowed_us),
+        "over_budget_us": over_budget_us,
+        **task_meta(arrays, idx),
+    }
+
+
 def top_task_counters(arrays: dict[str, list[int]]) -> dict[str, list[dict[str, Any]]]:
     def top_for(name: str, count: int = 12) -> list[dict[str, int]]:
         values = arrays.get(name, [])
@@ -1074,6 +1087,9 @@ def classify(payload: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
     mav = payload.get("mavlink", {})
     snap = payload.get("openocd_snapshot", {})
     values = snap.get("values", {}) if isinstance(snap, dict) else {}
+    task_arrays = snap.get("task_arrays", {}) if isinstance(snap, dict) else {}
+    if not isinstance(task_arrays, dict):
+        task_arrays = {}
     params = mav.get("params", {}) if isinstance(mav, dict) else {}
     sched_param = params.get("SCHED_LOOP_RATE", {}) if isinstance(params, dict) else {}
     target_hz = int(round(float(sched_param.get("value", args.target_loop_rate))))
@@ -1106,6 +1122,8 @@ def classify(payload: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
     task_last_idx = int(values.get("rtt_dbg_scheduler_task_last_idx") or 0)
     task_last_us = int(values.get("rtt_dbg_scheduler_task_last_us") or 0)
     task_last_allowed_us = int(values.get("rtt_dbg_scheduler_task_last_allowed_us") or 0)
+    task_max = task_runtime_entry(task_arrays, task_max_idx, task_max_us, task_max_allowed_us)
+    task_last = task_runtime_entry(task_arrays, task_last_idx, task_last_us, task_last_allowed_us)
     task_overrun_count = int(values.get("rtt_dbg_scheduler_task_overrun_count") or 0)
     task_not_achieved_count = int(values.get("rtt_dbg_scheduler_task_not_achieved_count") or 0)
     extra_loop_us = int(values.get("rtt_dbg_scheduler_extra_loop_us") or values.get("rtt_dbg_extra_loop") or 0)
@@ -1212,9 +1230,11 @@ def classify(payload: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
             "scheduler_task_last_idx": task_last_idx,
             "scheduler_task_last_us": task_last_us,
             "scheduler_task_last_allowed_us": task_last_allowed_us,
+            "scheduler_task_last": task_last,
             "scheduler_task_max_idx": task_max_idx,
             "scheduler_task_max_us": task_max_us,
             "scheduler_task_max_allowed_us": task_max_allowed_us,
+            "scheduler_task_max": task_max,
             "scheduler_task_overrun_count": task_overrun_count,
             "scheduler_task_not_achieved_count": task_not_achieved_count,
             "scheduler_extra_loop_us": extra_loop_us,
