@@ -23,6 +23,7 @@ import sys
 import struct
 import binascii
 import subprocess
+import tempfile
 
 
 def crc32(data, state=0):
@@ -39,40 +40,32 @@ def to_unsigned(i):
 
 
 def git_short_hash(source_root):
-    """Return the short git hash, retrying after marking the repo safe.
+    """Return the short git hash using a private git HOME.
 
-    GitHub container jobs can run the build with a HOME/global git config that
-    differs from actions/checkout's temporary setup, which makes git reject the
-    workspace as dubious even after checkout configured it as safe.
+    RT-Thread SCons post actions may run with HOME unset.  Use a temporary HOME
+    and mark only this source tree safe so CI ownership checks do not degrade
+    the APP_DESCRIPTOR git hash to zero.
     """
     source_root = os.path.abspath(source_root)
-    cmd = ['git', '-C', source_root, 'rev-parse', '--short', 'HEAD']
+    env = os.environ.copy()
 
-    result = subprocess.run(
-        cmd,
-        capture_output=True, text=True, timeout=5
-    )
-    if result.returncode == 0:
-        return result.stdout.strip(), None
+    with tempfile.TemporaryDirectory(prefix='rtt-appdesc-git-') as git_home:
+        env['HOME'] = git_home
+        config = subprocess.run(
+            ['git', 'config', '--global', '--add', 'safe.directory', source_root],
+            capture_output=True, text=True, timeout=5, env=env
+        )
+        if config.returncode != 0:
+            return None, config.stderr
 
-    if 'dubious ownership' not in result.stderr:
+        result = subprocess.run(
+            ['git', '-C', source_root, 'rev-parse', '--short', 'HEAD'],
+            capture_output=True, text=True, timeout=5, env=env
+        )
+        if result.returncode == 0:
+            return result.stdout.strip(), None
+
         return None, result.stderr
-
-    config = subprocess.run(
-        ['git', 'config', '--global', '--add', 'safe.directory', source_root],
-        capture_output=True, text=True, timeout=5
-    )
-    if config.returncode != 0:
-        return None, config.stderr
-
-    retry = subprocess.run(
-        cmd,
-        capture_output=True, text=True, timeout=5
-    )
-    if retry.returncode == 0:
-        return retry.stdout.strip(), None
-
-    return None, retry.stderr
 
 
 def main():

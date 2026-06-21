@@ -18,18 +18,18 @@ def load_module():
 
 
 class GitHashFallbackTest(unittest.TestCase):
-    def test_dubious_ownership_marks_repo_safe_then_retries(self):
+    def test_git_hash_uses_private_home_and_marks_repo_safe(self):
         module = load_module()
         calls = []
 
-        def fake_run(cmd, capture_output, text, timeout):
-            calls.append(cmd)
-            if cmd[:3] == ["git", "-C", "/tmp/repo"] and len(calls) == 1:
-                return subprocess.CompletedProcess(cmd, 128, "", "fatal: detected dubious ownership\n")
+        def fake_run(cmd, capture_output, text, timeout, env):
+            calls.append((cmd, env))
             if cmd[:4] == ["git", "config", "--global", "--add"]:
                 self.assertEqual(cmd[-2:], ["safe.directory", "/tmp/repo"])
+                self.assertIn("HOME", env)
                 return subprocess.CompletedProcess(cmd, 0, "", "")
             self.assertEqual(cmd[:3], ["git", "-C", "/tmp/repo"])
+            self.assertIn("HOME", env)
             return subprocess.CompletedProcess(cmd, 0, "1234abc\n", "")
 
         with mock.patch.object(module.subprocess, "run", side_effect=fake_run):
@@ -37,7 +37,7 @@ class GitHashFallbackTest(unittest.TestCase):
 
         self.assertEqual(git_hash, "1234abc")
         self.assertIsNone(error)
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 2)
 
 
 if __name__ == "__main__":
