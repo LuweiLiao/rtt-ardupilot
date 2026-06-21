@@ -115,7 +115,7 @@ board: CUAV V5 / STM32F767
 | RTT-GAP-088 | Build | OPEN | Waf 与 SCons 源列表同步仍是风险 | `scons_ardupilot_sources.py` | source-list diff gate |
 | RTT-GAP-089 | Build | FIXED | `HAL_STORAGE_SIZE` redefined warning 已清理，F7 不再从 SCons 命令行硬编码 16KB | `rtt_gap089_build_20260621T190556Z` | 保持 hwdef 为唯一板级真相源 |
 | RTT-GAP-090 | Build | OPEN | ROM 93%+ 接近上限 | build log | size budget dashboard |
-| RTT-GAP-091 | Build | OPEN | 构建产物 `.o` 会残留在源码树 | local find | clean target / outdir |
+| RTT-GAP-091 | Build | FIXED | 源码树残留 `.o`/`.sconsign.dblite` 已搬入专用回收站，并增加审计脚本防复发 | `rtt_gap091_*` | 保持 `rtt_source_artifact_audit.py` gate |
 | RTT-GAP-092 | Build | FIXED | 根目录重复 `SPIDevice.*.cmsis` 已删除 | 本次修改 | 保留 archive 一份 |
 | RTT-GAP-093 | Build | OPEN | packages 下载/版本锁定未完全可复现 | hwdef/common/packages | lockfile/hash |
 | RTT-GAP-094 | Build | OPEN | 多 target `pixhawk6c_mini` 未跟 CUAV 同步验收 | board matrix | multi-board build |
@@ -145,10 +145,16 @@ board: CUAV V5 / STM32F767
 | RTT-GAP-118 | Release | OPEN | 版本/board name/USB product 与 ChibiOS 兼容策略需最终定稿 | USB docs | Windows driver matrix |
 | RTT-GAP-119 | Release | OPEN | 无“可替代 ChibiOS”总验收证书模板 | docs | release checklist |
 | RTT-GAP-120 | Release | OPEN | 仍缺飞行前完整校准、RC、安全开关、无桨电机输出整体验收 | bench boundary | staged flight-readiness plan |
+| RTT-GAP-121 | Build | OPEN | RT-Thread `dirent.h` 与 `AP_Filesystem.h` 重复定义 `DT_DIR/DT_REG/DT_LNK` | `rtt_gap091_build_20260621T191220Z` | 统一 include/宏保护策略 |
+| RTT-GAP-122 | Build | OPEN | `GCS_Common.cpp` 出现未知 pragma `GCSS diagnostic` warning | `rtt_gap091_build_20260621T191220Z` | 查是否拼写或条件编译问题 |
+| RTT-GAP-123 | SDCard | OPEN | `sdcard.cpp` 存在未使用变量和未使用 static helper warning | `rtt_gap091_build_20260621T191220Z` | 清理死代码或接入缺失检测路径 |
+| RTT-GAP-124 | Build | OPEN | `AP_OSD_Backend::write()` overloaded virtual warning 在 RTT 构建中仍出现 | `rtt_gap091_build_20260621T191220Z` | 判断上游共性或 RTT include 差异 |
 
 ## 本轮已处理
 
 - `RTT-GAP-092`：删除 `libraries/AP_HAL_RTT/` 根目录重复 `SPIDevice.cpp.cmsis` / `SPIDevice.h.cmsis`。这两个文件与 `archive/spi-cmsis/` 内副本完全一致，且未被构建引用；保留 archive 一份作为旧实验资料。
 - `RTT-GAP-096`：更新 `docs/rtt-porting/CUAV_V5_RTT_ACCEPTANCE_CURRENT.md`，把状态从 2026-06-20 旧证据同步到 2026-06-21/22 hrtimer、参数、MAVFTP、外设、日志、SocketCAN/pydronecan、最终构建证据。
 - `RTT-GAP-089`：移除 F7 SCons defines 中的 `HAL_STORAGE_SIZE=16384`，让 CUAV V5 的 `libraries/AP_HAL_RTT/hwdef/cuav_v5/hwdef.dat` 通过生成的 `hwdef.h` 提供 `HAL_STORAGE_SIZE=32768`。验证：`python3 -m SCons --target=cuav-v5 -j16` 通过，`results/execution/rtt_gap089_build_20260621T190556Z/build.log` 无 `HAL_STORAGE_SIZE redefined`，当前生成配置不再注入 16KB。
+- `RTT-GAP-091`：新增 `Tools/scripts/rtt_source_artifact_audit.py`，先审计再把 276 个未跟踪源码树产物搬入 `archive/recycle/rtt_source_artifacts_20260621T191147Z/`。验证：搬迁后 audit 为 0；再次 `python3 -m SCons --target=cuav-v5 -j16` 通过；构建后源码树 artifact audit 仍为 0。
+- 新发现 `RTT-GAP-121` 到 `RTT-GAP-124`：本轮构建日志继续暴露 RT-Thread `dirent.h` 宏重定义、未知 pragma、SDCard 未使用代码、OSD overloaded virtual warning，均已登记，后续逐项修复。
 - 新增本台账，首批记录 120 项差距，后续每轮按 ID 修复、验证、关闭。
