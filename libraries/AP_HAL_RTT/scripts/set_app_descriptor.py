@@ -22,6 +22,7 @@ import os
 import sys
 import struct
 import binascii
+import subprocess
 
 
 def crc32(data, state=0):
@@ -35,6 +36,40 @@ def to_unsigned(i):
     if i < 0:
         i += 2**32
     return i
+
+
+def git_short_hash(source_root):
+    """Return the short git hash, retrying with a scoped safe.directory.
+
+    GitHub container jobs can run the build with a HOME/global git config that
+    differs from actions/checkout's temporary setup, which makes git reject the
+    workspace as dubious even after checkout configured it as safe.
+    """
+    source_root = os.path.abspath(source_root)
+    cmd = ['git', '-C', source_root, 'rev-parse', '--short', 'HEAD']
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True, text=True, timeout=5
+    )
+    if result.returncode == 0:
+        return result.stdout.strip(), None
+
+    if 'dubious ownership' not in result.stderr:
+        return None, result.stderr
+
+    env = os.environ.copy()
+    env['GIT_CONFIG_COUNT'] = '1'
+    env['GIT_CONFIG_KEY_0'] = 'safe.directory'
+    env['GIT_CONFIG_VALUE_0'] = source_root
+    retry = subprocess.run(
+        cmd,
+        capture_output=True, text=True, timeout=5, env=env
+    )
+    if retry.returncode == 0:
+        return retry.stdout.strip(), None
+
+    return None, retry.stderr
 
 
 def main():
@@ -91,17 +126,12 @@ def main():
     # Get git hash from the repo
     git_hash = 0
     try:
-        import subprocess
-        result = subprocess.run(
-            ['git', 'rev-parse', '--short', 'HEAD'],
-            capture_output=True, text=True, cwd=source_root, timeout=5
-        )
-        if result.returncode == 0:
-            git_hash_str = result.stdout.strip()
+        git_hash_str, git_error = git_short_hash(source_root)
+        if git_hash_str:
             git_hash = to_unsigned(int('0x' + git_hash_str, 16))
             print(f"  git_hash=0x{git_hash:08x} ({git_hash_str})")
         else:
-            print(f"  WARNING: git rev-parse failed: {result.stderr}")
+            print(f"  WARNING: git rev-parse failed: {git_error}")
     except Exception as e:
         print(f"  WARNING: git hash error: {e}")
 

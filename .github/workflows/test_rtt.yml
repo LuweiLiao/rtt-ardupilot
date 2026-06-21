@@ -7,6 +7,7 @@ on:
       - 'SConstruct'
       - 'Tools/scripts/rtt_*.py'
       - 'Tools/scripts/scons_ardupilot_sources.py'
+      - 'Tools/scripts/build_tests/test_rtt_*.py'
       - 'libraries/AP_HAL_RTT/**'
       - 'modules/rt-thread/**'
   pull_request:
@@ -15,6 +16,7 @@ on:
       - 'SConstruct'
       - 'Tools/scripts/rtt_*.py'
       - 'Tools/scripts/scons_ardupilot_sources.py'
+      - 'Tools/scripts/build_tests/test_rtt_*.py'
       - 'libraries/AP_HAL_RTT/**'
       - 'modules/rt-thread/**'
   workflow_dispatch:
@@ -54,6 +56,11 @@ jobs:
           apt-get install -y scons python3 gcc-arm-none-eabi binutils-arm-none-eabi gdb-multiarch
           arm-none-eabi-gcc --version
           gdb-multiarch --version | head -1
+
+      - name: Run RTT script tests
+        shell: bash
+        run: |
+          python3 -m unittest discover -s Tools/scripts/build_tests -p 'test_rtt_*.py'
 
       - name: Build ${{ matrix.name }}
         shell: bash
