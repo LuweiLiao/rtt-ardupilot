@@ -147,7 +147,7 @@ board: CUAV V5 / STM32F767
 | RTT-GAP-120 | Release | OPEN | 仍缺飞行前完整校准、RC、安全开关、无桨电机输出整体验收 | bench boundary | staged flight-readiness plan |
 | RTT-GAP-121 | Build | FIXED | RTT POSIX 路径改由 RT-Thread `dirent.h` 提供 `DT_DIR/DT_REG/DT_LNK`，不再由 `AP_Filesystem.h` 重复定义 | `rtt_gap121_build_20260621T191704Z` | 保持 POSIX `dirent` 为真相源 |
 | RTT-GAP-122 | Build | FIXED | `GCS_Common.cpp` 中误写为 `#pragma GCSS diagnostic pop` 的拼写错误已改回 `#pragma GCC diagnostic pop` | `rtt_gap122_build_20260621T193900Z` | 保持 failure-creation diagnostic push/pop 配对 |
-| RTT-GAP-123 | SDCard | OPEN | `sdcard.cpp` 存在未使用变量和未使用 static helper warning | `rtt_gap091_build_20260621T191220Z` | 清理死代码或接入缺失检测路径 |
+| RTT-GAP-123 | SDCard | FIXED | `sdcard.cpp` direct SDIO fallback 已清理未接入 helper，并修正 ACMD6/RCA/CMD13/card-mode/SDSC CMD16 初始化路径 | `rtt_gap123_build_20260621T195302Z` | 继续做 no-card/热插拔/长稳日志 gate |
 | RTT-GAP-124 | Build | OPEN | `AP_OSD_Backend::write()` overloaded virtual warning 在 RTT 构建中仍出现 | `rtt_gap091_build_20260621T191220Z` | 判断上游共性或 RTT include 差异 |
 | RTT-GAP-125 | Filesystem | FIXED | `posix_compat.h` 先 `#undef clearerr/ferror/feof` 再重定向到 APFS，且 `feof` 修正为 `apfs_feof` | `rtt_gap125_build_20260621T192155Z` | 保持 Lua stdio EOF/error 语义 |
 | RTT-GAP-126 | Fault | FIXED | `rtt_dbg_bkp.c` 解包故障线程名改为显式 buffer 长度，不再对形参使用 `sizeof(out)` | `rtt_gap126_build_20260621T192558Z` | 保持 BKP fault gate |
@@ -174,4 +174,5 @@ board: CUAV V5 / STM32F767
 - 新发现 `RTT-GAP-128` 到 `RTT-GAP-132`：`rtt_gap127_build_20260621T193347Z/build.log` 继续暴露 RT-Thread MMCSD 未初始化风险、STM32 BSP clock hook 隐式声明、GCC 下 clang pragma 噪声、HAL overloaded virtual warning、Lua 裁剪后 unused static warning，已登记为后续构建质量和脚本裁剪收敛项。
 - `RTT-GAP-122`：修正 `GCS_Common.cpp` failure-creation 分支里 `#pragma GCSS diagnostic pop` 拼写错误，恢复为 `#pragma GCC diagnostic pop`，与同块 `#pragma GCC diagnostic push` 正确配对。验证：`python3 -m SCons --target=cuav-v5 -j16` 通过后，`build.log` 中 `GCSS diagnostic` / `unknown-pragmas` 的 GCS 条目应为空。
 - `RTT-GAP-130`：将 `AP_Math.cpp` 中只给 clang 使用的 `#pragma clang diagnostic push/ignored/pop` 包在 `#if defined(__clang__)` 内，避免 arm-none-eabi-g++ 把 clang pragma 当作 unknown pragma。验证：`python3 -m SCons --target=cuav-v5 -j16` 通过后，`build.log` 中 `AP_Math.cpp` / `unknown-pragmas` 检索应为空。
+- `RTT-GAP-123`：收敛 `sdcard.cpp` direct SDIO fallback 初始化路径：删除未接入的 PIO/CMD6/CMD17/SCR helper，修正 ACMD6 常量为 SET_BUS_WIDTH，CMD3 只保留 RCA 高 16 位，CMD7 后接 CMD13 状态/ready 检查，card mode 不再无条件覆盖为 high-capacity，并让 SDSC CMD16 失败时退出重试。验证：`python3 -m SCons --target=cuav-v5 -j16` 通过，`results/execution/rtt_gap123_build_20260621T195302Z/build.log` 中 `sdcard.cpp:.*warning` 与旧 helper/变量 warning 检索为空，源码树 artifact audit 仍为 0。
 - 新增本台账，首批记录 120 项差距，后续每轮按 ID 修复、验证、关闭。

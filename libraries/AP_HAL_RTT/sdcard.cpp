@@ -60,7 +60,6 @@
  *   +0x80 FIFO    — data FIFO (32-bit access)
  */
 
-#include <string.h>
 #include <sys/stat.h>
 
 #include <board.h>             /* stm32f7xx.h (→ stm32f765xx.h), GPIO defs */
@@ -128,26 +127,8 @@ extern const AP_HAL::HAL& hal;
 #define SDIO_CMD_CEATACMD                 (0x1UL << SDIO_CMD_CEATACMD_Pos)
 
 /* SDIO_DCTRL register */
-#define SDIO_DCTRL_DTEN_Pos               0U
-#define SDIO_DCTRL_DTEN                   (0x1UL << SDIO_DCTRL_DTEN_Pos)
-#define SDIO_DCTRL_DTDIR_Pos              1U
-#define SDIO_DCTRL_DTDIR                  (0x1UL << SDIO_DCTRL_DTDIR_Pos)
-#define SDIO_DCTRL_DTMODE_Pos             2U
-#define SDIO_DCTRL_DTMODE                 (0x1UL << SDIO_DCTRL_DTMODE_Pos)
-#define SDIO_DCTRL_DMAEN_Pos              3U
-#define SDIO_DCTRL_DMAEN                  (0x1UL << SDIO_DCTRL_DMAEN_Pos)
-#define SDIO_DCTRL_DBLOCKSIZE_Pos         4U
-#define SDIO_DCTRL_DBLOCKSIZE_Msk         (0xFUL << SDIO_DCTRL_DBLOCKSIZE_Pos)
-#define SDIO_DCTRL_DBLOCKSIZE_0           (0x1UL << SDIO_DCTRL_DBLOCKSIZE_Pos)
-#define SDIO_DCTRL_DBLOCKSIZE_1           (0x2UL << SDIO_DCTRL_DBLOCKSIZE_Pos)
-#define SDIO_DCTRL_DBLOCKSIZE_2           (0x4UL << SDIO_DCTRL_DBLOCKSIZE_Pos)
-#define SDIO_DCTRL_DBLOCKSIZE_3           (0x8UL << SDIO_DCTRL_DBLOCKSIZE_Pos)
 #define SDIO_DCTRL_SDIOEN_Pos             11U
 #define SDIO_DCTRL_SDIOEN                 (0x1UL << SDIO_DCTRL_SDIOEN_Pos)
-#define SDIO_DCTRL_RWSTOP_Pos             12U
-#define SDIO_DCTRL_RWSTOP                 (0x1UL << SDIO_DCTRL_RWSTOP_Pos)
-#define SDIO_DCTRL_RWMOD_Pos              13U
-#define SDIO_DCTRL_RWMOD                  (0x1UL << SDIO_DCTRL_RWMOD_Pos)
 
 /* SDIO_STA status flags */
 #define SDIO_STA_CCRCFAIL_Pos             0U
@@ -217,9 +198,6 @@ extern const AP_HAL::HAL& hal;
 
 /* DBLOCKSIZE encoding: 2^(N) bytes per block.  512 bytes = 9 (0b1001).
  * Bits: DBLOCKSIZE_3 | DBLOCKSIZE_0 */
-#define SDIO_DBLOCKSIZE_512                                             \
-  (SDIO_DCTRL_DBLOCKSIZE_3 | SDIO_DCTRL_DBLOCKSIZE_0)
-
 /* ---------------------------------------------------------------------------
  * SD card protocol constants (MMCSD)
  * -------------------------------------------------------------------------*/
@@ -229,7 +207,6 @@ extern const AP_HAL::HAL& hal;
 #define MMCSD_CMD_ALL_SEND_CID            2U
 #define MMCSD_CMD_SET_RELATIVE_ADDR       3U
 #define MMCSD_CMD_SET_DSR                 4U
-#define MMCSD_CMD_SWITCH_FUNC             6U
 #define MMCSD_CMD_SELECT_CARD             7U
 #define MMCSD_CMD_SEND_IF_COND            8U
 #define MMCSD_CMD_SEND_CSD                9U
@@ -239,26 +216,11 @@ extern const AP_HAL::HAL& hal;
 #define MMCSD_CMD_SEND_STATUS             13U
 #define MMCSD_CMD_GO_INACTIVE_STATE       15U
 #define MMCSD_CMD_SET_BLOCKLEN            16U
-#define MMCSD_CMD_READ_SINGLE_BLOCK       17U
-#define MMCSD_CMD_READ_MULTIPLE_BLOCK     18U
-#define MMCSD_CMD_SEND_NUM_WR_BLOCKS      22U
-#define MMCSD_CMD_SET_WR_BLK_ERASE_COUNT  23U
-#define MMCSD_CMD_WRITE_BLOCK             24U
-#define MMCSD_CMD_WRITE_MULTIPLE_BLOCK    25U
-#define MMCSD_CMD_PROGRAM_CSD             27U
-#define MMCSD_CMD_ERASE_WR_BLK_START      32U
-#define MMCSD_CMD_ERASE_WR_BLK_END        33U
-#define MMCSD_CMD_ERASE                   38U
-#define MMCSD_CMD_LOCK_UNLOCK             42U
 #define MMCSD_CMD_APP_CMD                 55U
-#define MMCSD_CMD_GEN_CMD                 56U
-#define MMCSD_CMD_READ_OCR                58U
-#define MMCSD_CMD_SPI_CRC_ON_OFF          59U
 
 /* Application-specific commands (CMD55 + ACMD) */
 #define MMCSD_ACMD_SD_SEND_OP_COND        41U
-#define MMCSD_ACMD_SET_CLR_CARD_DETECT    42U
-#define MMCSD_ACMD_SEND_SCR               51U
+#define MMCSD_ACMD_SET_BUS_WIDTH          6U
 
 /* R1 response error bits */
 #define MMCSD_R1_OUT_OF_RANGE             (1U << 31)
@@ -294,20 +256,9 @@ extern const AP_HAL::HAL& hal;
 
 /* ACMD41 HCS (High Capacity Support) */
 #define SD_ACMD41_HCS                     (1UL << 30)
-#define SD_ACMD41_S18R                    (1UL << 24)  /* 1.8V request */
-
 /* OCR bits */
 #define SD_OCR_CCS                        (1UL << 30)  /* Card Capacity Status */
 #define SD_OCR_BUSY                       (1UL << 31)  /* Power-up busy */
-
-/* SCR bits */
-#define SD_SCR_BUS_WIDTH_4BIT             (1U << 2)
-
-/* Card state */
-#define SDC_STATE_IDENT                   0U
-#define SDC_STATE_READY                   3U
-#define SDC_STATE_STANDBY                 4U
-#define SDC_STATE_TRANSFER                6U
 
 /* Block size */
 #define MMCSD_BLOCK_SIZE                  512U
@@ -347,6 +298,9 @@ extern const AP_HAL::HAL& hal;
  * -------------------------------------------------------------------------*/
 
 static bool _sdcard_running;
+static volatile bool _card_is_sd;
+static volatile uint32_t _card_capacity_kb;
+static volatile uint32_t _card_last_status;
 
 /* SD card mode flags (bitfield, mirrors ChibiOS sdcp->cardmode) */
 static uint32_t _card_mode;
@@ -562,49 +516,6 @@ static bool _sdio_send_cmd_none(uint8_t cmd, uint32_t arg)
 }
 
 /*
- * Send a command expecting a short response (48-bit, no CRC check).
- *
- * ChibiOS Reference: hal_sdc_lld.c:612-629  sdc_lld_send_cmd_short()
- *   ARG = arg; CMD = cmd | WAITRESP_0 | CPSMEN;
- *   wait CMDREND | CTIMEOUT | CCRCFAIL;
- *   ICR = sta & (CMDREND | CTIMEOUT | CCRCFAIL);
- *   if CTIMEOUT: error; *resp = RESP1;
- */
-static bool _sdio_send_cmd_short(uint8_t cmd, uint32_t arg, uint32_t *resp)
-{
-    uint32_t timeout;
-    uint32_t sta;
-
-    if (_sdio_wait_transfer_idle()) {
-        return true;
-    }
-
-    SDIO->ARG = arg;
-    __DSB();
-    SDIO->CMD = (uint32_t)cmd | SDIO_CMD_WAITRESP_0 | SDIO_CMD_CPSMEN;
-    __DSB();
-
-    timeout = 1000000;
-    while (((sta = SDIO->STA) & (SDIO_STA_CMDREND | SDIO_STA_CTIMEOUT | SDIO_STA_CCRCFAIL)) == 0) {
-        if (--timeout == 0) {
-            SDIO->ICR = SDIO_ICR_ALL_FLAGS;
-            return true;
-        }
-        __DSB();
-    }
-
-    SDIO->ICR = sta & (SDIO_STA_CMDREND | SDIO_STA_CTIMEOUT | SDIO_STA_CCRCFAIL);
-
-    if ((sta & SDIO_STA_CTIMEOUT) != 0) {
-        return true;  /* timeout */
-    }
-
-    /* Return RESP1 even on CCRCFAIL — caller may still need the value */
-    *resp = SDIO->RESP1;
-    return false;
-}
-
-/*
  * Send a command expecting short response with CRC.
  *
  * ChibiOS Reference: hal_sdc_lld.c:645-661  sdc_lld_send_cmd_short_crc()
@@ -811,88 +722,6 @@ static void _sdio_stop_clk(void)
     __DSB();
 }
 
-/*
- * Read a data block(s) from the card via SDIO polling (PIO mode).
- * Used during card init before DMA is configured for block data.
- *
- * ChibiOS Reference: hal_sdc_lld.c:153-185  sdc_lld_prepare_read_bytes()
- *   Set DTIMER, ICR, MASK, DLEN; DCTRL = DTDIR|DTMODE|DMAEN|DTEN
- *   Then read FIFO word-by-word.
- */
-static bool _sdio_read_data_pio(uint8_t *buf, uint32_t bytes)
-{
-    /* Set timeout */
-    SDIO->DTIMER = 1000000;  /* 1s timeout in SDIO clock ticks */
-    SDIO->ICR = SDIO_ICR_ALL_FLAGS;
-    SDIO->MASK = 0;  /* no interrupts — polling */
-    SDIO->DLEN = bytes;
-    __DSB();
-
-    /* Setup DCTRL for read: DTDIR=1 (card→host), DTMODE=1 (block), DTEN=1
-     * No DMA (DMAEN=0) — we poll the FIFO directly. */
-    SDIO->DCTRL = SDIO_DCTRL_DTDIR | SDIO_DCTRL_DTMODE | SDIO_DCTRL_DTEN;
-    __DSB();
-
-    /* Wait for RXFIFOHF (half-full) or RXDAVL (data available) or error */
-    uint32_t remaining = bytes / sizeof(uint32_t);
-    uint8_t *dest = buf;
-    uint32_t timeout = 10000000;
-
-    while (remaining > 0) {
-        uint32_t sta = SDIO->STA;
-
-        if (sta & (SDIO_STA_DCRCFAIL | SDIO_STA_DTIMEOUT | SDIO_STA_RXOVERR | SDIO_STA_STBITERR)) {
-            SDIO->ICR = SDIO_ICR_ALL_FLAGS;
-            SDIO->DCTRL = 0;
-            return true;  /* error */
-        }
-
-        if (sta & SDIO_STA_RXDAVL) {
-            /* Read 1 word from FIFO */
-            const uint32_t word = SDIO->FIFO;
-            memcpy(dest, &word, sizeof(word));
-            dest += sizeof(word);
-            remaining--;
-        } else if (sta & SDIO_STA_RXFIFOHF) {
-            /* Read 8 words (burst) */
-            uint32_t n = (remaining > 8) ? 8 : remaining;
-            for (uint32_t i = 0; i < n; i++) {
-                const uint32_t word = SDIO->FIFO;
-                memcpy(dest, &word, sizeof(word));
-                dest += sizeof(word);
-            }
-            remaining -= n;
-        }
-
-        if (--timeout == 0) {
-            SDIO->ICR = SDIO_ICR_ALL_FLAGS;
-            SDIO->DCTRL = 0;
-            return true;  /* timeout */
-        }
-        __DSB();
-    }
-
-    /* Wait for DATAEND */
-    timeout = 10000000;
-    while ((SDIO->STA & SDIO_STA_DATAEND) == 0) {
-        if (--timeout == 0) {
-            SDIO->ICR = SDIO_ICR_ALL_FLAGS;
-            SDIO->DCTRL = 0;
-            return true;
-        }
-        if (SDIO->STA & (SDIO_STA_DCRCFAIL | SDIO_STA_DTIMEOUT | SDIO_STA_RXOVERR)) {
-            SDIO->ICR = SDIO_ICR_ALL_FLAGS;
-            SDIO->DCTRL = 0;
-            return true;
-        }
-        __DSB();
-    }
-
-    SDIO->ICR = SDIO_ICR_ALL_FLAGS;
-    SDIO->DCTRL = 0;
-    return false;
-}
-
 /* ---------------------------------------------------------------------------
  * SD card initialization sequence
  *
@@ -1002,64 +831,15 @@ static bool _sd_cmd_set_blocklen(uint32_t blocklen)
 }
 
 /*
- * SWITCH_FUNC (CMD6): Switch the card to 4-bit bus width.
- * Mode 0 (check) then mode 1 (switch).
- */
-static bool _sd_cmd_switch_func(uint32_t arg, uint32_t *resp)
-{
-    /* CMD6 with data transfer — needs block read via CMD17/18 for response.
-     * For bus-width switching we use ACMD6 instead on SD cards. */
-    uint32_t dummy;
-    return _sdio_send_cmd_short_crc(MMCSD_CMD_SWITCH_FUNC, arg, &dummy);
-}
-
-/*
  * ACMD6: Set the bus width.  arg=2 for 4-bit, arg=0 for 1-bit.
  */
 static bool _sd_acmd_set_bus_width(uint32_t width)
 {
     uint32_t resp;
-    return _sdio_send_acmd(MMCSD_ACMD_SET_CLR_CARD_DETECT, width, &resp);
-}
-
-/*
- * ACMD51 (SEND_SCR): Read the SD Configuration Register (8 bytes).
- * This is read via a single block CMD17-like operation but at byte level.
- * We use the simpler approach: after ACMD51, read via DCTRL setup.
- *
- * For simplicity, we skip the full SCR read and assume 4-bit is supported
- * if the card is SDHC and responds correctly to ACMD6.
- */
-static bool _sd_acmd_send_scr(void)
-{
-    /* SCR is 8 bytes, read via command with data phase.
-     * We skip the detailed SCR parsing — driver assumes 4-bit support. */
-    return false;  /* not implemented in this minimal driver */
-}
-
-/*
- * Read a single block (CMD17). Used for checking the card operational state.
- */
-static bool _sd_cmd_read_single_block(uint32_t block_addr, uint8_t *buf)
-{
-    uint32_t resp;
-
-    /* Convert to byte address for SDSC */
-    if (!(_card_mode & SDC_MODE_HIGH_CAPACITY)) {
-        block_addr *= MMCSD_BLOCK_SIZE;
-    }
-
-    /* Send CMD17 */
-    if (_sdio_send_cmd_short_crc(MMCSD_CMD_READ_SINGLE_BLOCK, block_addr, &resp)) {
+    if (_sdio_send_acmd(MMCSD_ACMD_SET_BUS_WIDTH, width, &resp)) {
         return true;
     }
-
-    if (MMCSD_R1_ERROR(resp)) {
-        return true;
-    }
-
-    /* Read the data block via PIO */
-    return _sdio_read_data_pio(buf, MMCSD_BLOCK_SIZE);
+    return MMCSD_R1_ERROR(resp) != 0U;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1202,6 +982,7 @@ bool sdcard_init(void)
         } else {
             is_hcs = false;
         }
+        is_sd = true;
 
         /* Step 4: CMD2 — ALL_SEND_CID */
         uint32_t cid[4];
@@ -1214,36 +995,53 @@ bool sdcard_init(void)
         if (_sd_cmd_set_relative_addr(&rca)) {
             continue;
         }
-        _card_rca = rca;
+        _card_rca = rca & 0xFFFF0000UL;
 
         /* Step 6: CMD9 — SEND_CSD to get card capacity */
         uint32_t csd[4];
         if (_sd_cmd_send_csd(csd)) {
             continue;
         }
-        uint32_t capacity_kb = _sd_parse_csd(csd);
+        _card_capacity_kb = _sd_parse_csd(csd);
 
         /* Step 7: CMD7 — SELECT_CARD */
         uint32_t status;
         if (_sd_cmd_select_card(_card_rca, &status)) {
             continue;
         }
+        _card_last_status = status;
+        if (MMCSD_R1_ERROR(status) != 0U) {
+            continue;
+        }
+        if (_sd_cmd_send_status(&status)) {
+            continue;
+        }
+        _card_last_status = status;
+        if ((MMCSD_R1_ERROR(status) != 0U) || (MMCSD_R1_READY(status) == 0U)) {
+            continue;
+        }
 
         /* Step 8: switch to 4-bit bus width (ACMD6) */
-        _sd_acmd_set_bus_width(2);   /* arg=2 for 4-bit */
-        _sdio_set_bus_width(true);
-        _card_mode |= SDC_MODE_4BIT;
+        _card_mode = is_hcs ? SDC_MODE_HIGH_CAPACITY : 0U;
+        if (!_sd_acmd_set_bus_width(2)) {   /* arg=2 for 4-bit */
+            _sdio_set_bus_width(true);
+            _card_mode |= SDC_MODE_4BIT;
+        } else {
+            _sdio_set_bus_width(false);
+            _card_mode |= SDC_MODE_1BIT;
+        }
 
         /* Step 9: set block length (CMD16) for SDSC */
         if (!is_hcs) {
-            _sd_cmd_set_blocklen(MMCSD_BLOCK_SIZE);
+            if (_sd_cmd_set_blocklen(MMCSD_BLOCK_SIZE)) {
+                continue;
+            }
         }
 
         /* Step 10: switch to high-speed (25MHz) data clock */
         _sdio_set_clk_25mhz();
 
-        /* Record card mode */
-        _card_mode = SDC_MODE_HIGH_CAPACITY;
+        _card_is_sd = is_sd;
 
         /* Card initialized successfully */
         _sdcard_running = true;
@@ -1263,6 +1061,9 @@ bool sdcard_init(void)
     _sdio_stop_clk();
     _sd_power_off();
     _sdcard_running = false;
+    _card_is_sd = false;
+    _card_capacity_kb = 0U;
+    _card_last_status = 0U;
     return false;
 }
 
