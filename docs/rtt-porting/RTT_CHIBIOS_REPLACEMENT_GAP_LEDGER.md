@@ -111,7 +111,7 @@ board: CUAV V5 / STM32F767
 | RTT-GAP-084 | Fault | OPEN | IWDG reset 原因上报需常规 gate | BKP/IWDG docs | watchdog injection |
 | RTT-GAP-085 | Boot | PARTIAL | Bootloader/app offset 当前正确，但多板偏移需矩阵 | build logs | board matrix gate |
 | RTT-GAP-086 | Boot | OPEN | SITL-on-hardware RTT 覆盖不足 | user request/scripts | 跑 `rtt_sitl_on_hw_gate.py` |
-| RTT-GAP-087 | Build | PARTIAL | SCons 构建通过，但 CI test scripts 曾失败 | GitHub workflow | 专用 workflow 策略 |
+| RTT-GAP-087 | Build | PARTIAL | SCons 构建通过；RTT 专用路径已从通用 `test scripts` workflow 分流到 `test_rtt.yml`，并避免手动在 `issue/rtt-*` 分支触发非 RTT Python/style matrix | `rtt_gap087_ci_scope_20260621T210411Z` | 等 GitHub Actions 远端 run 确认 `test_rtt` GREEN |
 | RTT-GAP-088 | Build | OPEN | Waf 与 SCons 源列表同步仍是风险 | `scons_ardupilot_sources.py` | source-list diff gate |
 | RTT-GAP-089 | Build | FIXED | `HAL_STORAGE_SIZE` redefined warning 已清理，F7 不再从 SCons 命令行硬编码 16KB | `rtt_gap089_build_20260621T190556Z` | 保持 hwdef 为唯一板级真相源 |
 | RTT-GAP-090 | Build | OPEN | ROM 93%+ 接近上限 | build log | size budget dashboard |

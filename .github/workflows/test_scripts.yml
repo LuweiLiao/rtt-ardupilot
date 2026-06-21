@@ -6,6 +6,7 @@ on:
       - '.github/workflows/test_rtt.yml'
       - 'Tools/scripts/rtt_*.py'
       - 'Tools/scripts/scons_ardupilot_sources.py'
+      - 'docs/rtt-porting/**'
       - 'libraries/AP_HAL_RTT/**'
       - 'modules/rt-thread/**'
   pull_request:
@@ -13,6 +14,7 @@ on:
       - '.github/workflows/test_rtt.yml'
       - 'Tools/scripts/rtt_*.py'
       - 'Tools/scripts/scons_ardupilot_sources.py'
+      - 'docs/rtt-porting/**'
       - 'libraries/AP_HAL_RTT/**'
       - 'modules/rt-thread/**'
   workflow_dispatch:
@@ -23,6 +25,9 @@ concurrency:
 
 jobs:
   build:
+    # RTT carries its own SCons-based workflow; keep the generic script/style
+    # matrix from gating the dedicated RTT port branches.
+    if: ${{ !startsWith(github.ref_name, 'issue/rtt-') && !startsWith(github.head_ref, 'issue/rtt-') }}
     runs-on: ubuntu-22.04
     container: ardupilot/ardupilot-dev-base:v0.1.3
     strategy:
