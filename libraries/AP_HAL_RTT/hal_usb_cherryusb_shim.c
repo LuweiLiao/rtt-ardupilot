@@ -327,13 +327,6 @@ volatile uint32_t rtt_dbg_cherry_host_open_hint_clear_count RTT_DBG_DTCM_BSS  = 
 volatile uint32_t rtt_dbg_cherry_host_open_hint_clear_reason RTT_DBG_DTCM_BSS = 0;
 volatile uint32_t rtt_dbg_cherry_recovery_paused_dtr RTT_DBG_DTCM_BSS         = 0;
 volatile uint32_t rtt_dbg_cherry_dtr_open_kicks RTT_DBG_DTCM_BSS              = 0;
-volatile uint32_t rtt_dbg_cherry_dtr_closed_complete RTT_DBG_DTCM_BSS         = 0;
-volatile uint32_t rtt_dbg_cherry_dtr_closed_complete_slots RTT_DBG_DTCM_BSS   = 0;
-volatile uint32_t rtt_dbg_cherry_dtr_closed_orphan_epena RTT_DBG_DTCM_BSS     = 0;
-volatile uint32_t rtt_dbg_cherry_dtr_closed_last_diepctl RTT_DBG_DTCM_BSS     = 0;
-volatile uint32_t rtt_dbg_cherry_dtr_closed_last_diepint RTT_DBG_DTCM_BSS     = 0;
-volatile uint32_t rtt_dbg_cherry_dtr_closed_last_dieptsiz RTT_DBG_DTCM_BSS    = 0;
-volatile uint32_t rtt_dbg_cherry_dtr_closed_last_dtxfsts RTT_DBG_DTCM_BSS     = 0;
 volatile uint32_t rtt_dbg_cherry_tx_ring_high_water RTT_DBG_DTCM_BSS          = 0;
 volatile uint32_t rtt_dbg_cherry_ring_full_last_diepctl RTT_DBG_DTCM_BSS      = 0;
 volatile uint32_t rtt_dbg_cherry_ring_full_last_diepint RTT_DBG_DTCM_BSS      = 0;
@@ -566,7 +559,6 @@ static inline void cherry_tx_track_busy_max(uint32_t now_ms)
 }
 
 static void cherry_tx_epdis_recovery(uint32_t reason, uint32_t elapsed_ms);
-static void cherry_tx_stop_locked(void);
 
 static usb_rx_callback_t cherry_rx_cb;
 static void *cherry_rx_arg;
@@ -954,48 +946,6 @@ static bool cherry2_tx_start_write(const uint8_t *data, uint32_t len)
         return false;
     }
     return true;
-}
-
-static void cherry_tx_stop_locked(void)
-{
-    if (cherry_tx_inflight_slots > 0U || cherry_tx_ring_count > 0U) {
-        rtt_dbg_cherry_dtr_closed_complete++;
-        rtt_dbg_cherry_dtr_closed_complete_slots +=
-            (uint32_t)cherry_tx_inflight_slots + (uint32_t)cherry_tx_ring_count;
-    }
-
-    if ((CHERRY_DIEPCTL(CHERRY_CDC_IN_EP_IDX) & CHERRY_DIEPCTL_EPENA) != 0U) {
-        rtt_dbg_cherry_dtr_closed_orphan_epena++;
-        rtt_dbg_cherry_dtr_closed_last_diepctl = CHERRY_DIEPCTL(CHERRY_CDC_IN_EP_IDX);
-        rtt_dbg_cherry_dtr_closed_last_diepint = CHERRY_DIEPINT(CHERRY_CDC_IN_EP_IDX);
-        rtt_dbg_cherry_dtr_closed_last_dieptsiz = CHERRY_DIEPTSIZ(CHERRY_CDC_IN_EP_IDX);
-        rtt_dbg_cherry_dtr_closed_last_dtxfsts = CHERRY_DTXFSTS(CHERRY_CDC_IN_EP_IDX);
-
-        CHERRY_DIEPEMPMSK &= ~(1UL << CHERRY_CDC_IN_EP_IDX);
-        CHERRY_DIEPCTL(CHERRY_CDC_IN_EP_IDX) |= (CHERRY_DIEPCTL_SNAK | CHERRY_DIEPCTL_EPDIS);
-
-        uint32_t timeout = 50000U;
-        while ((CHERRY_DIEPINT(CHERRY_CDC_IN_EP_IDX) & CHERRY_DIEPINT_EPDISD) == 0U) {
-            if (--timeout == 0U) {
-                break;
-            }
-        }
-
-        CHERRY_DIEPINT(CHERRY_CDC_IN_EP_IDX) = (CHERRY_DIEPINT_EPDISD | CHERRY_DIEPINT_XFRC);
-        CHERRY_GRSTCTL = CHERRY_GRSTCTL_TXFFLSH | CHERRY_GRSTCTL_TXFNUM(CHERRY_CDC_IN_EP_IDX);
-        timeout = 50000U;
-        while ((CHERRY_GRSTCTL & CHERRY_GRSTCTL_TXFFLSH) != 0U) {
-            if (--timeout == 0U) {
-                break;
-            }
-        }
-    }
-
-    cherry_tx_ring_reset();
-    cherry_tx_busy = 0U;
-    cherry_dbg_sync_tx_busy();
-    cherry_tx_busy_since_ms = 0U;
-    cherry_epena_stuck_since_ms = 0U;
 }
 
 static void cherry_suspend_locked(uint32_t event_code)
