@@ -208,6 +208,20 @@ def _copy_bin_to_build(ap_root, target, bsp_deploy_abspath):
         print('Copy rtthread.bin to build: %s' % e, file=sys.stderr)
 
 
+def _require_rtt_artifacts(bsp_deploy_abspath):
+    """Fail the top-level build if the BSP SCons run did not emit core images."""
+    missing = []
+    for name in ('rtthread.bin', 'rt-thread.elf'):
+        path = os.path.join(bsp_deploy_abspath, name)
+        if not os.path.isfile(path) or os.path.getsize(path) == 0:
+            missing.append(path)
+    if missing:
+        print('error: RTT build did not produce required artifact(s):', file=sys.stderr)
+        for path in missing:
+            print('  %s' % path, file=sys.stderr)
+        Exit(1)
+
+
 def _verify_bin_integrity(ap_root, bsp_deploy_abspath):
     """Verify the built rtthread.bin has a valid Reset_Handler literal pool.
     Catches ELF vs .bin mismatch caused by objcopy/Load segment alignment issues.
@@ -297,6 +311,8 @@ if canonical_target:
     ret = _run_rtt_build(ap_root, canonical_target, bsp_deploy_abspath, scons_args, test_name=test_name)
     if ret != 0:
         Exit(ret)
+    if not is_clean:
+        _require_rtt_artifacts(bsp_deploy_abspath)
     # 3.5) Post-build: verify rtthread.bin integrity (Reset_Handler literal pool)
     if not is_clean and not test_name:
         _verify_bin_integrity(ap_root, bsp_deploy_abspath)
