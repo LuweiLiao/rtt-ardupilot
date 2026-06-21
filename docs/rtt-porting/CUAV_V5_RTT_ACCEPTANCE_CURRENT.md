@@ -1,50 +1,66 @@
 # CUAV V5 RTT 当前验收状态
 
-本文档记录当前 CUAV V5 RT-Thread ArduPilot 分支的最新软件台架验收结果。详细背景、实现说明和复测命令见仓库根目录 `README.md`。
+本文档记录当前 CUAV V5 RT-Thread ArduPilot 分支的软件台架验收状态。详细背景、实现说明和复测命令见仓库根目录 `README.md`。
 
-当前证据根目录：
+当前分支：
 
 ```text
-results/execution/loop_rate_goal_20260620T095201Z/
+issue/rtt-spi-lld-real-activation
 ```
 
-机器可读摘要：
+当前提交基线：
 
 ```text
-results/execution/loop_rate_goal_20260620T095201Z/final_acceptance_summary.json
+47e1145df7 AP_HAL_RTT: stabilize CUAV V5 loop rate
+```
+
+最终 GREEN 证据保留在：
+
+```text
+results/execution/
+```
+
+失败实验、被替代实验和旧过程材料已归档到：
+
+```text
+archive/recycle/20260622_main_loop_perf_rejected_runs/
 ```
 
 ## 总结论
 
 ```text
-driver-level software bench acceptance: GREEN
+CUAV V5 RT-Thread ArduPilot driver-level software bench acceptance: GREEN
 ```
 
 通过项：
 
 - 主循环性能：GREEN。
-- USB 双 CDC 描述符：GREEN。
-- USB MAVLink 参数下载：GREEN。
+- `SCHED_LOOP_RATE=400`：GREEN。
+- `PreArm: Main loop slow`：未再出现。
+- `IMU0: fast sampling enabled 0.0kHz/0.0kHz`：未再出现。
+- USB MAVLink CDC：GREEN。
+- USB 参数下载：GREEN。
 - MAVLink FTP：GREEN。
 - IMU/INS、磁力计、气压计、logging driver-level：GREEN。
 - SDCard / DataFlash 日志下载：GREEN。
 - USB SLCAN / SocketCAN：GREEN。
 - 标准 CAN 发送：GREEN。
-- DroneCAN-like 扩展帧捕获：GREEN。
+- DroneCAN / pydronecan NodeStatus：GREEN。
+- CAN 测试后 MAVLink 回归：GREEN。
 - 最终 SCons 编译：GREEN。
 
 边界：
 
-- `calibration_verdict=RED` 是台架未完成 AHRS/pre-arm 校准导致。
-- `PreArm: RC not found`、`PreArm: Hardware safety switch`、`PreArm: 3D Accel calibration needed`、`PreArm: Compass not calibrated` 属于实机飞行准备条件，不作为 RTT driver-level 失败。
-- 官方 `dronecan` Python 库本轮未解出 NodeStatus；当前 DroneCAN-like 验收使用 SocketCAN/candump 扩展帧 fallback，source node id 为 10。
+- 台架未接 RC，未做 3D accel / compass calibration，未解除硬件安全开关，因此 Mission Planner 仍可能显示对应 PreArm 项。
+- 这些 PreArm 项属于实机飞行准备条件，不是 RTT driver-level 失败。
+- 外接 `1a86:55d3 USB Single Serial` 设备当前不响应 Lawicel/SLCAN ASCII 命令；飞控自身 USB SLCAN 已通过 `slcand + cansend + candump + pydronecan` 验证。
 
 ## 主循环性能
 
-证据：
+诊断构建证据：
 
 ```text
-results/execution/loop_rate_goal_20260620T095201Z/loop_rate_gate_long_20260620T180025Z/loop_rate_gate.json
+results/execution/rtt_hrtimer_diag_gate_20260621T181359Z/loop_rate_gate.json
 ```
 
 结果：
@@ -52,89 +68,153 @@ results/execution/loop_rate_goal_20260620T095201Z/loop_rate_gate_long_20260620T1
 ```text
 verdict=GREEN
 reason=loop_rate_ok
-target_loop_rate_hz=400
+avg_loop_hz=403.66
 ins_loop_rate=400
-min_loop_rate_hz=380
-debug_loop_hz=794.9
-monitor_stuck_count=0
 main_loop_slow_text=[]
 imu_banner_text=[]
+rtt_dbg_boost_hrtimer_count=5434
+rtt_dbg_clock_time_irq_count=5434
 ```
 
-解释：
-
-- `SCHED_LOOP_RATE` 未降低，仍为 400。
-- 未关闭 arming/system check。
-- 未屏蔽 `PreArm: Main loop slow`。
-- 300 秒 gate 内未出现 `Main loop slow`，也未出现 `IMU0: fast sampling enabled 0.0kHz/0.0kHz`。
-- `Rate CPU normal, rate set to 250Hz` 来自 Copter fast-rate/rate-controller thread，不是主调度 `SCHED_LOOP_RATE`。
-
-## USB / 参数 / MAVFTP
-
-USB 描述符证据：
+Release 构建证据：
 
 ```text
-results/execution/loop_rate_goal_20260620T095201Z/usb_descriptor_20260620T180219Z/usb_descriptor_gate.json
-```
-
-参数下载证据：
-
-```text
-results/execution/loop_rate_goal_20260620T095201Z/acceptance_suite_20260620T180635Z/param_download/param_download.json
+results/execution/rtt_hrtimer_release_gate_20260621T181809Z/loop_rate_gate.json
 ```
 
 结果：
 
 ```text
+verdict=GREEN
+reason=loop_rate_ok
+avg_loop_hz=406.45
+ins_loop_rate=400
+main_loop_slow_text=[]
+imu_banner_text=[]
+rtt_dbg_boost_hrtimer_count=5209
+rtt_dbg_clock_time_irq_count=5208
+```
+
+CAN 测试后回归证据：
+
+```text
+results/execution/rtt_post_can_loop_rate_20260621T183328Z/loop_rate_gate.json
+```
+
+结果：
+
+```text
+verdict=GREEN
+reason=loop_rate_ok
+SCHED_LOOP_RATE=400
+ins_loop_rate=400
+main_loop_slow_text=[]
+imu_banner_text=[]
+rtt_dbg_boost_hrtimer_count=224545
+rtt_dbg_clock_time_irq_count=224521
+```
+
+说明：
+
+- `SCHED_LOOP_RATE` 未降低，仍为 400。
+- 未关闭 arming/system check。
+- 未屏蔽 `PreArm: Main loop slow`。
+- 主循环修复通过 STM32F7 DWT + TIM5 high-resolution clock-time 后端实现，RTT `delay_microseconds_boost()` 走 `rt_clock_hrtimer_udelay()`，接近 ChibiOS 的高精度 timer sleep 行为。
+
+## USB / 参数 / MAVFTP
+
+参数下载证据：
+
+```text
+results/execution/rtt_release_param_download_20260621T181930Z/param_download.json
+```
+
+结果：
+
+```text
+verdict=GREEN
+reason=complete_fast
 reported_count=947
 unique_indices=947
 missing_count=0
-elapsed_s=1.406
-rate_params_s=673.3
+elapsed_s=1.25
+first_response_latency_s=0.006
+rate_params_s=757.7
+max_gap_s_observed=0.01
 ```
 
 MAVFTP 证据：
 
 ```text
-results/execution/loop_rate_goal_20260620T095201Z/mavftp_retry_guard_20260620T181233Z/mavftp_gate.json
+results/execution/rtt_release_mavftp_20260621T181943Z/mavftp_gate.json
 ```
 
 结果：
 
 ```text
 verdict=GREEN
-list "/"=Success
-list "/APM"=Success
-@PARAM/param.pck decoded_count=947
-SD write/read/remove=Success
-post_ftp_stability=true
+reason=mavftp_ok
+list "/" 成功
+list "/APM" 成功
+@PARAM/param.pck 读取成功
+decoded_count=947
+/APM/test_ftp.tmp 写入、读回、删除成功
+FTP 后 heartbeat 稳定
 ```
 
 ## 外设和日志
 
-外设健康证据：
+外设数据流证据：
 
 ```text
-results/execution/loop_rate_goal_20260620T095201Z/peripheral_health_20260620T181420Z/peripheral_health.json
+results/execution/rtt_release_mavlink_peripherals3_20260621T182253Z/peripherals.json
 ```
 
 结果：
 
 ```text
 verdict=GREEN
-driver_verdict=GREEN
-gyro healthy=true
-accel healthy=true
-mag healthy=true
-baro healthy=true
-logging healthy=true
-RAW_IMU/ATTITUDE/EKF_STATUS_REPORT/SCALED_PRESSURE present
+reason=peripheral_streams_ok
+RAW_IMU=180
+SCALED_IMU=180
+ATTITUDE=179
+SCALED_PRESSURE=90
+EKF_STATUS_REPORT=36
+SYS_STATUS=179
+raw_imu_present=true
+accel_nonzero=true
+gyro_backend_present=true
+gyro_samples_available=true
+mag_nonzero=true
+baro_present=true
+ins_loop_rate_400=true
+no_main_loop_slow_text=true
+no_imu_zero_banner=true
+```
+
+稳定状态文本证据：
+
+```text
+results/execution/rtt_release_status_text_stable_20260621T182424Z/status_text.json
+```
+
+结果：
+
+```text
+verdict=GREEN
+reason=stable_status_text_ok
+heartbeat_seen=true
+status_standby=true
+no_main_loop_slow=true
+no_imu_zero_banner=true
+no_iomcu_unhealthy=true
+statustext=[]
 ```
 
 日志下载证据：
 
 ```text
-results/execution/loop_rate_goal_20260620T095201Z/log_download_20260620T181524Z/log_download_gate.json
+results/execution/rtt_release_log_download_20260621T182521Z/log_download_gate.json
 ```
 
 结果：
@@ -142,16 +222,17 @@ results/execution/loop_rate_goal_20260620T095201Z/log_download_20260620T181524Z/
 ```text
 verdict=GREEN
 reason=log_list_download_restore_ok
-download bytes=93696
-sha256=c8ea67dddaddc569359ef621ff7a4e3dadda2576d47f922b6c9c9ceb7f30ca16
+selected_log.id=497
+selected_log.size=93696
+LOG_BACKEND_TYPE=1
 ```
 
-## USB SLCAN / CAN / DroneCAN-like
+## USB SLCAN / CAN / DroneCAN
 
-证据：
+SocketCAN / DroneCAN 证据：
 
 ```text
-results/execution/loop_rate_goal_20260620T095201Z/socketcan_dronecan_sudo_20260620T182307Z/socketcan_dronecan_gate.json
+results/execution/rtt_release_socketcan_dronecan_sudo_20260621T183023Z/socketcan_dronecan_gate.json
 ```
 
 结果：
@@ -159,26 +240,62 @@ results/execution/loop_rate_goal_20260620T095201Z/socketcan_dronecan_sudo_202606
 ```text
 verdict=GREEN
 reason=socketcan_slcan_dronecan_gate_ok
-slcand iface_exists=true
-cansend standard_ok=true
-cansend extended_ok=true
-candump line_count=4
-dronecan_fallback verdict=GREEN
-dronecan_fallback source_node_ids=[10]
+slcand interface=can_rtt0
+cansend standard 123#1122334455667788 rc=0
+cansend extended 1F015508#1122334455667788 rc=0
+candump extended_frame_count=15
+candump source_node_ids=[10]
+pydronecan NodeStatus seen
+dronecan source_node_id=10
+dronecan health=0
+dronecan mode=0
 ```
 
-说明：
+直接 ASCII SLCAN 调试器证据：
 
-- 当前用户接线按 CAN1 验收。
-- `slcand` 需要 `TIOCSETD` 权限，本轮使用 `--sudo-system-tools`。
-- `candump` 捕获到扩展 DroneCAN-like 帧 `104E2D0A`，source node id 为 10。
+```text
+results/execution/rtt_release_slcan_ascii_20260621T182844Z/slcan_ascii_gate.json
+```
+
+结果：
+
+```text
+飞控 SLCAN 命令层: OK
+外接 1a86 USB Single Serial 调试器: 未响应 Lawicel/SLCAN 命令
+双向 ASCII 调试器验收: RED
+```
+
+## CAN 后 MAVLink 回归
+
+证据：
+
+```text
+results/execution/rtt_post_can_heartbeat_20260621T183152Z/heartbeat_gate.json
+results/execution/rtt_post_can_fast_green_20260621T183249Z/fast_green.json
+```
+
+结果：
+
+```text
+heartbeat_count=103
+duration_after_first_s=35.99
+last_status=3
+fast_green verdict=GREEN
+RAW_IMU=125
+ATTITUDE=126
+EKF_STATUS_REPORT=125
+SCALED_PRESSURE=125
+max_silence=1.001
+baro_hpa=1000.66
+zacc_mg=-992
+```
 
 ## 构建
 
 最终编译证据：
 
 ```text
-results/execution/loop_rate_goal_20260620T095201Z/final_build_20260620T182452Z.log
+results/execution/rtt_final_build_20260621T183842Z/build.log
 ```
 
 结果：
@@ -186,23 +303,16 @@ results/execution/loop_rate_goal_20260620T095201Z/final_build_20260620T182452Z.l
 ```text
 scons: done building targets.
 Binary integrity check PASSED
-ROM used: 1441384 B / 1504 KB = 93.59%
+ROM used: 1443268 B / 1504 KB = 93.71%
 RAM_STACK: 86296 B / 128 KB = 65.84%
-RAM_DMA: 25184 B / 64 KB = 38.43%
-RAM_APP: 55988 B / 320 KB = 17.09%
+RAM_DMA: 13760 B / 64 KB = 21.00%
+RAM_APP: 56348 B / 320 KB = 17.20%
 ```
 
-## 工作空间整理
+## 替代 ChibiOS 的后续差距
 
-过程目录和旧实验产物已经移动到：
+当前验收是 CUAV V5 driver-level bench GREEN，不等于已经完全替代 ChibiOS。替代 ChibiOS 的差距台账见：
 
 ```text
-results/recycle_bin/20260620T182654Z_loop_rate_goal_process_artifacts/
+docs/rtt-porting/RTT_CHIBIOS_REPLACEMENT_GAP_LEDGER.md
 ```
-
-最终保留证据集中在：
-
-```text
-results/execution/loop_rate_goal_20260620T095201Z/
-```
-
