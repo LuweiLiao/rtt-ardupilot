@@ -211,7 +211,7 @@ rtt_dbg_boost_hrtimer_count=224545
 rtt_dbg_clock_time_irq_count=224521
 ```
 
-说明：post-CAN 这次 OpenOCD 采样没有形成独立平均 loop rate 基线，但 MAVLink 与符号快照都显示配置和告警状态正常；完整平均主循环频率以诊断和 release gate 的 `403.66Hz / 406.45Hz` 为准。
+说明：该 post-CAN 历史证据只包含单次 OpenOCD 快照，未形成独立平均 loop rate 基线；当前 `rtt_loop_rate_gate.py` 已默认启用前后双快照，新回归测试会输出 `openocd_average_loop_rate.avg_loop_hz`，完整平均主循环频率以诊断和 release gate 的 `403.66Hz / 406.45Hz` 为准。
 
 ### 参数下载
 

@@ -1354,7 +1354,7 @@ def main() -> int:
     parser.add_argument("--openocd-timeout", type=int, default=20)
     parser.add_argument("--openocd-cfg", nargs="+", default=list(DEFAULT_OPENOCD_CFG))
     parser.add_argument("--no-openocd", action="store_true")
-    parser.add_argument("--openocd-before-sample", action="store_true",
+    parser.add_argument("--openocd-before-sample", action=argparse.BooleanOptionalAction, default=True,
                         help="capture a baseline OpenOCD snapshot before MAVLink sampling and report task counter deltas")
     parser.add_argument("--openocd-wait-steady", action=argparse.BooleanOptionalAction, default=True,
                         help="wait for the main loop counter to advance before the baseline OpenOCD snapshot")
