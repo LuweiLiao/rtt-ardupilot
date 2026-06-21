@@ -56,6 +56,9 @@ extern const AP_HAL::HAL& hal;
 #ifndef HAL_RTT_LOOP_DIAG
 #define HAL_RTT_LOOP_DIAG 0
 #endif
+#ifndef HAL_RTT_LOOP_TASK_META
+#define HAL_RTT_LOOP_TASK_META 1
+#endif
 volatile uint32_t rtt_dbg_scheduler_wait_sample_max_us RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_scheduler_wait_sample_last_us RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_scheduler_wait_sample_accum_us RTT_DBG_DTCM_BSS;
@@ -74,14 +77,7 @@ volatile uint32_t rtt_dbg_scheduler_task_max_allowed_us RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_scheduler_task_overrun_count RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_scheduler_task_not_achieved_count RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_scheduler_extra_loop_us RTT_DBG_DTCM_BSS;
-#if HAL_RTT_LOOP_DIAG
-volatile uint32_t rtt_dbg_scheduler_task_run_counts[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
-volatile uint32_t rtt_dbg_scheduler_task_last_us_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
-volatile uint32_t rtt_dbg_scheduler_task_total_us_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
-volatile uint32_t rtt_dbg_scheduler_task_max_us_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
-volatile uint32_t rtt_dbg_scheduler_task_overrun_counts[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
-volatile uint32_t rtt_dbg_scheduler_task_not_achieved_counts[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
-volatile uint32_t rtt_dbg_scheduler_task_skip_budget_counts[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+#if HAL_RTT_LOOP_TASK_META
 volatile uint32_t rtt_dbg_scheduler_task_priority_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_scheduler_task_rate_mhz_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_scheduler_task_allowed_us_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
@@ -92,9 +88,6 @@ volatile uint32_t rtt_dbg_scheduler_task_name2_by_idx[RTT_DBG_SCHED_TASK_SLOTS] 
 volatile uint32_t rtt_dbg_scheduler_task_name3_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_scheduler_task_name4_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
 volatile uint32_t rtt_dbg_scheduler_task_name5_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
-volatile uint32_t rtt_dbg_scheduler_task_last_dt_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
-volatile uint32_t rtt_dbg_scheduler_task_interval_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
-volatile uint32_t rtt_dbg_scheduler_task_skip_time_available_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
 static uint8_t rtt_dbg_scheduler_task_meta_seen[RTT_DBG_SCHED_TASK_SLOTS];
 
 static uint32_t rtt_dbg_scheduler_pack_name_word(const char *name, uint8_t word)
@@ -113,6 +106,18 @@ static uint32_t rtt_dbg_scheduler_pack_name_word(const char *name, uint8_t word)
     }
     return packed;
 }
+#endif
+#if HAL_RTT_LOOP_DIAG
+volatile uint32_t rtt_dbg_scheduler_task_run_counts[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_last_us_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_total_us_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_max_us_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_overrun_counts[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_not_achieved_counts[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_skip_budget_counts[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_last_dt_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_interval_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
+volatile uint32_t rtt_dbg_scheduler_task_skip_time_available_by_idx[RTT_DBG_SCHED_TASK_SLOTS] RTT_DBG_DTCM_BSS;
 #endif
 #endif
 
@@ -294,7 +299,7 @@ void AP_Scheduler::run(uint32_t time_available)
             common_tasks_offset++;
         }
 
-#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_DIAG
+#if CONFIG_HAL_BOARD == HAL_BOARD_RTT && HAL_RTT_LOOP_TASK_META
         if (i < RTT_DBG_SCHED_TASK_SLOTS && !rtt_dbg_scheduler_task_meta_seen[i]) {
             rtt_dbg_scheduler_task_meta_seen[i] = 1U;
             rtt_dbg_scheduler_task_priority_by_idx[i] = task.priority;

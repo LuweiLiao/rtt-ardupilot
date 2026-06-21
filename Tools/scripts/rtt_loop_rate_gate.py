@@ -273,6 +273,64 @@ RTT_SYMBOLS = (
     "rtt_cpu_idle_pct",
 )
 
+RTT_OPTIONAL_SYMBOLS = (
+    "rtt_dbg_run_tasks_us",
+    "rtt_dbg_extra_loop",
+    "rtt_dbg_scheduler_task_run_counts",
+    "rtt_dbg_scheduler_task_last_us_by_idx",
+    "rtt_dbg_scheduler_task_total_us_by_idx",
+    "rtt_dbg_scheduler_task_max_us_by_idx",
+    "rtt_dbg_scheduler_task_overrun_counts",
+    "rtt_dbg_scheduler_task_not_achieved_counts",
+    "rtt_dbg_scheduler_task_skip_budget_counts",
+    "rtt_dbg_scheduler_task_last_dt_by_idx",
+    "rtt_dbg_scheduler_task_interval_by_idx",
+    "rtt_dbg_scheduler_task_skip_time_available_by_idx",
+    "rtt_dbg_copter_motors_total_us",
+    "rtt_dbg_copter_motors_total_accum_us",
+    "rtt_dbg_copter_motors_total_max_us",
+    "rtt_dbg_copter_motors_total_slow_count",
+    "rtt_dbg_copter_motors_calc_pwm_us",
+    "rtt_dbg_copter_motors_calc_pwm_accum_us",
+    "rtt_dbg_copter_motors_calc_pwm_max_us",
+    "rtt_dbg_copter_motors_calc_pwm_slow_count",
+    "rtt_dbg_copter_motors_cork_us",
+    "rtt_dbg_copter_motors_cork_accum_us",
+    "rtt_dbg_copter_motors_cork_max_us",
+    "rtt_dbg_copter_motors_output_ch_us",
+    "rtt_dbg_copter_motors_output_ch_accum_us",
+    "rtt_dbg_copter_motors_output_ch_max_us",
+    "rtt_dbg_copter_motors_output_ch_slow_count",
+    "rtt_dbg_copter_motors_interlock_us",
+    "rtt_dbg_copter_motors_interlock_accum_us",
+    "rtt_dbg_copter_motors_interlock_max_us",
+    "rtt_dbg_copter_motors_flightmode_us",
+    "rtt_dbg_copter_motors_flightmode_accum_us",
+    "rtt_dbg_copter_motors_flightmode_max_us",
+    "rtt_dbg_copter_motors_flightmode_slow_count",
+    "rtt_dbg_copter_motors_push_us",
+    "rtt_dbg_copter_motors_push_accum_us",
+    "rtt_dbg_copter_motors_push_max_us",
+    "rtt_dbg_copter_motors_push_slow_count",
+    "rtt_dbg_copter_motors_main_calls",
+    "rtt_dbg_thread_hook_calls",
+    "rtt_dbg_thread_hook_overflow",
+    "rtt_dbg_thread_switch_counts",
+    "rtt_dbg_thread_run_total_us_by_idx",
+    "rtt_dbg_thread_run_last_us_by_idx",
+    "rtt_dbg_thread_run_max_us_by_idx",
+    "rtt_dbg_thread_priority_by_idx",
+    "rtt_dbg_thread_name0_by_idx",
+    "rtt_dbg_thread_name1_by_idx",
+    "rtt_dbg_thread_name2_by_idx",
+    "rtt_dbg_thread_name3_by_idx",
+)
+
+RTT_REQUIRED_SYMBOLS = tuple(
+    name for name in RTT_SYMBOLS
+    if name not in set(RTT_OPTIONAL_SYMBOLS)
+)
+
 RTT_TASK_SLOTS = 128
 RTT_THREAD_SLOTS = 32
 RTT_TASK_ARRAY_SYMBOLS = (
@@ -912,7 +970,8 @@ def openocd_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         return {"verdict": "RED", "reason": f"symbol_lookup_failed:{exc!r}", "elf": str(elf)}
 
-    missing = sorted(set(RTT_SYMBOLS) - set(addrs))
+    missing = sorted(set(RTT_REQUIRED_SYMBOLS) - set(addrs))
+    optional_missing = sorted(set(RTT_OPTIONAL_SYMBOLS) - set(addrs))
     commands = [
         "init",
         "halt",
@@ -962,6 +1021,7 @@ def openocd_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         "finished_monotonic_s": finished_monotonic_s,
         "argv": argv,
         "missing_symbols": missing,
+        "optional_missing_symbols": optional_missing,
         "addresses": {name: f"0x{addr:08x}" for name, addr in sorted(addrs.items())},
         "values": values,
         "task_arrays": arrays,
