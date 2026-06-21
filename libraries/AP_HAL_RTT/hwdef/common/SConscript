@@ -127,11 +127,6 @@ if ARDUPILOT_FULL:
             '\n'
             '#include "hwdef.h"\n'
             '\n'
-            '#ifdef HAL_NUM_CAN_IFACES\n'
-            '#  undef HAL_NUM_CAN_IFACES\n'
-            '#endif\n'
-            '#define HAL_NUM_CAN_IFACES 0\n'
-            '\n'
             '#endif\n'
         )
         if not os.path.isfile(ap_config_h):
@@ -140,10 +135,24 @@ if ARDUPILOT_FULL:
                 _f.write(_ap_config_template)
         else:
             with open(ap_config_h) as _f:
-                _cfg = _f.read()
+                _old_cfg = _f.read()
+            _cfg = _old_cfg
             if 'hwdef.h' not in _cfg:
                 _cfg = _cfg.replace('#define _AP_CONFIG_H_',
                     '#define _AP_CONFIG_H_\n\n#include "hwdef.h"\n', 1)
+            _cfg = _cfg.replace(
+                '\n#ifdef HAL_NUM_CAN_IFACES\n'
+                '#  undef HAL_NUM_CAN_IFACES\n'
+                '#endif\n'
+                '#define HAL_NUM_CAN_IFACES 0\n',
+                '\n')
+            _cfg = _cfg.replace(
+                '\n#ifdef HAL_NUM_CAN_IFACES\n'
+                '#undef HAL_NUM_CAN_IFACES\n'
+                '#endif\n'
+                '#define HAL_NUM_CAN_IFACES 0\n',
+                '\n')
+            if _cfg != _old_cfg:
                 with open(ap_config_h, 'w') as _f:
                     _f.write(_cfg)
         ap_force_include = ap_config_h if os.path.isfile(ap_config_h) else ''
