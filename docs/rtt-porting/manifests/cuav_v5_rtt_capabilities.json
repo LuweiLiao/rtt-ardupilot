@@ -194,6 +194,17 @@
       ]
     },
     {
+      "id": "usb_param_request_read_fast",
+      "category": "MAVLink",
+      "required_for_chibios_replacement": true,
+      "status": "proven",
+      "gate": "Tools/scripts/rtt_param_request_read_benchmark.py",
+      "evidence": [
+        "PARAM_REQUEST_READ repeated read latency gate",
+        "Mission Planner single-read compatibility path"
+      ]
+    },
+    {
       "id": "mavlink_ftp_sdcard",
       "category": "MAVLink",
       "required_for_chibios_replacement": true,

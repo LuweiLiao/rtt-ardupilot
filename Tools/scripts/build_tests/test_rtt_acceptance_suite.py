@@ -45,6 +45,8 @@ class AcceptanceSuiteTest(unittest.TestCase):
             "sudo_socketcan": False,
             "param_benchmark": True,
             "param_benchmark_rounds": 3,
+            "param_request_read_benchmark": True,
+            "param_request_read_benchmark_rounds": 3,
             "mavftp_benchmark": True,
             "mavftp_benchmark_rounds": 3,
             "allow_boundary_yellow": True,
@@ -99,6 +101,17 @@ class AcceptanceSuiteTest(unittest.TestCase):
                         "rate_params_s": {"p50": 700.0},
                     },
                 })
+            elif name == "param_request_read_benchmark":
+                write_json(outdir / "param_request_read_benchmark.json", {
+                    "verdict": "GREEN",
+                    "reason": "param_request_read_benchmark_ok",
+                    "rounds_completed": 3,
+                    "failed_rounds": [],
+                    "metrics": {
+                        "read_latency_s": {"p50": 0.01, "p95": 0.02, "max": 0.02},
+                        "max_gap_s_observed": {"p50": 0.01, "p95": 0.02, "max": 0.02},
+                    },
+                })
             elif name == "mavftp":
                 write_json(outdir / "mavftp_gate.json", {"verdict": "GREEN", "reason": "mavftp_ok"})
             elif name == "mavftp_benchmark":
@@ -145,6 +158,7 @@ class AcceptanceSuiteTest(unittest.TestCase):
         statuses = {entry["id"]: entry["coverage_status"] for entry in payload["manifest_matrix"]["entries"]}
         self.assertEqual(statuses["live_firmware_version_match"], "covered_passed")
         self.assertEqual(statuses["main_loop_400hz"], "covered_passed")
+        self.assertEqual(statuses["usb_param_request_read_fast"], "covered_passed")
         self.assertEqual(statuses["mavlink_ftp_sdcard"], "covered_passed")
         self.assertEqual(statuses["usb_slcan_cdc_if02"], "covered_passed")
         self.assertEqual(statuses["prearm_flight_readiness"], "manifest_boundary")

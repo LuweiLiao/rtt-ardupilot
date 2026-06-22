@@ -234,6 +234,24 @@ def build_steps(args: argparse.Namespace, outdir: Path) -> list[dict[str, Any]]:
         ),
     ])
 
+    if args.param_request_read_benchmark:
+        steps.append(step_spec(
+            "param_request_read_benchmark",
+            [
+                python,
+                script_path("rtt_param_request_read_benchmark.py"),
+                "--port",
+                args.port,
+                "--outdir",
+                str(outdir / "param_request_read_benchmark"),
+                "--rounds",
+                str(args.param_request_read_benchmark_rounds),
+            ],
+            max(120, args.param_request_read_benchmark_rounds * 20),
+            "param_request_read_benchmark.json",
+            ["usb_param_request_read_fast"],
+        ))
+
     if args.param_benchmark:
         steps.append(step_spec(
             "param_download_benchmark",
@@ -542,6 +560,9 @@ def main() -> int:
     parser.add_argument("--param-benchmark", action="store_true",
                         help="replace single-round fast-param proof with repeated p50/p95 benchmark coverage")
     parser.add_argument("--param-benchmark-rounds", type=int, default=5)
+    parser.add_argument("--param-request-read-benchmark", action="store_true",
+                        help="replace single-read PARAM_REQUEST_READ proof with repeated p50/p95 benchmark coverage")
+    parser.add_argument("--param-request-read-benchmark-rounds", type=int, default=5)
     parser.add_argument("--mavftp-benchmark", action="store_true",
                         help="replace single-round MAVFTP stability proof with repeated p50/p95 benchmark coverage")
     parser.add_argument("--mavftp-benchmark-rounds", type=int, default=5)
@@ -559,6 +580,8 @@ def main() -> int:
         parser.error("--rounds must be >= 1")
     if args.param_benchmark_rounds < 1:
         parser.error("--param-benchmark-rounds must be >= 1")
+    if args.param_request_read_benchmark_rounds < 1:
+        parser.error("--param-request-read-benchmark-rounds must be >= 1")
     if args.mavftp_benchmark_rounds < 1:
         parser.error("--mavftp-benchmark-rounds must be >= 1")
 
