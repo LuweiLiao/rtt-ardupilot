@@ -38,6 +38,7 @@ class AcceptanceSuiteTest(unittest.TestCase):
             "outdir": str(outdir),
             "manifest": "docs/rtt-porting/manifests/cuav_v5_rtt_capabilities.json",
             "full_chain": True,
+            "expected_firmware_hash": None,
             "rounds": 1,
             "include_socketcan": True,
             "socketcan_iface": "can_rtt0",
@@ -59,10 +60,18 @@ class AcceptanceSuiteTest(unittest.TestCase):
         def fake_run(argv, stdout, stderr, check):
             outdir = Path(stdout.name).parent
             name = outdir.name
-            if name == "manifest_check":
+            if name == "firmware_version":
+                write_json(outdir / "firmware_version_gate.json", {
+                    "verdict": "GREEN",
+                    "reason": "firmware_hash_match",
+                    "expected_hash": "1d9272fb",
+                    "actual_hash": "1d9272fb",
+                    "expected_source": "git_head",
+                })
+            elif name == "manifest_check":
                 write_json(outdir / "capability_manifest_check.json", {
                     "verdict": "GREEN",
-                    "capability_count": 17,
+                    "capability_count": 18,
                     "errors": [],
                 })
             elif name == "qgc_mp_host_evidence":
@@ -134,6 +143,7 @@ class AcceptanceSuiteTest(unittest.TestCase):
         self.assertEqual(payload["manifest_matrix"]["missing_required"], [])
         self.assertEqual(payload["manifest_matrix"]["failed_required"], [])
         statuses = {entry["id"]: entry["coverage_status"] for entry in payload["manifest_matrix"]["entries"]}
+        self.assertEqual(statuses["live_firmware_version_match"], "covered_passed")
         self.assertEqual(statuses["main_loop_400hz"], "covered_passed")
         self.assertEqual(statuses["mavlink_ftp_sdcard"], "covered_passed")
         self.assertEqual(statuses["usb_slcan_cdc_if02"], "covered_passed")

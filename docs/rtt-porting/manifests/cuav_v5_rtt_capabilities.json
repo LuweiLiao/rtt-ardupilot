@@ -131,6 +131,16 @@
   ],
   "capabilities": [
     {
+      "id": "live_firmware_version_match",
+      "category": "Acceptance",
+      "required_for_chibios_replacement": true,
+      "status": "proven",
+      "gate": "Tools/scripts/rtt_firmware_version_gate.py",
+      "evidence": [
+        "AUTOPILOT_VERSION.flight_custom_version matches expected firmware git hash"
+      ]
+    },
+    {
       "id": "scons_full_build",
       "category": "Build",
       "required_for_chibios_replacement": true,

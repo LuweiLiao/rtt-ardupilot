@@ -124,6 +124,9 @@ def annotate_step(step: dict[str, Any], json_name: str | None) -> None:
         "metrics",
         "capability_count",
         "errors",
+        "expected_hash",
+        "actual_hash",
+        "expected_source",
     ):
         if key in payload:
             step[key] = payload[key]
@@ -152,6 +155,24 @@ def build_steps(args: argparse.Namespace, outdir: Path) -> list[dict[str, Any]]:
     steps: list[dict[str, Any]] = []
     if args.full_chain:
         steps.extend([
+            step_spec(
+                "firmware_version",
+                [
+                    python,
+                    script_path("rtt_firmware_version_gate.py"),
+                    "--port",
+                    args.port,
+                    "--outdir",
+                    str(outdir / "firmware_version"),
+                    *(
+                        ["--expected-hash", args.expected_firmware_hash]
+                        if args.expected_firmware_hash else []
+                    ),
+                ],
+                45,
+                "firmware_version_gate.json",
+                ["live_firmware_version_match"],
+            ),
             step_spec(
                 "manifest_check",
                 [
@@ -509,6 +530,8 @@ def main() -> int:
     parser.add_argument("--manifest", default=DEFAULT_MANIFEST)
     parser.add_argument("--full-chain", action="store_true",
                         help="run manifest-driven full-chain gates instead of the legacy MAVLink-only subset")
+    parser.add_argument("--expected-firmware-hash", default=None,
+                        help="expected live firmware git hash; defaults to current git HEAD in rtt_firmware_version_gate.py")
     parser.add_argument("--rounds", type=int, default=1,
                         help="run the selected suite N times serially")
     parser.add_argument("--include-socketcan", action="store_true",
