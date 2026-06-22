@@ -287,7 +287,8 @@ def collect(
 def classify_payload(payload: dict[str, Any]) -> tuple[str, list[str]]:
     reasons: list[str] = []
     usb = payload.get("usb", {})
-    if isinstance(usb, dict) and usb.get("verdict") == "RED":
+    qgc_connected = qgc_owns_rtt_mavlink_cdc(payload)
+    if isinstance(usb, dict) and usb.get("verdict") == "RED" and not qgc_connected:
         reasons.append("usb_port_conflict")
     if isinstance(usb, dict) and usb.get("verdict") == "YELLOW":
         reasons.append("usb_diag_yellow")
@@ -312,7 +313,37 @@ def classify_payload(payload: dict[str, Any]) -> tuple[str, list[str]]:
         return "RED", reasons
     if reasons:
         return "YELLOW", reasons
+    if qgc_connected:
+        return "GREEN", ["qgc_window_visible_and_owns_rtt_mavlink_cdc"]
     return "GREEN", ["gcs_window_visible_and_usb_diag_green"]
+
+
+def qgc_owns_rtt_mavlink_cdc(payload: dict[str, Any]) -> bool:
+    qgc_processes = [
+        proc for proc in payload.get("processes", [])
+        if proc.get("name") == "QGroundControl" and proc.get("active")
+    ]
+    qgc_windows = [
+        window for window in payload.get("windows", {}).get("wmctrl", {}).get("windows", [])
+        if window.get("app") == "QGroundControl"
+    ]
+    if not qgc_processes or not qgc_windows:
+        return False
+
+    qgc_pids = {
+        int(window["pid"]) for window in qgc_windows
+        if isinstance(window.get("pid"), int)
+    }
+    for port in payload.get("usb", {}).get("ports", []):
+        if port.get("role") != "rtt_mavlink_cdc" or not port.get("owned"):
+            continue
+        owners = port.get("lsof", {}).get("processes", [])
+        for owner in owners:
+            command = str(owner.get("command", ""))
+            pid = owner.get("pid")
+            if command == "QGroundControl" and (not qgc_pids or pid in qgc_pids):
+                return True
+    return False
 
 
 def main() -> int:

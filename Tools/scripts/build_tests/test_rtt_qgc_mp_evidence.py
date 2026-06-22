@@ -56,6 +56,34 @@ class QgcMpEvidenceTest(unittest.TestCase):
         self.assertEqual(verdict, "RED")
         self.assertIn("usb_port_conflict", reasons)
 
+    def test_qgc_owning_rtt_mavlink_port_is_green_connection_evidence(self):
+        module = load_module()
+        verdict, reasons = module.classify_payload({
+            "usb": {
+                "verdict": "RED",
+                "ports": [{
+                    "role": "rtt_mavlink_cdc",
+                    "owned": True,
+                    "lsof": {
+                        "processes": [{
+                            "pid": 123,
+                            "command": "QGroundControl",
+                            "name": "/dev/ttyACM1",
+                        }]
+                    },
+                }],
+            },
+            "processes": [{"name": "QGroundControl", "active": True}],
+            "windows": {
+                "wmctrl": {"windows": [{"app": "QGroundControl", "pid": 123}]},
+                "wayland_display": "",
+                "display": ":1",
+            },
+            "screenshots": [],
+        })
+        self.assertEqual(verdict, "GREEN")
+        self.assertEqual(reasons, ["qgc_window_visible_and_owns_rtt_mavlink_cdc"])
+
     def test_no_gui_process_is_yellow_evidence_not_failure(self):
         module = load_module()
         verdict, reasons = module.classify_payload({
