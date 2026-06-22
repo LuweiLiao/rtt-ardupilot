@@ -20,12 +20,11 @@ from typing import Any
 
 from rtt_openocd_guard import cleanup_openocd_quiet
 
-from pymavlink import mavutil
-
 from rtt_usb_port_select import MAVLINK_PORT, resolve_mavlink_port
 
 DEFAULT_PORT = MAVLINK_PORT
 DEFAULT_PARAM_CANDIDATES = ("LOG_DISARMED", "SR0_RAW_SENS", "SR0_EXT_STAT")
+_MAVUTIL: Any | None = None
 
 
 class GateError(RuntimeError):
@@ -49,7 +48,19 @@ def resolve_port(port_arg: str) -> str:
     return resolve_mavlink_port(port_arg)
 
 
+def load_mavutil() -> Any:
+    global _MAVUTIL
+    if _MAVUTIL is None:
+        try:
+            from pymavlink import mavutil  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError("pymavlink_not_installed") from exc
+        _MAVUTIL = mavutil
+    return _MAVUTIL
+
+
 def connect(port: str, source_system: int = 248, timeout_s: float = 25.0) -> Any:
+    mavutil = load_mavutil()
     conn = mavutil.mavlink_connection(
         port,
         baud=115200,
@@ -134,6 +145,7 @@ def request_param(conn: Any, name: str, timeout_s: float = 8.0) -> float:
 
 
 def set_param(conn: Any, name: str, value: float, timeout_s: float = 10.0) -> float:
+    mavutil = load_mavutil()
     drain(conn, 0.2)
     conn.mav.param_set_send(
         conn.target_system,
