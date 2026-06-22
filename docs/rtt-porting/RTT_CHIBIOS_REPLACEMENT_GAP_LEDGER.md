@@ -126,7 +126,7 @@ board: CUAV V5 / STM32F767
 | RTT-GAP-099 | Docs | OPEN | driver matrix 与最新整机验收未自动同步 | matrix + README | 生成摘要脚本 |
 | RTT-GAP-100 | Docs | OPEN | ChibiOS A/B 性能计划仍是 framework only | perf plan | 采集同板 ChibiOS 数据 |
 | RTT-GAP-101 | Test | OPEN | 缺“至少 N 轮全链路 acceptance suite”固定入口 | rtt_acceptance_suite.py | 串联 loop/param/ftp/can/log |
-| RTT-GAP-102 | Test | OPEN | 缺 QGC/MP 主机侧日志采集工具 | user QGC request | QGC log parser |
+| RTT-GAP-102 | Test | FIXED | 已新增 QGC/Mission Planner 主机侧证据采集工具，汇总 QGC/MP 进程、X11 窗口、可选截图、USB CDC owner 诊断、日志/配置目录摘要，并明确区分“GUI 未运行/无窗口”和“USB 端口冲突” | `Tools/scripts/rtt_qgc_mp_evidence.py`, `test_rtt_qgc_mp_evidence.py`, `rtt_gap102_qgc_mp_evidence_20260622T000000Z/qgc_mp_evidence.json` | QGC 打开后可复跑并追加截图/窗口证据，再接自动点击连接 gate |
 | RTT-GAP-103 | Test | FIXED | 已新增 Linux 主机侧 USB 端口占用冲突自动诊断，枚举 ttyACM/ttyUSB/by-id/pyserial/sysfs，标注 MAVLink CDC/SLCAN CDC/外接 USB 串口，采集 lsof/fuser owner、ModemManager/brltty/QGC/MissionPlanner/slcand/openocd 干扰进程，并输出 JSON verdict | `Tools/scripts/rtt_usb_port_conflict_diag.py`, `test_rtt_usb_port_conflict_diag.py`, `rtt_gap103_usb_conflict_diag_20260622T000000Z/usb_port_conflict_diag.json`, GitHub run `27920855999`, `rtt_gap103_github_run_27920855999/*.log` | 在 QGC/MP 连接失败前后运行该脚本，RED 表示端口被占或 OpenOCD 残留 |
 | RTT-GAP-104 | Test | FIXED | 已新增统一 OpenOCD/CDC 互斥守卫 `rtt_openocd_guard.py`，集中清理 `openocd`/历史 typo `openoccd`，并把危险的 broad `pkill -f [o]penocd` 替换为 `pgrep -af` 后过滤真实 OpenOCD 进程再 kill，避免误杀包含 openocd 字符串的诊断脚本；loop-rate、USB snapshot、log download、param persist、acceptance suite、SITL-on-hardware gate 已接入 | `Tools/scripts/rtt_openocd_guard.py`, `test_rtt_openocd_guard.py`, `rtt_gap104_openocd_guard_20260622T000000Z/script_tests.log`, `cleanup_openocd_guard.json`, GitHub run `27921313319`, `rtt_gap104_github_run_27921313319/*.log` | 后续所有新增 OpenOCD/CDC gate 必须复用该 guard |
 | RTT-GAP-105 | Test | OPEN | 缺 hardware capability manifest | docs/scripts | board capabilities JSON |
@@ -168,6 +168,7 @@ board: CUAV V5 / STM32F767
 
 ## 本轮已处理
 
+- `RTT-GAP-102`：新增 `Tools/scripts/rtt_qgc_mp_evidence.py` 作为 QGC/Mission Planner 主机侧证据采集入口。脚本只读采集，不自动点击、不 reset USB、不杀进程；它复用 `rtt_usb_port_conflict_diag.py` 汇总 `/dev/ttyACM*` owner/role，同时采集 `pgrep` 进程、`wmctrl`/`xdotool` X11 窗口、可选 `import` 截图、QGC/MP 常见日志与配置目录。单元测试覆盖窗口解析、过滤 `pgrep` 自身噪声、USB RED 向上升级、GUI 未运行时输出 YELLOW 而不是假失败。当前本机证据 `rtt_gap102_qgc_mp_evidence_20260622T000000Z/qgc_mp_evidence.json` 显示 USB 为 GREEN：`/dev/ttyACM1` 是 `rtt_mavlink_cdc`、`/dev/ttyACM2` 是 `rtt_slcan_cdc`，均未被占用；总 verdict 为 YELLOW，仅因为当前没有 QGC/MP 进程和窗口，因此本轮没有声称 GUI 连接验收通过。
 - `RTT-GAP-092`：删除 `libraries/AP_HAL_RTT/` 根目录重复 `SPIDevice.cpp.cmsis` / `SPIDevice.h.cmsis`。这两个文件与 `archive/spi-cmsis/` 内副本完全一致，且未被构建引用；保留 archive 一份作为旧实验资料。
 - `RTT-GAP-096`：更新 `docs/rtt-porting/CUAV_V5_RTT_ACCEPTANCE_CURRENT.md`，把状态从 2026-06-20 旧证据同步到 2026-06-21/22 hrtimer、参数、MAVFTP、外设、日志、SocketCAN/pydronecan、最终构建证据。
 - `RTT-GAP-089`：移除 F7 SCons defines 中的 `HAL_STORAGE_SIZE=16384`，让 CUAV V5 的 `libraries/AP_HAL_RTT/hwdef/cuav_v5/hwdef.dat` 通过生成的 `hwdef.h` 提供 `HAL_STORAGE_SIZE=32768`。验证：`python3 -m SCons --target=cuav-v5 -j16` 通过，`results/execution/rtt_gap089_build_20260621T190556Z/build.log` 无 `HAL_STORAGE_SIZE redefined`，当前生成配置不再注入 16KB。
