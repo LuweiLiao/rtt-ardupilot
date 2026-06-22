@@ -119,6 +119,9 @@ def annotate_step(step: dict[str, Any], json_name: str | None) -> None:
         "unique_indices",
         "missing_count",
         "download",
+        "rounds_completed",
+        "failed_rounds",
+        "metrics",
         "capability_count",
         "errors",
     ):
@@ -242,8 +245,26 @@ def build_steps(args: argparse.Namespace, outdir: Path) -> list[dict[str, Any]]:
             ],
             180,
             "mavftp_gate.json",
-            ["mavlink_ftp_sdcard"],
+            [] if args.mavftp_benchmark else ["mavlink_ftp_sdcard"],
         ),
+        *([
+            step_spec(
+                "mavftp_benchmark",
+                [
+                    python,
+                    script_path("rtt_mavftp_benchmark.py"),
+                    "--port",
+                    args.port,
+                    "--outdir",
+                    str(outdir / "mavftp_benchmark"),
+                    "--rounds",
+                    str(args.mavftp_benchmark_rounds),
+                ],
+                max(240, args.mavftp_benchmark_rounds * 240),
+                "mavftp_benchmark.json",
+                ["mavlink_ftp_sdcard"],
+            )
+        ] if args.mavftp_benchmark else []),
         step_spec(
             "peripheral_driver",
             [
@@ -498,6 +519,9 @@ def main() -> int:
     parser.add_argument("--param-benchmark", action="store_true",
                         help="replace single-round fast-param proof with repeated p50/p95 benchmark coverage")
     parser.add_argument("--param-benchmark-rounds", type=int, default=5)
+    parser.add_argument("--mavftp-benchmark", action="store_true",
+                        help="replace single-round MAVFTP stability proof with repeated p50/p95 benchmark coverage")
+    parser.add_argument("--mavftp-benchmark-rounds", type=int, default=5)
     parser.add_argument("--allow-boundary-yellow", action=argparse.BooleanOptionalAction, default=True,
                         help="allow YELLOW evidence for manifest boundary host GUI checks")
     parser.add_argument("--include-param-persist", action="store_true",
@@ -512,6 +536,8 @@ def main() -> int:
         parser.error("--rounds must be >= 1")
     if args.param_benchmark_rounds < 1:
         parser.error("--param-benchmark-rounds must be >= 1")
+    if args.mavftp_benchmark_rounds < 1:
+        parser.error("--mavftp-benchmark-rounds must be >= 1")
 
     payload = run_suite(args)
     outdir = Path(args.outdir)

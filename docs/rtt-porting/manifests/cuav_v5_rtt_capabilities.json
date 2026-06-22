@@ -188,9 +188,10 @@
       "category": "MAVLink",
       "required_for_chibios_replacement": true,
       "status": "proven",
-      "gate": "Tools/scripts/rtt_mavftp_gate.py --require-sd",
+      "gate": "Tools/scripts/rtt_mavftp_benchmark.py --require-sd --rounds N",
       "evidence": [
-        "results/execution/rtt_release_mavftp_20260621T181943Z/mavftp_gate.json"
+        "results/execution/rtt_release_mavftp_20260621T181943Z/mavftp_gate.json",
+        "Tools/scripts/rtt_mavftp_benchmark.py"
       ]
     },
     {
