@@ -18,8 +18,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from pymavlink import mavutil
-
 from rtt_usb_port_select import MAVLINK_PORT, resolve_mavlink_port
 
 DEFAULT_PORT = MAVLINK_PORT
@@ -65,7 +63,15 @@ def decode_custom_version(values: Any) -> str:
     return "".join(chars).lower()
 
 
-def request_autopilot_version(conn: Any, timeout_s: float) -> dict[str, Any] | None:
+def load_mavutil() -> Any:
+    try:
+        from pymavlink import mavutil  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("pymavlink_not_installed") from exc
+    return mavutil
+
+
+def request_autopilot_version(conn: Any, mavutil: Any, timeout_s: float) -> dict[str, Any] | None:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         conn.mav.command_long_send(
@@ -95,6 +101,7 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
     source_root = Path(args.source_root).resolve()
     expected_hash = (args.expected_hash or git_short_hash(source_root)).lower()[:8]
     port = resolve_mavlink_port(args.port)
+    mavutil = load_mavutil()
     payload: dict[str, Any] = {
         "timestamp_utc": iso_now(),
         "port": port,
@@ -119,7 +126,7 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
         payload["target_system"] = int(conn.target_system)
         payload["target_component"] = int(conn.target_component)
 
-        version = request_autopilot_version(conn, args.version_timeout)
+        version = request_autopilot_version(conn, mavutil, args.version_timeout)
         if version is None:
             payload["verdict"] = "RED"
             payload["reason"] = "no_autopilot_version"

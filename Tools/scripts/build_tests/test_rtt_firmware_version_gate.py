@@ -5,6 +5,7 @@ import importlib.util
 from pathlib import Path
 import subprocess
 import sys
+import types
 import unittest
 from unittest import mock
 
@@ -66,6 +67,16 @@ class FakeConnection:
         self.closed = True
 
 
+def fake_mavutil(connection):
+    return types.SimpleNamespace(
+        mavlink_connection=mock.Mock(return_value=connection),
+        mavlink=types.SimpleNamespace(
+            MAV_CMD_REQUEST_MESSAGE=512,
+            MAVLINK_MSG_ID_AUTOPILOT_VERSION=148,
+        ),
+    )
+
+
 class FirmwareVersionGateTest(unittest.TestCase):
     def args(self, **overrides):
         values = {
@@ -94,16 +105,18 @@ class FirmwareVersionGateTest(unittest.TestCase):
 
     def test_run_gate_green_on_matching_hash(self):
         module = load_module()
+        mavutil = fake_mavutil(FakeConnection("1d9272fb"))
         with mock.patch.object(module, "resolve_mavlink_port", return_value="/dev/ttyACM1"), \
-                mock.patch.object(module.mavutil, "mavlink_connection", return_value=FakeConnection("1d9272fb")):
+                mock.patch.object(module, "load_mavutil", return_value=mavutil):
             payload = module.run_gate(self.args())
         self.assertEqual(payload["verdict"], "GREEN", payload.get("reason"))
         self.assertEqual(payload["actual_hash"], "1d9272fb")
 
     def test_run_gate_red_on_mismatch(self):
         module = load_module()
+        mavutil = fake_mavutil(FakeConnection("f2bfac77"))
         with mock.patch.object(module, "resolve_mavlink_port", return_value="/dev/ttyACM1"), \
-                mock.patch.object(module.mavutil, "mavlink_connection", return_value=FakeConnection("f2bfac77")):
+                mock.patch.object(module, "load_mavutil", return_value=mavutil):
             payload = module.run_gate(self.args(expected_hash="1d9272fb"))
         self.assertEqual(payload["verdict"], "RED")
         self.assertEqual(payload["reason"], "firmware_hash_mismatch")
