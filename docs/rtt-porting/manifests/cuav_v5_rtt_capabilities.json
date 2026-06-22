@@ -1,0 +1,324 @@
+{
+  "schema": "ardupilot-rtt-capability-manifest-v1",
+  "manifest_id": "cuav_v5_rtt_capabilities",
+  "board": {
+    "name": "CUAV V5",
+    "rtt_board_name": "cuav_v5",
+    "target": "cuav-v5",
+    "aliases": [
+      "cuav_v5",
+      "cuav-v5"
+    ],
+    "mcu": "STM32F767xx",
+    "family": "STM32F7xx",
+    "flash_kb": 2048,
+    "bootloader": {
+      "source": "Tools/bootloaders/cuav-v5-bl.bin",
+      "start_address": "0x08000000",
+      "reserved_kb": 32
+    },
+    "application": {
+      "start_address": "0x08008000",
+      "vtor": "0x08008000",
+      "bin": "build/rtt_cuav_v5/rtthread.bin",
+      "elf": "build/rtt_deploy/cuav_v5/rt-thread.elf",
+      "apj": "build/rtt_deploy/cuav_v5/arducopter.apj"
+    }
+  },
+  "build": {
+    "system": "SCons",
+    "canonical_command": "python3 -m SCons --target=cuav-v5 -j16",
+    "forbidden_systems": [
+      "waf"
+    ],
+    "ci_workflow": ".github/workflows/test_rtt.yml",
+    "ci_matrix": [
+      "cuav-v5-copter",
+      "cuav-v5-l0-boot"
+    ]
+  },
+  "hwdef_contract": {
+    "path": "libraries/AP_HAL_RTT/hwdef/cuav_v5/hwdef.dat",
+    "expected": {
+      "BOARD_NAME": "cuav_v5",
+      "MCU": [
+        "STM32F7xx",
+        "STM32F767xx"
+      ],
+      "FLASH_SIZE_KB": "2048",
+      "FLASH_RESERVE_START_KB": "32",
+      "SERIAL_ORDER": [
+        "OTG1",
+        "USART2",
+        "USART3",
+        "USART1",
+        "UART4",
+        "USART6",
+        "UART7",
+        "OTG2"
+      ],
+      "DEFAULT_SERIAL0_BAUD": "921600",
+      "HAL_OTG2_PROTOCOL": "SerialProtocol_SLCAN",
+      "APJ_BOARD_ID": "TARGET_HW_PX4_FMU_V5",
+      "HAL_LOGGING_FILESYSTEM_ENABLED": "1",
+      "AP_FILESYSTEM_POSIX_ENABLED": "1"
+    }
+  },
+  "usb": {
+    "vid": "1209",
+    "pid": "5740",
+    "product": "CUAVv5",
+    "functions": [
+      {
+        "id": "mavlink_cdc",
+        "interface": "if00",
+        "mission_planner_role": "MAVLink",
+        "linux_by_id_pattern": "/dev/serial/by-id/usb-ArduPilot_*_CUAV*_*-if00",
+        "windows_mi": "MI_00",
+        "must_not_be_slcan": true
+      },
+      {
+        "id": "slcan_cdc",
+        "interface": "if02",
+        "mission_planner_role": "SLCAN",
+        "linux_by_id_pattern": "/dev/serial/by-id/usb-ArduPilot_*_CUAV*_*-if02",
+        "windows_mi": "MI_02",
+        "must_not_be_mission_planner_mavlink": true
+      }
+    ]
+  },
+  "serial_ports": [
+    {
+      "serial": "SERIAL0",
+      "device": "OTG1",
+      "role": "USB MAVLink GCS"
+    },
+    {
+      "serial": "SERIAL1",
+      "device": "USART2",
+      "role": "TELEM1"
+    },
+    {
+      "serial": "SERIAL2",
+      "device": "USART3",
+      "role": "TELEM2"
+    },
+    {
+      "serial": "SERIAL3",
+      "device": "USART1",
+      "role": "GPS1"
+    },
+    {
+      "serial": "SERIAL4",
+      "device": "UART4",
+      "role": "GPS2"
+    },
+    {
+      "serial": "SERIAL5",
+      "device": "USART6",
+      "role": "TELEM3"
+    },
+    {
+      "serial": "SERIAL6",
+      "device": "UART7",
+      "role": "Debug"
+    },
+    {
+      "serial": "SERIAL7",
+      "device": "OTG2",
+      "role": "USB SLCAN"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "scons_full_build",
+      "category": "Build",
+      "required_for_chibios_replacement": true,
+      "status": "proven",
+      "gate": "python3 -m SCons --target=cuav-v5 -j16",
+      "evidence": [
+        "GitHub run 27921823379",
+        "results/execution/rtt_gap102_github_run_27921823379/cuav-v5-copter.log"
+      ]
+    },
+    {
+      "id": "l0_boot_build",
+      "category": "Build",
+      "required_for_chibios_replacement": true,
+      "status": "proven",
+      "gate": "python3 -m SCons --target=cuav-v5 --test=l0_boot -j16",
+      "evidence": [
+        "GitHub run 27921823379",
+        "results/execution/rtt_gap102_github_run_27921823379/cuav-v5-l0-boot.log"
+      ]
+    },
+    {
+      "id": "main_loop_400hz",
+      "category": "Scheduler",
+      "required_for_chibios_replacement": true,
+      "status": "proven",
+      "gate": "Tools/scripts/rtt_loop_rate_gate.py",
+      "evidence": [
+        "results/execution/rtt_hrtimer_release_gate_20260621T181809Z/loop_rate_gate.json"
+      ]
+    },
+    {
+      "id": "usb_mavlink_cdc_if00",
+      "category": "USB",
+      "required_for_chibios_replacement": true,
+      "status": "proven",
+      "gate": "Tools/scripts/rtt_param_download_gate.py",
+      "evidence": [
+        "results/execution/rtt_release_param_download_20260621T181930Z/param_download.json"
+      ]
+    },
+    {
+      "id": "usb_param_download_fast",
+      "category": "USB",
+      "required_for_chibios_replacement": true,
+      "status": "proven",
+      "gate": "Tools/scripts/rtt_param_download_gate.py",
+      "evidence": [
+        "elapsed_s=1.25",
+        "rate_params_s=757.7"
+      ]
+    },
+    {
+      "id": "mavlink_ftp_sdcard",
+      "category": "MAVLink",
+      "required_for_chibios_replacement": true,
+      "status": "proven",
+      "gate": "Tools/scripts/rtt_mavftp_gate.py --require-sd",
+      "evidence": [
+        "results/execution/rtt_release_mavftp_20260621T181943Z/mavftp_gate.json"
+      ]
+    },
+    {
+      "id": "usb_slcan_cdc_if02",
+      "category": "USB",
+      "required_for_chibios_replacement": true,
+      "status": "proven",
+      "gate": "Tools/scripts/rtt_slcan_ascii_gate.py and Tools/scripts/rtt_socketcan_dronecan_gate.py",
+      "evidence": [
+        "results/execution/rtt_release_slcan_ascii_20260621T182844Z/slcan_ascii_gate.json",
+        "results/execution/rtt_release_socketcan_dronecan_sudo_20260621T183023Z/socketcan_dronecan_gate.json"
+      ]
+    },
+    {
+      "id": "socketcan_standard_and_extended",
+      "category": "CAN",
+      "required_for_chibios_replacement": true,
+      "status": "proven",
+      "gate": "Tools/scripts/rtt_socketcan_dronecan_gate.py",
+      "evidence": [
+        "standard cansend OK",
+        "extended candump frames seen"
+      ]
+    },
+    {
+      "id": "dronecan_node_status",
+      "category": "CAN",
+      "required_for_chibios_replacement": true,
+      "status": "proven",
+      "gate": "Tools/scripts/rtt_socketcan_dronecan_gate.py",
+      "evidence": [
+        "pydronecan NodeStatus seen",
+        "source_node_id=10"
+      ]
+    },
+    {
+      "id": "imu_ins_driver_streams",
+      "category": "IMU",
+      "required_for_chibios_replacement": true,
+      "status": "proven",
+      "gate": "Tools/scripts/rtt_peripheral_health_gate.py",
+      "evidence": [
+        "RAW_IMU present",
+        "ATTITUDE present",
+        "IMU0 0.0kHz banner absent"
+      ]
+    },
+    {
+      "id": "compass_driver_streams",
+      "category": "Compass",
+      "required_for_chibios_replacement": true,
+      "status": "proven",
+      "gate": "Tools/scripts/rtt_peripheral_health_gate.py",
+      "evidence": [
+        "mag sensor bit healthy",
+        "RAW_IMU mag non-zero"
+      ]
+    },
+    {
+      "id": "barometer_driver_streams",
+      "category": "Barometer",
+      "required_for_chibios_replacement": true,
+      "status": "proven",
+      "gate": "Tools/scripts/rtt_peripheral_health_gate.py",
+      "evidence": [
+        "SCALED_PRESSURE present",
+        "baro sensor bit healthy"
+      ]
+    },
+    {
+      "id": "sdcard_dataflash_logging",
+      "category": "SDCard",
+      "required_for_chibios_replacement": true,
+      "status": "proven",
+      "gate": "Tools/scripts/rtt_log_download_gate.py",
+      "evidence": [
+        "results/execution/rtt_release_log_download_20260621T182521Z/log_download_gate.json"
+      ]
+    },
+    {
+      "id": "qgc_missionplanner_host_evidence",
+      "category": "GroundControl",
+      "required_for_chibios_replacement": true,
+      "status": "partial",
+      "gate": "Tools/scripts/rtt_qgc_mp_evidence.py",
+      "evidence": [
+        "results/execution/rtt_gap102_qgc_mp_evidence_20260622T000000Z/qgc_mp_evidence.json"
+      ],
+      "boundary": "Current Linux evidence proves clean ports and tool readiness; GUI connection screenshot/parameter completion still requires QGC or Mission Planner to be running."
+    },
+    {
+      "id": "driver_level_peripheral_health",
+      "category": "Peripherals",
+      "required_for_chibios_replacement": true,
+      "status": "proven",
+      "gate": "Tools/scripts/rtt_peripheral_health_gate.py",
+      "evidence": [
+        "driver_verdict=GREEN",
+        "calibration_verdict=RED"
+      ],
+      "boundary": "Driver/data/logging health is proven; AHRS calibration remains a bench boundary."
+    },
+    {
+      "id": "prearm_flight_readiness",
+      "category": "FlightReadiness",
+      "required_for_chibios_replacement": true,
+      "status": "boundary",
+      "gate": "Tools/scripts/rtt_peripheral_health_gate.py --strict-prearm-health",
+      "evidence": [
+        "Compass/accel calibration, RC receiver, and hardware safety switch remain outside driver-level bench pass."
+      ],
+      "boundary": "This manifest does not claim flight/pre-arm readiness."
+    },
+    {
+      "id": "workspace_artifact_audit",
+      "category": "Workspace",
+      "required_for_chibios_replacement": true,
+      "status": "proven",
+      "gate": "Tools/scripts/rtt_source_artifact_audit.py",
+      "evidence": [
+        "candidate_count=0 after recent RTT tool/doc changes"
+      ]
+    }
+  ],
+  "known_boundaries": [
+    "Flight/pre-arm readiness is not closed: compass calibration, 3D accel calibration, RC receiver, and hardware safety switch are bench-dependent.",
+    "QGC/Mission Planner GUI connection evidence requires the GUI to be running in the controlled desktop session.",
+    "The external 1a86 USB Single Serial adapter did not respond as a Lawicel/SLCAN debugger; board USB SLCAN remains proven through SocketCAN and pydronecan.",
+    "Windows dual-COM binding evidence remains tracked separately in the Windows acceptance documents."
+  ]
+}
