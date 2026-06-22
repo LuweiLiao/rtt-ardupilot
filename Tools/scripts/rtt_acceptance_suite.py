@@ -206,8 +206,29 @@ def build_steps(args: argparse.Namespace, outdir: Path) -> list[dict[str, Any]]:
             ],
             80,
             "param_download.json",
-            ["usb_mavlink_cdc_if00", "usb_param_download_fast"],
+            ["usb_mavlink_cdc_if00"] if args.param_benchmark else ["usb_mavlink_cdc_if00", "usb_param_download_fast"],
         ),
+    ])
+
+    if args.param_benchmark:
+        steps.append(step_spec(
+            "param_download_benchmark",
+            [
+                python,
+                script_path("rtt_param_download_benchmark.py"),
+                "--port",
+                args.port,
+                "--outdir",
+                str(outdir / "param_download_benchmark"),
+                "--rounds",
+                str(args.param_benchmark_rounds),
+            ],
+            max(120, args.param_benchmark_rounds * 90),
+            "param_download_benchmark.json",
+            ["usb_param_download_fast"],
+        ))
+
+    steps.extend([
         step_spec(
             "mavftp",
             [
@@ -474,6 +495,9 @@ def main() -> int:
     parser.add_argument("--socketcan-iface", default="can_rtt0")
     parser.add_argument("--sudo-socketcan", action="store_true",
                         help="run slcand/ip through sudo in the SocketCAN gate")
+    parser.add_argument("--param-benchmark", action="store_true",
+                        help="replace single-round fast-param proof with repeated p50/p95 benchmark coverage")
+    parser.add_argument("--param-benchmark-rounds", type=int, default=5)
     parser.add_argument("--allow-boundary-yellow", action=argparse.BooleanOptionalAction, default=True,
                         help="allow YELLOW evidence for manifest boundary host GUI checks")
     parser.add_argument("--include-param-persist", action="store_true",
@@ -486,6 +510,8 @@ def main() -> int:
     args = parser.parse_args()
     if args.rounds < 1:
         parser.error("--rounds must be >= 1")
+    if args.param_benchmark_rounds < 1:
+        parser.error("--param-benchmark-rounds must be >= 1")
 
     payload = run_suite(args)
     outdir = Path(args.outdir)

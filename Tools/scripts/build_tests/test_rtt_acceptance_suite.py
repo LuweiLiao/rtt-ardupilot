@@ -42,6 +42,8 @@ class AcceptanceSuiteTest(unittest.TestCase):
             "include_socketcan": True,
             "socketcan_iface": "can_rtt0",
             "sudo_socketcan": False,
+            "param_benchmark": True,
+            "param_benchmark_rounds": 3,
             "allow_boundary_yellow": True,
             "include_param_persist": False,
             "persist_param": "LOG_DISARMED",
@@ -74,6 +76,17 @@ class AcceptanceSuiteTest(unittest.TestCase):
                     "reason": "complete_fast",
                     "elapsed_s": 1.2,
                     "missing_count": 0,
+                })
+            elif name == "param_download_benchmark":
+                write_json(outdir / "param_download_benchmark.json", {
+                    "verdict": "GREEN",
+                    "reason": "param_download_benchmark_ok",
+                    "rounds_completed": 3,
+                    "failed_rounds": [],
+                    "metrics": {
+                        "elapsed_s": {"p50": 1.2, "p95": 1.3, "max": 1.3},
+                        "rate_params_s": {"p50": 700.0},
+                    },
                 })
             elif name == "mavftp":
                 write_json(outdir / "mavftp_gate.json", {"verdict": "GREEN", "reason": "mavftp_ok"})

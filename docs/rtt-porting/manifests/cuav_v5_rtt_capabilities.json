@@ -177,7 +177,7 @@
       "category": "USB",
       "required_for_chibios_replacement": true,
       "status": "proven",
-      "gate": "Tools/scripts/rtt_param_download_gate.py",
+      "gate": "Tools/scripts/rtt_param_download_benchmark.py",
       "evidence": [
         "elapsed_s=1.25",
         "rate_params_s=757.7"
